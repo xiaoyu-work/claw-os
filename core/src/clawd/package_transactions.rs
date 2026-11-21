@@ -54,6 +54,14 @@ pub(crate) enum Operation {
         package: String,
         version: String,
     },
+    InstallRelease {
+        package: String,
+        version: String,
+    },
+    Flatpak {
+        install: bool,
+        target: super::packages::flatpak::Target,
+    },
     Remove {
         package: String,
     },
@@ -139,6 +147,13 @@ impl Operation {
                 Ok(())
             }
             Self::InstallVersion { version, .. } => super::packages::validate_version(version),
+            Self::InstallRelease { package, version } => {
+                if !crate::apps::store::app_package_name(package) {
+                    return Err("This operation requires an official Claw App package".into());
+                }
+                super::packages::validate_version(version)
+            }
+            Self::Flatpak { target, .. } => target.validate(),
             Self::Restore {
                 previous_version,
                 mutation_session,
@@ -160,16 +175,21 @@ impl Operation {
         match self {
             Self::Install { package }
             | Self::InstallVersion { package, .. }
+            | Self::InstallRelease { package, .. }
             | Self::Remove { package }
             | Self::Purge { package }
             | Self::Upgrade { package }
             | Self::Restore { package, .. } => Some(package),
             Self::InstallPackages { .. } | Self::EnsurePackages { .. } | Self::RemovePackages { .. }
             | Self::PurgePackages { .. } | Self::UpgradePackages { .. } | Self::UpgradeAll => None,
+            Self::Flatpak { .. } => None,
         }
     }
 
     fn required_caps(&self) -> Vec<Cap> {
+        if let Self::Flatpak { target, .. } = self {
+            return vec![target.capability()];
+        }
         if let Self::InstallPackages { packages } | Self::EnsurePackages { packages } | Self::RemovePackages { packages }
             | Self::PurgePackages { packages } | Self::UpgradePackages { packages } = self {
             return packages
@@ -240,6 +260,8 @@ struct Record {
     retired_apps: Vec<String>,
     children: Vec<Child>,
     plan: Option<backend::Plan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    flatpak_plan: Option<super::packages::flatpak::Plan>,
     rollback: Option<Value>,
     completion: Option<Value>,
     error: Option<String>,
@@ -379,7 +401,7 @@ pub(crate) fn pending(app: &str) -> Result<bool, String> {
 }
 
 fn blocks_admission(record: &Record) -> bool {
-    record.phase.blocks_admission()
+    record.flatpak_plan.is_none() && record.phase.blocks_admission()
         && record
             .plan
             .as_ref()
@@ -444,6 +466,12 @@ pub(crate) fn apt_finished(id: &str, pid: u32, start: u64, exit_code: i32) -> Re
 }
 
 fn completed_children(record: &Record) -> Result<(), String> {
+    if record.flatpak_plan.is_some() {
+        return match record.children.as_slice() {
+            [child] if child.ended && child.exit_code == Some(0) => Ok(()),
+            _ => Err("Successful Flatpak process completion is unconfirmed".into()),
+        };
+    }
     let plan = record
         .plan
         .as_ref()
@@ -459,6 +487,12 @@ fn completed_children(record: &Record) -> Result<(), String> {
         return Err("Successful Root package child completion is unconfirmed; registry absence or installed versions cannot replace it".into());
     }
     Ok(())
+}
+
+fn flatpak_not_dispatched(record: &Record) -> bool {
+    record.flatpak_plan.is_some()
+        && (record.children.is_empty() || matches!(record.children.as_slice(),
+            [child] if child.ended && child.exit_code == Some(super::packages::flatpak::NOT_DISPATCHED)))
 }
 
 fn receipt(record: &Record) -> Value {
@@ -521,7 +555,15 @@ pub(crate) async fn accept(
     invocation: Option<&str>,
 ) -> Result<Value, String> {
     let _accept = ACCEPT.lock().await;
-    accept_locked(state, client, authority, operation, invocation)
+    accept_locked(state, client, authority, operation, invocation, None)
+}
+
+pub(crate) async fn accept_gui(
+    state: &DaemonState, client: &ClientIdentity, authority: &Decision,
+    operation: Operation, invocation: &str, flatpak_plan: Option<super::packages::flatpak::Plan>,
+) -> Result<Value, String> {
+    let _accept = ACCEPT.try_lock().map_err(|_| "Root package acceptance is busy; no effects were dispatched")?;
+    accept_locked(state, client, authority, operation, Some(invocation), flatpak_plan)
 }
 
 pub(crate) fn accept_inverse(
@@ -544,7 +586,7 @@ pub(crate) fn accept_inverse(
     let invocation = crate::crypto::sha256_hex(
         format!("package-inverse:{mutation_session}:{mutation_seq}").as_bytes(),
     );
-    accept_locked(state, client, authority, operation, Some(&invocation[..32]))
+    accept_locked(state, client, authority, operation, Some(&invocation[..32]), None)
 }
 
 fn accept_locked(
@@ -553,9 +595,13 @@ fn accept_locked(
     authority: &Decision,
     operation: Operation,
     invocation: Option<&str>,
+    flatpak_plan: Option<super::packages::flatpak::Plan>,
 ) -> Result<Value, String> {
     initialize()?;
     operation.validate()?;
+    if matches!(&operation, Operation::Flatpak { .. }) != flatpak_plan.is_some() {
+        return Err("Flatpak requires a protected approval of its exact resolved plan".into());
+    }
     let owner = client.require_uid()?;
     if authority.owner_uid() != owner {
         return Err("Package authority belongs to another owner".into());
@@ -588,6 +634,17 @@ fn accept_locked(
         // This is a read of an already accepted exact invocation, not a second spend.
         authority.acknowledge_package_acceptance(&AcceptedInvocation(record))?;
         return Ok(receipt(record));
+    }
+    if let Operation::Flatpak { target, .. } = &operation {
+        if retained.iter().any(|record| {
+            matches!(&record.operation, Operation::Flatpak { target: other, .. }
+                if other.scope == target.scope
+                && (target.scope == super::packages::flatpak::Scope::System
+                    || record.owner_uid == owner))
+                && !matches!(record.phase, Phase::Applied | Phase::NotApplied)
+        }) {
+            return Err("Inspect or recover the existing Flatpak transaction before starting another for this installation".into());
+        }
     }
     if let Operation::Restore {
         mutation_session,
@@ -637,6 +694,7 @@ fn accept_locked(
         retired_apps: Vec::new(),
         children: Vec::new(),
         plan: None,
+        flatpak_plan,
         rollback: None,
         completion: None,
         error: None,
@@ -664,7 +722,9 @@ fn accept_locked(
                 }
             };
             record.error = Some(error);
-            record.phase = if matches!(record.phase, Phase::Dispatching | Phase::Indeterminate) {
+            record.phase = if record.phase == Phase::Dispatching && flatpak_not_dispatched(&record) {
+                Phase::NotApplied
+            } else if matches!(record.phase, Phase::Dispatching | Phase::Indeterminate) {
                 Phase::Indeterminate
             } else if record.cleanup_inflight.is_some() && !record.cleanup_confirmed {
                 Phase::CleanupPending
@@ -714,6 +774,23 @@ async fn execute(
     authorized: Authorized,
     record: &mut Record,
 ) -> Result<(), String> {
+    if let Operation::Flatpak { target, .. } = record.operation.clone() {
+        let home = client.require_home_dir()?;
+        let plan = record.flatpak_plan.clone().ok_or("Missing protected Flatpak deployment review")?;
+        record.rollback = Some(json!({"available": false, "note": "Flatpak recovery verifies the deployed commit without replaying the transaction."}));
+        record.cleanup_confirmed = true;
+        record.phase = Phase::Dispatching;
+        save(record)?;
+        let completion = super::packages::flatpak::apply(
+            &authorized, &record.request_id, record.owner_uid, &home, &target, &plan,
+        ).await?;
+        *record = read(&record.request_id)?;
+        completed_children(record)?;
+        record.completion = Some(completion);
+        record.phase = Phase::Applied;
+        record.error = None;
+        return save(record);
+    }
     record.phase = Phase::Planning;
     save(record)?;
     let prepared =
@@ -1018,8 +1095,22 @@ pub(crate) async fn recover(params: Value, client: &ClientIdentity) -> Result<Va
                 "Root process/Host cleanup remains unconfirmed; read-only recovery cannot retire or infer missing custody",
             ));
         }
+        Phase::Dispatching | Phase::Indeterminate if flatpak_not_dispatched(&record) => {
+            record.phase = Phase::NotApplied;
+            record.error = Some("Flatpak stopped before issuing a deployment; no effect was replayed".into());
+            save(&record).map_err(BrokerError::indeterminate)?;
+        }
         Phase::Dispatching | Phase::Indeterminate => {
             completed_children(&record).map_err(BrokerError::indeterminate)?;
+            if let (Operation::Flatpak { target, .. }, Some(plan)) = (&record.operation, &record.flatpak_plan) {
+                record.completion = Some(super::packages::flatpak::verify(
+                    owner, &client.require_home_dir().map_err(BrokerError::authorization)?, target, plan,
+                ).await.map_err(BrokerError::indeterminate)?);
+                record.phase = Phase::Applied;
+                record.error = None;
+                save(&record).map_err(BrokerError::indeterminate)?;
+                return Ok(projection(&record));
+            }
             if !record.cleanup_confirmed {
                 return Err(BrokerError::indeterminate(
                     "Root App retirement is not confirmed",

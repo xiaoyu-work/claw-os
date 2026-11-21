@@ -102,7 +102,7 @@ pub async fn requests(_params: Value, client: &ClientIdentity) -> Result<Value, 
     let requests = records()
         .map_err(BrokerError::unavailable)?
         .into_iter()
-        .filter(|record| record.owner_uid == owner_uid)
+        .filter(|record| record.owner_uid == owner_uid && record.record.web_product())
         .map(|record| {
             let mut review_ids = vec![record.review_id.clone()];
             #[cfg(target_os = "linux")]
@@ -190,6 +190,11 @@ pub(crate) async fn package_catalog() -> Result<Catalog, String> {
     catalog(false).await
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) async fn refresh_catalog() -> Result<Catalog, String> {
+    catalog(true).await
+}
+
 async fn catalog(refresh: bool) -> Result<Catalog, String> {
     let _catalog = CATALOG.lock().await;
     initialize()?;
@@ -254,24 +259,17 @@ fn installed_apps() -> Result<Value, String> {
     for (id, app) in discovery.verified {
         let package = app.require_verified()?;
         let metadata = store::web_metadata(package);
-        installed.push(match metadata {
-            Ok(mut value) => {
+        if let Ok(mut value) = metadata {
+            if store::web_product(
+                &id,
+                value["source_kind"].as_str().unwrap_or_default(),
+                value["source_name"].as_str().unwrap_or_default(),
+            ) {
                 value["state"] = json!("installed");
                 value["web_ready"] = json!(true);
-                value
+                installed.push(value);
             }
-            Err(_) => json!({
-                "id": id, "version": package.version(), "name": id,
-                "content_digest": package.content_digest(), "state": "installed",
-                "web_ready": false, "tools": [],
-            }),
-        });
-    }
-    for (id, app) in discovery.quarantined {
-        installed.push(json!({
-            "id": id, "name": id, "state": "quarantined", "web_ready": false,
-            "error": app.quarantine_reason(),
-        }));
+        }
     }
     Ok(json!({"apps": installed, "architecture": store::architecture()}))
 }
@@ -279,7 +277,11 @@ fn installed_apps() -> Result<Value, String> {
 pub async fn list(_params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     owner(client).await?;
     let _guard = SERIALIZER.lock().await;
-    let catalog = catalog(true).await.map_err(BrokerError::unavailable)?;
+    let mut catalog = catalog(true).await.map_err(BrokerError::unavailable)?;
+    catalog.apps.retain(Record::web_product);
+    let shown: std::collections::BTreeSet<_> = catalog.apps.iter()
+        .map(|app| app.delivery.package_sha256.as_str()).collect();
+    catalog.packages.retain(|package| shown.contains(package.sha256.as_str()));
     Ok(json!({
         "catalog": catalog, "architecture": store::architecture(),
         "installed": installed_apps().map_err(BrokerError::unavailable)?["apps"],
@@ -333,6 +335,9 @@ pub async fn prepare(params: Value, client: &ClientIdentity) -> Result<Value, Br
     expire_requests().map_err(BrokerError::unavailable)?;
     let catalog = catalog(false).await.map_err(BrokerError::unavailable)?;
     let record = catalog.select(&app_id, &checksum).map_err(BrokerError::unavailable)?;
+    if !record.web_product() {
+        return Err(BrokerError::authorization("This release is not offered in the Web App Store"));
+    }
     let active = records()
         .map_err(BrokerError::unavailable)?
         .into_iter()
@@ -412,6 +417,9 @@ pub async fn commit(
     let owner_uid = owner(client).await?;
     let id = super::permissions::required_string(&params, "request_id")?;
     let pending = prepared(&id, owner_uid).map_err(BrokerError::authorization)?;
+    if !pending.record.web_product() {
+        return Err(BrokerError::authorization("This delivery belongs to the desktop App Store"));
+    }
     let catalog = if matches!(pending.phase.as_str(), "indeterminate" | "installed") {
         None
     } else {
@@ -881,6 +889,15 @@ pub async fn open(params: Value, client: &ClientIdentity) -> Result<Value, Broke
     let owner_uid = owner(client).await?;
     let id = super::permissions::required_string(&params, "app_id")?;
     let app = super::app_sessions::installed_app(&id).map_err(BrokerError::authorization)?;
+    let package = app.require_verified().map_err(BrokerError::authorization)?;
+    let metadata = store::web_metadata(package).map_err(BrokerError::authorization)?;
+    if !store::web_product(
+        &id,
+        metadata["source_kind"].as_str().unwrap_or_default(),
+        metadata["source_name"].as_str().unwrap_or_default(),
+    ) {
+        return Err(BrokerError::authorization("This App is not offered in the Web App Store"));
+    }
     if !reviews::has_accepted(
         owner_uid,
         app.require_verified().map_err(BrokerError::authorization)?,
@@ -910,8 +927,6 @@ pub async fn open(params: Value, client: &ClientIdentity) -> Result<Value, Broke
             }));
         }
     }
-    let package = app.require_verified().map_err(BrokerError::authorization)?;
-    let metadata = store::web_metadata(package).map_err(BrokerError::authorization)?;
     Ok(json!({
         "status": "ready", "app": metadata, "package_dir": app.dir,
         "package": PackageRef::of(package),

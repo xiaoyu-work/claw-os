@@ -23,6 +23,12 @@ export type StoreView = { apps: StoreApp[]; installed: InstalledApp[]; architect
 const APP_ID = /^[a-z][a-z0-9_-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 
+function webProduct(appId: string, kind: unknown, source: unknown): boolean {
+  return (kind === "product" || kind === "capability" || kind === undefined) &&
+    source !== "store" && source !== "launcher" &&
+    !["pkg", "cosmic-store", "launcher", "cosmic-launcher", "claw-launcher"].includes(appId);
+}
+
 function tools(value: unknown): AppTool[] {
   if (!Array.isArray(value) || value.length > 1000) throw new Error("App tool metadata is invalid.");
   return value.map((tool) => {
@@ -47,7 +53,8 @@ export function readInstalled(value: unknown): InstalledApp[] {
     ids.add(app.id);
     return { ...app, id: app.id, name: app.name, state: app.state, web_ready: app.web_ready,
       tools: app.state === "quarantined" ? [] : tools(app.tools) } as InstalledApp;
-  });
+  }).filter((app) => app.state === "installed" && app.web_ready &&
+    webProduct(app.id, app.source_kind, app.source_name));
 }
 
 export function readStore(value: unknown): StoreView {
@@ -58,7 +65,7 @@ export function readStore(value: unknown): StoreView {
       !Number.isFinite(Date.parse(value.catalog.expires_at)) ||
       Date.parse(value.catalog.expires_at) <= Date.now() ||
       !Array.isArray(value.catalog.apps) || !Array.isArray(value.catalog.packages) ||
-      value.catalog.packages.length === 0 || value.catalog.packages.length > 10_000 ||
+      value.catalog.packages.length > 10_000 ||
       typeof value.architecture !== "string") {
     throw new Error("The OS did not return a fresh authenticated official App catalog.");
   }
@@ -108,7 +115,7 @@ export function readStore(value: unknown): StoreView {
       throw new Error("The App is not bound to its authenticated APT package.");
     }
     return { ...app, package: pkg } as unknown as StoreApp;
-  });
+  }).filter((app) => webProduct(app.app_id, app.display.source_kind, app.display.source_name));
   return { apps, architecture: value.architecture, expires_at: value.catalog.expires_at,
     installed: readInstalled({ apps: value.installed }) };
 }

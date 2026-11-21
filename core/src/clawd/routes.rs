@@ -2798,7 +2798,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget {
             max_in_flight: 4,
-            deadline: Deadline::Interruptible(Duration::from_secs(25)),
+            deadline: Deadline::Interruptible(Duration::from_secs(105)),
         },
         authority: session(Audience::SystemService),
         body: body::PackageQuery,
@@ -2806,7 +2806,8 @@ routes! {
             ("session", FieldRule::Token),
             (
                 "action",
-                FieldRule::Enum(&["search", "show", "installed", "available", "catalog", "updates"]),
+                FieldRule::Enum(&["search", "show", "installed", "available", "catalog", "updates",
+                    "store", "refresh", "flatpak-refresh", "flatpak-catalog", "flatpak-installed", "flatpak-updates"]),
             ),
             ("name", FieldRule::Identifier),
             ("query", FieldRule::Size),

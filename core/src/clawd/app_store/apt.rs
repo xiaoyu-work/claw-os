@@ -88,6 +88,16 @@ pub(crate) async fn run(
     commit: Option<String>,
     input: Option<Vec<u8>>,
 ) -> Result<crate::worker::exec::WorkerOutput, String> {
+    run_bounded(program, args, commit, input, TIMEOUT).await
+}
+
+pub(crate) async fn run_bounded(
+    program: &'static str,
+    args: Vec<String>,
+    commit: Option<String>,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<crate::worker::exec::WorkerOutput, String> {
     tokio::task::spawn_blocking(move || {
         let retained_package = commit.as_deref()
             .map(crate::clawd::package_transactions::owns).transpose()?.unwrap_or(false);
@@ -169,7 +179,7 @@ pub(crate) async fn run(
             std::thread::spawn(move || crate::worker::exec::read_bounded(stdout, 4 * 1024 * 1024));
         let errors =
             std::thread::spawn(move || crate::worker::exec::read_bounded(stderr, 4 * 1024 * 1024));
-        let waited = crate::worker::exec::wait_bounded(&mut child, Some(TIMEOUT), || unsafe {
+        let waited = crate::worker::exec::wait_bounded(&mut child, Some(timeout), || unsafe {
             libc::kill(-(pid as i32), libc::SIGKILL);
         });
         if waited.is_err() {
@@ -230,6 +240,10 @@ fn arguments(cache: &Path, selected: &store::AptPackage, install: bool) -> Vec<S
         "Acquire::AllowInsecureRepositories=false".into(),
         "-o".into(),
         "Acquire::AllowDowngradeToInsecureRepositories=false".into(),
+        "-o".into(),
+        "Acquire::AllowWeakRepositories=false".into(),
+        "-o".into(),
+        "Acquire::Check-Valid-Until=true".into(),
         "install".into(),
         "--yes".into(),
         "--no-remove".into(),
@@ -390,6 +404,13 @@ pub(super) async fn prepare(
         .try_lock()
         .map_err(|_| "Another App package transaction is active")?;
     let selected = catalog.apt_package(record)?;
+    let current = super::super::packages::query_package_state(&selected.package).await?;
+    if let Some(version) = current.version.as_deref() {
+        use crate::update::debver::Version;
+        if Version::parse(version)? > Version::parse(&selected.version)? {
+            return Err("The selected App release is older than the installed package".into());
+        }
+    }
     let root = directory(id)?;
     secure_directory(&root, 0o755)?;
     let cache = root.join("archives");

@@ -10,6 +10,11 @@ use super::super::protocol::BrokerError;
 use super::super::wire::requests::PackageQuery;
 use crate::caps::{Cap, Scope, Verb};
 
+#[cfg(target_os = "linux")]
+pub(super) mod sources;
+
+use super::flatpak::Scope as FlatpakScope;
+
 const TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 const MAX_ERROR: usize = 64 * 1024;
@@ -20,7 +25,7 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
     let session = std::env::var("COS_SESSION")
         .map_err(|_| "package queries require an authenticated App session")?;
     let body = match args {
-        [action] if matches!(action.as_str(), "installed" | "updates") => {
+        [action] if matches!(action.as_str(), "installed" | "updates" | "store" | "refresh" | "flatpak-refresh") => {
             json!({"session": session, "action": action})
         }
         [action] if action == "catalog" => {
@@ -28,6 +33,13 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
         }
         [action, cursor] if action == "catalog" => {
             json!({"session": session, "action": action, "catalog": {"cursor": cursor}})
+        }
+        [action, scope] if matches!(action.as_str(), "flatpak-installed" | "flatpak-updates") => {
+            json!({"session": session, "action": action, "name": scope})
+        }
+        [action, scope, cursor @ ..] if action == "flatpak-catalog" && cursor.len() <= 1 => {
+            json!({"session": session, "action": action, "name": scope,
+                "catalog": {"cursor": cursor.first()}})
         }
         [action, name] if matches!(action.as_str(), "show" | "available") => {
             json!({"session": session, "action": action, "name": name})
@@ -40,7 +52,7 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
         }
         _ => {
             return Err(
-                "usage: internal package query <installed | updates | catalog [cursor] | show name | available name | search query limit>".into(),
+                "Invalid closed package query arguments".into(),
             );
         }
     };
@@ -58,12 +70,22 @@ pub(super) fn required_cap(request: &PackageQuery) -> Result<Cap, String> {
         request.limit,
         request.catalog.as_ref(),
     ) {
-        ("installed" | "updates", None, None, None, None) => Scope::name("packages"),
+        ("installed" | "updates" | "store" | "refresh" | "flatpak-refresh", None, None, None, None) => {
+            Scope::name("packages")
+        }
         ("catalog", None, None, None, Some(page))
-            if page
-                .cursor
-                .as_ref()
-                .is_none_or(|cursor| valid_catalog_cursor(cursor.as_str())) =>
+            if page.cursor.as_ref().is_none_or(|cursor| valid_catalog_cursor(cursor.as_str())) =>
+        {
+            Scope::name("packages")
+        }
+        ("flatpak-installed" | "flatpak-updates", Some(scope), None, None, None)
+            if flatpak_scope(scope.as_str()).is_some() =>
+        {
+            Scope::name("packages")
+        }
+        ("flatpak-catalog", Some(scope), None, None, Some(page))
+            if flatpak_scope(scope.as_str()).is_some()
+                && page.cursor.as_ref().is_none_or(|cursor| valid_catalog_cursor(cursor.as_str())) =>
         {
             Scope::name("packages")
         }
@@ -103,6 +125,14 @@ fn valid_catalog_cursor(cursor: &str) -> bool {
     })
 }
 
+fn flatpak_scope(value: &str) -> Option<FlatpakScope> {
+    match value {
+        "user" => Some(FlatpakScope::User),
+        "system" => Some(FlatpakScope::System),
+        _ => None,
+    }
+}
+
 pub(super) fn authorize(
     authority: &Decision,
     owner: u32,
@@ -123,6 +153,37 @@ pub(crate) async fn query(
         .map_err(|_| BrokerError::execution("Invalid package query"))?;
     let owner = client.require_uid().map_err(BrokerError::authorization)?;
     let _authorized = authorize(authority, owner, &request).map_err(BrokerError::authorization)?;
+    if matches!(request.action.as_str(), "store" | "refresh" | "flatpak-refresh"
+        | "flatpak-catalog" | "flatpak-installed" | "flatpak-updates")
+    {
+        #[cfg(target_os = "linux")]
+        if !super::super::gui::Manager::contains(request.session.as_str())
+            .map_err(BrokerError::authorization)?
+        {
+            return Err(BrokerError::authorization(
+                "Software source discovery and refresh require an authenticated desktop App",
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        return match request.action.as_str() {
+            "store" => sources::store(owner).await,
+            "refresh" => sources::refresh().await,
+            "flatpak-refresh" => super::flatpak::refresh(
+                owner, &client.require_home_dir().map_err(BrokerError::authorization)?,
+            ).await,
+            action => {
+                let scope = flatpak_scope(request.name.as_ref().unwrap().as_str())
+                    .ok_or_else(|| BrokerError::execution("Invalid Flatpak installation"))?;
+                let cursor = request.catalog.as_ref().and_then(|page| page.cursor.as_ref());
+                super::flatpak::query(
+                    owner, &client.require_home_dir().map_err(BrokerError::authorization)?,
+                    scope, action.strip_prefix("flatpak-").unwrap(), cursor.map(|value| value.as_str()),
+                ).await
+            }
+        }.map_err(BrokerError::unavailable);
+        #[cfg(not(target_os = "linux"))]
+        return Err(BrokerError::unavailable("Software sources require Linux"));
+    }
     if let Some(page) = request.catalog {
         let output = execute(
             "/usr/bin/python3",

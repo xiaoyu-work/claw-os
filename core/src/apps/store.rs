@@ -27,6 +27,16 @@ pub(crate) const WEB_PROTOCOL: &str = "claw.web-app/v1";
 
 const ARCHIVE_KEY: &str = include_str!("../../assets/app-store-archive-key.asc");
 
+pub(crate) fn web_product(app_id: &str, source_kind: &str, source_name: &str) -> bool {
+    matches!(source_kind, "product" | "capability")
+        && !matches!(source_name, "store" | "launcher")
+        && !matches!(app_id, "pkg" | "cosmic-store" | "launcher" | "cosmic-launcher" | "claw-launcher")
+}
+
+pub(crate) fn app_package_name(name: &str) -> bool {
+    name.starts_with("claw-app-") || name.starts_with("claw-cap-")
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Catalog {
@@ -263,6 +273,15 @@ impl AptPackage {
 }
 
 impl Record {
+    pub(crate) fn desktop_available(&self) -> bool {
+        self.app_id != "cosmic-launcher"
+            && (self.architecture == "all" || self.architecture == architecture())
+    }
+
+    pub(crate) fn web_product(&self) -> bool {
+        web_product(&self.app_id, &self.display.source_kind, &self.display.source_name)
+    }
+
     fn validate(&self) -> Result<(), String> {
         let publisher = self.provenance.publisher_key_id.strip_prefix("sha256:");
         let content = self.provenance.content_digest.strip_prefix("sha256:");

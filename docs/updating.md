@@ -271,8 +271,8 @@ Store's complete native source now follows the same immutable App pin.
 `claw-os-desktop` still owns `/usr/bin/cosmic-store`, its native descriptor and
 `com.clawos.Store` resources. Its paired fixed-target OS launcher preserves
 `proc.spawn:cosmic-store`; the native query surface never receives pkg's
-transaction identity. APT, installed package state, Flatpak/PackageKit human
-policies and separate App grants do not migrate or gain a runtime Git updater.
+transaction identity. Read-only source discovery and the retained package
+controller stay OS-owned; there is no runtime Git updater.
 
 Settings' complete nested native workspace follows the same immutable App pin.
 The signed desktop package keeps `/usr/bin/cosmic-settings`, its separate
@@ -987,6 +987,32 @@ transaction. It must not promise a background hot-swap, reconnect an old
 compositor through an owner-provided socket, or treat an interrupted session
 command as success. Full Agent/Desktop transactions and real
 greetd/logind/KMS/LSM acceptance remain rollout requirements.
+
+## Desktop App Store
+
+**Claw Apps** lists current signed releases from `clawos-app` for this machine,
+including independently published capability clients. Install and Update
+select the exact published Debian release. **Linux Apps** browses the OS's
+APT AppStream catalog and configured, GPG-verified Flatpak remotes. The
+**Updates** page separates Claw Apps from Linux Apps and system packages;
+shared system packages remain in the latter section. The Agent Web App Store
+only lists Claw Apps with Web interfaces, not these Linux catalogs.
+
+**Check for updates** refreshes APT indexes, the signed Claw Apps catalog,
+and Flatpak AppStream without installing or updating any payload. If the
+official App APT source is configured, `clawd` also checks APT and Claw Apps
+shortly after startup and hourly. A source failure is reported separately
+from having no updates. On desktop the `claw-os-software-store-v1` dependency
+requires a matching Agent package; older Store clients continue to use their
+existing package queries and intents.
+
+Installs and updates require protected OS review; acceptance means queued,
+not installed. Claw App delivery retains its independent per-App reviews.
+Flatpak is limited to the exact app ref, configured installation/remotes and
+reviewed deployment commits. Local archives, Flatpak removals or repository
+changes remain outside the Store. Use **Check OS status** to inspect a retained
+operation and reconcile an uncertain outcome without retrying the mutation.
+Removing a catalog listing does not uninstall it or discard historic releases.
 
 ## System Updates in Settings
 

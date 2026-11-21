@@ -16,6 +16,10 @@ pub(crate) mod intent;
 pub(crate) mod query;
 #[cfg(target_os = "linux")]
 pub(crate) mod gui;
+pub(crate) mod flatpak;
+
+#[cfg(target_os = "linux")]
+pub(crate) use query::sources::spawn_refresh;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageState {

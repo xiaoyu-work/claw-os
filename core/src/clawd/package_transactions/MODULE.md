@@ -4,7 +4,9 @@ This module coordinates generic Critical `sys.package` payload effects. It
 does not provide another installer, App entitlement, trust root or SDK.
 The Store's exact archive inspector, authenticated APT-source classifier,
 publisher verifier, protected delivery reviews, tracked APT child and
-pre-dpkg helper remain the package delivery boundary.
+pre-dpkg helper remain the Debian delivery boundary. Flatpak uses libflatpak
+for deployments into configured user or system installations and never
+enters the Debian dispatch path.
 
 ## Contract
 
@@ -84,6 +86,13 @@ pre-dpkg helper remain the package delivery boundary.
 - Completion verifies the complete package/hold outcome, installed App
   signatures and the pre-dispatch App inventory. Unexpected App publication,
   removal or quarantine changes remain indeterminate.
+- A GUI Flatpak install or update retains the exact remote, app ref, current
+  commit and resolved deployment graph in its Critical review. The execution
+  provider compares that graph before libflatpak starts deployments and
+  refuses unrelated apps, removals, rebases and new remotes. A refusal before
+  dispatch allows a new reviewed intent. After dispatch, success requires a
+  tracked normal exit and matching installed commits. Recovery only verifies
+  retained evidence; it does not replay or roll back a deployment.
 
 `system.package.status` and `system.package.recover` derive the owner from the
 authenticated peer, not request selectors. They expose only that owner's

@@ -62,6 +62,9 @@ test("official Store Apps bind the exact APT package rather than a snapshot inst
       delivery: { kind: "apt", package_sha256: delivery } }],
   } };
   expect(readStore(value).apps[0].package.size).toBe(8192);
+  const desktopOnly = structuredClone(value);
+  desktopOnly.catalog.apps[0].display.source_name = "store";
+  expect(readStore(desktopOnly).apps).toEqual([]);
   const changed = structuredClone(value);
   changed.catalog.apps[0].delivery.package_sha256 = "d".repeat(64);
   expect(() => readStore(changed)).toThrow();

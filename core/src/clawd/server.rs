@@ -198,6 +198,8 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown, agentd_broker);
     let _notification_dispatcher = super::notifications::spawn_external_dispatcher();
     super::channels::spawn();
+    #[cfg(target_os = "linux")]
+    super::packages::spawn_refresh();
     spawn_heartbeat();
     let serve = async move {
         loop {

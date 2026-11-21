@@ -208,8 +208,8 @@ read-only outcome checking cannot replay a consumed confirmation. Private APT,
 native/resource and independent CLI/trust/package-path acceptance remain
 publication prerequisites, not consequences of this source implementation.
 
-`system.package.query` is the App-session read interface for existing APT
-catalog search/details and installed dpkg state. `cos __package_query`
+`system.package.query` is the App-session interface for APT catalog
+search/details and installed dpkg state. `cos __package_query`
 uses the same ordinary Host proxy and public generic SDK call primitive.
 Search/list require `sys.observe:packages`; one package's details require
 its exact named observation scope. Critical package mutation authority
@@ -220,10 +220,12 @@ owner with scrubbed environment, closed inherited descriptors, no-new-privileges
 resource limits, bounded output and a twenty-second deadline. APT cache writes
 are disabled; temporary backing files share the existing finite 256-MiB
 workspace ceiling instead of a zero file-size limit that kills APT reads.
-Errors do not export backend diagnostics or credentials. No
-caller-selected executable, owner, path, source, hook, D-Bus endpoint, refresh
-or mutation crosses this interface. This source interface does not itself
-complete native Store catalog/UI or private-APT acceptance.
+Errors do not export backend diagnostics or credentials. The authenticated
+desktop-only actions discover current signed Claw App releases and configured
+Flatpak user/system metadata. They can refresh APT indexes, Claw Apps metadata
+and Flatpak AppStream, but cannot install or update a payload. Paths, sources
+and helpers are selected by the OS, not the caller. The desktop package uses
+the matching versioned Store provider.
 
 The ignored `private_apt_package_queries_use_ordinary_app_custody_and_exact_read_scopes`
 case crosses the real ordinary signed App/Host and private proxy into these

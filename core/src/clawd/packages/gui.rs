@@ -44,6 +44,7 @@ pub(super) struct IntentEntry {
     pub session: String,
     pub targets: Vec<ReviewTarget>,
     pub generation_retired: bool,
+    flatpak_plan: Option<super::flatpak::Plan>,
 }
 
 #[derive(Default)]
@@ -97,6 +98,7 @@ impl IntentLedger {
                 capability, identity: ReviewIdentity::Unattempted, retired: false,
             }).collect(),
             generation_retired: false,
+            flatpak_plan: None,
         });
         Ok(())
     }
@@ -228,10 +230,13 @@ impl WindowIntents {
                 target.identity = ReviewIdentity::Unconfirmed;
                 let id = crate::approvals::submit_owned_with_context_for_operation(
                     target.capability.verb, target.capability.scope.clone(), entry.session.clone(),
-                    format!("GUI {} requests {:?} for {} in exact package intent {}. \
-                        Critical package permission is not App delivery or all-App-stop consent.",
-                        self.registration.launch.app_id(), request.action,
-                        target.capability.scope, request.invocation_id.as_str()),
+                    match &entry.flatpak_plan {
+                        Some(plan) => plan.review_summary(),
+                        None => format!("GUI {} requests {:?} for {} in exact package intent {}. \
+                            Critical package permission is not App delivery or all-App-stop consent.",
+                            self.registration.launch.app_id(), request.action,
+                            target.capability.scope, request.invocation_id.as_str()),
+                    },
                     Some(format!("App {} / GUI {}", self.registration.launch.app_id(), self.registration.session_id)),
                     Some(self.registration.owner()), None, Some(&entry.digest),
                 )?;
@@ -506,6 +511,25 @@ pub(crate) async fn request(
         }
         current
     };
+    if let Operation::Flatpak { install, target } = &operation {
+        if matches!(request.mode, Mode::Review | Mode::Submit)
+            && window.entry(request.invocation_id.as_str()).map_err(BrokerError::authorization)?
+                .flatpak_plan.is_none()
+        {
+            let plan = super::flatpak::prepare(
+                registration.owner(), &registration.home, *install, target,
+            ).await.map_err(BrokerError::unavailable)?;
+            let mut ledger = window.lock().map_err(BrokerError::authorization)?;
+            window.snapshot_locked(&mut ledger, process).map_err(BrokerError::authorization)?;
+            let entry = ledger.entries.get_mut(request.invocation_id.as_str())
+                .ok_or_else(|| BrokerError::authorization("Flatpak review is no longer live"))?;
+            entry.digest = crate::crypto::sha256_hex(
+                &serde_json::to_vec(&(&entry.digest, &plan))
+                    .map_err(|error| BrokerError::execution(error.to_string()))?,
+            );
+            entry.flatpak_plan = Some(plan);
+        }
+    }
     if request.mode != Mode::Submit {
         return window.pending(process, &request, request.mode == Mode::Review)
             .map_err(BrokerError::authorization);
@@ -538,8 +562,9 @@ pub(crate) async fn request(
     };
     let authority = authority::package_intent::authorize(&approved, client)
         .map_err(BrokerError::authorization)?;
-    let receipt = crate::clawd::package_transactions::accept(
-        daemon, client, authority.decision(), operation, Some(request.invocation_id.as_str()),
+    let receipt = crate::clawd::package_transactions::accept_gui(
+        daemon, client, authority.decision(), operation, request.invocation_id.as_str(),
+        entry.flatpak_plan,
     ).await.map_err(BrokerError::authorization)?;
     let mut result = reply(&request, "accepted");
     result["receipt"] = receipt;

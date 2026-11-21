@@ -102,6 +102,10 @@ fn arguments(operation: &Operation, id: &str, dispatch: bool) -> Result<Vec<Stri
         "Acquire::AllowInsecureRepositories=false".into(),
         "-o".into(),
         "Acquire::AllowDowngradeToInsecureRepositories=false".into(),
+        "-o".into(),
+        "Acquire::AllowWeakRepositories=false".into(),
+        "-o".into(),
+        "Acquire::Check-Valid-Until=true".into(),
     ];
     if dispatch {
         args.extend([
@@ -126,10 +130,16 @@ fn arguments(operation: &Operation, id: &str, dispatch: bool) -> Result<Vec<Stri
             Some(package.as_str()),
             Some(version.as_str()),
         ),
+        Operation::InstallRelease { package, version } => (
+            "install-release",
+            Some(package.as_str()),
+            Some(version.as_str()),
+        ),
         Operation::Remove { package } => ("remove", Some(package.as_str()), None),
         Operation::Purge { package } => ("purge", Some(package.as_str()), None),
         Operation::Upgrade { package } => ("upgrade", Some(package.as_str()), None),
         Operation::UpgradeAll => ("upgrade-all", None, None),
+        Operation::Flatpak { .. } => return Err("Flatpak cannot use Debian package dispatch".into()),
         Operation::Restore {
             package,
             previous_version,
@@ -145,7 +155,7 @@ fn arguments(operation: &Operation, id: &str, dispatch: bool) -> Result<Vec<Stri
         ),
     };
     match action {
-        "install" | "install-version" | "upgrade" => {
+        "install" | "install-version" | "install-release" | "upgrade" => {
             args.extend(["install".into(), "--yes".into()]);
             if action != "upgrade" {
                 args.push("--no-install-recommends".into());
@@ -155,6 +165,9 @@ fn arguments(operation: &Operation, id: &str, dispatch: bool) -> Result<Vec<Stri
             }
             if action == "upgrade" {
                 args.push("--only-upgrade".into());
+            }
+            if action == "install-release" {
+                args.push("--no-remove".into());
             }
         }
         "remove" | "purge" => args.extend([action.into(), "--yes".into()]),
@@ -355,6 +368,15 @@ pub(super) async fn prepare(owner: u32, id: &str, operation: &Operation) -> Resu
         );
     }
     let before = apt::status_digest()?;
+    if let Operation::InstallRelease { package, version } = operation {
+        let current = crate::clawd::packages::query_package_state(package).await?;
+        if let Some(installed) = current.version.as_deref() {
+            use crate::update::debver::Version;
+            if Version::parse(installed)? >= Version::parse(version)? {
+                return Err("That Claw App release is not newer than the installed version".into());
+            }
+        }
+    }
     let ensure = if let Operation::EnsurePackages { packages } = operation {
         let mut missing = Vec::new();
         let mut already_present = Vec::new();
@@ -447,6 +469,19 @@ pub(super) async fn prepare(owner: u32, id: &str, operation: &Operation) -> Resu
     } else {
         empty_os_catalog()
     };
+    if let Operation::InstallRelease { package, version } = operation {
+        if !catalog.apps.iter().any(|record| {
+            record.desktop_available()
+                && catalog.apt_package(record).is_ok_and(|entry| {
+                    entry.package == *package && entry.version == *version
+                        && packages.iter().any(|download| {
+                            download.identity.package == *package && download.sha256 == entry.sha256
+                        })
+                })
+        }) {
+            return Err("The requested release is not in the current signed Claw Apps catalog".into());
+        }
+    }
     for (package, app_payload) in packages.iter().zip(&payloads) {
         if *app_payload
             && !catalog.packages.iter().any(|item| {
@@ -901,7 +936,7 @@ pub(super) async fn verify(operation: &Operation, plan: &Plan) -> Result<Value, 
     if let Some(after) = &after {
         let expected = match operation {
             Operation::Install { .. } => after.installed,
-            Operation::InstallVersion { version, .. } => {
+            Operation::InstallVersion { version, .. } | Operation::InstallRelease { version, .. } => {
                 after.installed && after.version.as_ref() == Some(version)
             }
             Operation::Remove { .. } | Operation::Purge { .. } => !after.installed,

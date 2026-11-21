@@ -105,8 +105,11 @@ resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
 The controlled package catalog reader uses distro `python3-gi` and
 `gir1.2-appstream-1.0` to parse existing standard metadata without a desktop,
-PackageKit daemon, network refresh or persistent cache writes. These are OS
-provider dependencies, not App UI libraries or authority.
+PackageKit daemon or persistent cache writes. Agent provides the
+`claw-os-software-store-v1` interface for the desktop's signed catalog discovery,
+index refresh and retained package operations. Desktop and the independent
+Store App depend on this interface and `gir1.2-flatpak-1.0`. These are OS
+provider dependencies, not App UI authority.
 
 Agent provides `claw-os-browser-bridge-v1 (= 1)` and installs the bounded
 Native Messaging transport at `/usr/lib/cos/browser-native-host.py`. Root-peer

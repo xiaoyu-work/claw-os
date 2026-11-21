@@ -152,7 +152,7 @@ export function AppStorePage() {
   return <div className="flex h-full flex-col overflow-y-auto p-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h1 className="text-xl font-semibold">App Store</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Independent Apps from the official Claw OS Applications release channel.</p></div>
+        <p className="mt-1 text-sm text-muted-foreground">Claw Apps you can use in this browser. Find Linux software in the desktop App Store.</p></div>
       <Button variant="outline" disabled={loading || !!busy} onClick={() => void load()}>
         <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
       </Button>
@@ -167,7 +167,7 @@ export function AppStorePage() {
       <div className="relative min-w-52 flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input className="pl-9" placeholder="Search Apps" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
       <select className="rounded-md border bg-background px-3 text-sm" value={filter} onChange={(event) => setFilter(event.target.value)}>
-        <option value="all">All products and capability clients</option>
+        <option value="all">All Web Apps</option>
         {groups.map((group) => <option key={group} value={group}>{group}</option>)}
       </select>
     </div>
@@ -192,7 +192,7 @@ export function AppStorePage() {
           <div className="flex items-start gap-3"><div className="rounded-xl bg-primary/10 p-3"><Package className="h-6 w-6 text-primary" /></div>
             <div className="min-w-0"><h2 className="font-semibold">{app.display.name}</h2>
               <p className="text-xs text-muted-foreground">{app.app_id}</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">{app.display.source_kind === "capability" ? "Shared capability client" : app.display.source_name}</p></div></div>
+              <p className="mt-1 text-[11px] text-muted-foreground">{app.display.source_name}</p></div></div>
           <p className="my-4 text-sm text-muted-foreground">{app.display.description}</p>
           <p className="mb-4 text-xs text-muted-foreground">Release {app.release_version} · {app.architecture} · {size(app.package.size)} APT package</p>
           <div className="mt-auto flex gap-2">
@@ -202,7 +202,6 @@ export function AppStorePage() {
               onClick={() => void install(app)}>
               {busy === app.app_id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               {local ? "Update" : "Install"}</Button>}
-            {current && !local?.web_ready && <span className="text-xs text-muted-foreground">Installed; Web integration unavailable</span>}
           </div>
         </Card>;
       })}
