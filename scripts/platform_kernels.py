@@ -398,9 +398,9 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     if "boot" in profile:
         keys.append("arm-kernel-recipes")
     if profile.get("asahi_vulkan"):
-        from asahi_vulkan import INPUTS as vulkan_inputs
+        from asahi_mesa import INPUTS as mesa_inputs
 
-        keys += vulkan_inputs
+        keys += mesa_inputs
     if "asahi_audio" in profile:
         keys.append(profile["asahi_audio"])
     if "speaker_firmware" in profile:
@@ -463,9 +463,9 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
             if "boot" in profile:
                 apple_boot(profile, source, work, out)
             if profile.get("asahi_vulkan"):
-                from asahi_vulkan import build_asahi_vulkan
+                from asahi_mesa import build_asahi_mesa
 
-                build_asahi_vulkan(profile, source, provenance, work, out, package)
+                build_asahi_mesa(profile, source, provenance, work, out, package, opengl=apple_tools)
             if "asahi_audio" in profile:
                 from asahi_audio import asahi_audio_package
 

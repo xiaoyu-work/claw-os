@@ -49,7 +49,7 @@ elif [[ ${mode[0]:-} == --apple-tools ]]; then
     apple="$PROJECT_DIR/rootfs/features/kernel-platform/apple"
     assets="$stage/rootfs/features/kernel-platform/apple"
     install -d "$stage"/{scripts,packaging} "$assets"
-    install -m0644 "$PROJECT_DIR"/scripts/{platform_kernels,surface_laptop7,asahi_boot,asahi_kernel,asahi_audio,asahi_touch_id,asahi_vulkan}.py \
+    install -m0644 "$PROJECT_DIR"/scripts/{platform_kernels,surface_laptop7,asahi_boot,asahi_kernel,asahi_audio,asahi_touch_id,asahi_mesa}.py \
         "$stage/scripts/"
     install -m0644 "$PROJECT_DIR/packaging/platform-kernels.json" "$stage/packaging/"
     install -m0644 "$apple"/{claw-asahi-audio,claw-asahi-fprintd,claw-asahi-touch-id,claw-asahi-touch-id.service} "$assets/"
@@ -65,9 +65,10 @@ elif [[ ${mode[0]:-} == --apple-tools ]]; then
         cmake python3-mako python3-yaml python3-packaging \
         llvm-19-dev clang-19 libclang-19-dev libclang-cpp19-dev libllvmspirvlib-19-dev spirv-tools glslang-tools \
         libdrm-dev libexpat1-dev libvulkan-dev libdisplay-info-dev zlib1g-dev libzstd-dev libelf-dev \
-        "libwayland-dev/$SUITE-backports" "wayland-protocols/$SUITE-backports" \
+        "libwayland-dev/$SUITE-backports" "libwayland-egl-backend-dev/$SUITE-backports" "wayland-protocols/$SUITE-backports" \
         libx11-xcb-dev libxcb-dri3-dev libxcb-present-dev libxcb-xfixes0-dev libxcb-randr0-dev libxcb-sync-dev \
-        libxcb-keysyms1-dev libxcb-shm0-dev libxrandr-dev libxshmfence-dev </dev/null
+        libxcb-keysyms1-dev libxcb-shm0-dev libxrandr-dev libxshmfence-dev \
+        libglvnd-dev libxcb-glx0-dev libxext-dev libxfixes-dev libxxf86vm-dev libsensors-dev </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
     artifacts="$stage/packages"
@@ -116,12 +117,13 @@ if [[ $platform == aarch64-qualcomm ]]; then
     fi
 fi
 if [[ $platform == aarch64-apple ]]; then
-    for file in "$artifacts"/{claw-os-asahi-audio,claw-os-asahi-touch-id,claw-os-asahi-vulkan}_*.deb; do
+    for file in "$artifacts"/{claw-os-asahi-audio,claw-os-asahi-touch-id,claw-os-asahi-vulkan,claw-os-asahi-opengl}_*.deb; do
         test -f "$file"
         packages+=("$inside/${file##*/}")
     done
     packages+=("triforce-lv2/$SUITE-backports" "wireplumber/$SUITE-backports"
-        "mesa-vulkan-drivers/$SUITE-backports" "libwayland-client0/$SUITE-backports")
+        "mesa-vulkan-drivers/$SUITE-backports" "libwayland-client0/$SUITE-backports"
+        "libegl-mesa0/$SUITE-backports" "libglx-mesa0/$SUITE-backports" "libgbm1/$SUITE-backports")
 fi
 if [[ $platform == aarch64-n1x ]]; then
     audio=("$artifacts"/claw-os-proart-p14-audio_*.deb)
