@@ -6,7 +6,7 @@ async fn parent_descriptor_orderly_close_retires_the_actual_private_transport() 
     let task = tokio::spawn(parent_socket(server));
     let client = Builder::socket(client).p2p().build().await.unwrap();
     let peer = zbus::fdo::PeerProxy::builder(&client)
-        .destination("com.clawos.NotificationsSocket")
+        .destination("com.yuos.NotificationsSocket")
         .unwrap()
         .path(SOCKET_PATH)
         .unwrap()

@@ -31,7 +31,7 @@ mod panel {
     use zbus::{connection::Builder, interface, object_server::SignalEmitter, Connection, Guid};
 
     const CALL_TIMEOUT: Duration = Duration::from_secs(3);
-    const SOCKET_PATH: &str = "/com/clawos/NotificationsSocket";
+    const SOCKET_PATH: &str = "/com/yuos/NotificationsSocket";
     const CLOSED_PATH: &str = "/org/freedesktop/Notifications";
 
     #[derive(Deserialize)]
@@ -141,7 +141,7 @@ mod panel {
         }
     }
 
-    #[interface(name = "com.clawos.NotificationPresentation1")]
+    #[interface(name = "com.yuos.NotificationPresentation1")]
     impl Presentation {
         fn version(&self) -> u32 {
             claw_notification_presentation::VERSION
@@ -208,7 +208,7 @@ mod panel {
         stop: tokio::sync::watch::Sender<bool>,
     }
 
-    #[interface(name = "com.clawos.NotificationsSocket")]
+    #[interface(name = "com.yuos.NotificationsSocket")]
     impl Socket {
         async fn get_fd(&self) -> zbus::fdo::Result<zbus::zvariant::OwnedFd> {
             let permit = self.slots.clone().try_acquire_owned().map_err(|_| {

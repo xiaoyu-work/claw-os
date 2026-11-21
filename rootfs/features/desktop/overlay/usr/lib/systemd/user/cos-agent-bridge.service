@@ -2,7 +2,7 @@
 Description=Claw OS — Agent Bridge (HTTP+SSE → system clawd)
 Documentation=https://github.com/xiaoyu-work/claw-os
 # Bridge belongs to the graphical session: it serves the desktop Agent
-# app (com.clawos.Agent) and the Super+A overlay, both of which are
+# app (com.yuos.Agent) and the Super+A overlay, both of which are
 # only meaningful while the user is logged in graphically.
 PartOf=claw-desktop-session.target
 After=graphical-session.target

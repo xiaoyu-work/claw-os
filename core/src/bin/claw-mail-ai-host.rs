@@ -2,7 +2,7 @@ fn python_arguments(
     mut native_args: impl Iterator<Item = std::ffi::OsString>,
 ) -> Result<Vec<std::ffi::OsString>, &'static str> {
     let caller = native_args.next();
-    if caller.as_deref() != Some(std::ffi::OsStr::new("claw-mail-ai@claw.os"))
+    if caller.as_deref() != Some(std::ffi::OsStr::new("yu-mail-ai@yuos.io"))
         || native_args.next().is_some()
     {
         return Err("expected only the trusted Thunderbird extension identity");

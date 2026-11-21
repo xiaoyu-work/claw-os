@@ -22,7 +22,7 @@ use crate::provenance::{PackageKind, TrustSource, VerifyOptions};
 
 const REVIEW_LIFETIME: Duration = Duration::from_secs(120);
 const INSTALLED_APPS: &str = "/usr/lib/cos/apps";
-const AGENT_DESKTOP_ID: &str = "com.clawos.Agent";
+const AGENT_DESKTOP_ID: &str = "com.yuos.Agent";
 
 struct Review {
     id: String,
@@ -262,7 +262,7 @@ impl Window {
                     (Verb::DESKTOP_LAUNCH, desktop_id) => {
                         let resolved = find_signed_target(desktop_id)?;
                         let Some((target, _)) = resolved else {
-                            if desktop_id.starts_with("com.clawos.") {
+                            if desktop_id.starts_with("com.yuos.") {
                                 return Err("no installed signed Claw App owns that desktop entry".into());
                             }
                             let view = self.owner_menu(process, &cap)?;

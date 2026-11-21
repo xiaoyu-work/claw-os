@@ -418,7 +418,7 @@ tests and original standalone build now live in `clawos-app/products/capture`.
 `just capture-build` composes the immutable App pin under
 `build/native-apps/cosmic-screenshot`. Its ashpd/zbus/Tokio graph has no
 libcosmic renderer or file-chooser dependency. The signed desktop package
-retains the executable, `com.clawos.Screenshot` resources and descriptor;
+retains the executable, `com.yuos.Screenshot` resources and descriptor;
 the shared interactive portal UI and user screenshot/configuration paths stay
 unchanged. Source relocation is not an identity, data or visual cutover.
 
@@ -536,7 +536,7 @@ product filesystem, owner-scoped Recoll and shared document parsing sources;
 the SDK/runtime still provide policy, snapshots, AI consent/budget/audit and
 memory authority. The Document Engine capability client imports the same parser from
 the Agent package's `claw_files.document` library. Native reveal admits only
-`cosmic-files` to its fixed `com.clawos.Files` target with exact metadata scope.
+`cosmic-files` to its fixed `com.yuos.Files` target with exact metadata scope.
 Summary memory is Files-owned; metadata's sidecar needs an explicit parent
 read. User files, UI caches/settings and the existing Recoll index are not
 migrated or unified, and no App invokes another App.

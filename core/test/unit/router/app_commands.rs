@@ -156,14 +156,14 @@ fn install_generates_desktop_entry_for_gui_app() {
 
     assert_eq!(v["installed"], true);
     assert_eq!(v["desktop"]["generated"], true);
-    let entry = apps_share.join("com.clawos.notes.desktop");
+    let entry = apps_share.join("com.yuos.notes.desktop");
     assert!(entry.is_file(), "expected {} to exist", entry.display());
     let body = std::fs::read_to_string(&entry).unwrap();
     assert!(
         body.contains("Exec=yu app notes --gui %F"),
         "Exec must route through `yu app`; got:\n{body}"
     );
-    assert!(body.contains("Categories=ClawOS;Utility;"), "got:\n{body}");
+    assert!(body.contains("Categories=X-YuOS;Utility;"), "got:\n{body}");
     assert!(body.contains("MimeType=text/markdown;"), "got:\n{body}");
     assert!(body.contains("X-CLAW-App-Id=notes"), "got:\n{body}");
 
@@ -206,7 +206,7 @@ fn install_skips_desktop_entry_for_headless_app() {
         v.get("desktop").is_none(),
         "headless app must not emit a launcher"
     );
-    assert!(!apps_share.join("com.clawos.calc.desktop").exists());
+    assert!(!apps_share.join("com.yuos.calc.desktop").exists());
 
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dst);

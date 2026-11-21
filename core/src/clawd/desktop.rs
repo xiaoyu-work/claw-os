@@ -222,11 +222,11 @@ fn native_launch_target(
         return None;
     }
     let target = match app_id? {
-        "com.clawos.Term" => NativeLaunchTarget::Terminal,
-        "com.clawos.Store" => NativeLaunchTarget::Store,
-        "com.clawos.Settings" => NativeLaunchTarget::Settings,
-        "com.clawos.Files" => NativeLaunchTarget::Files,
-        "com.clawos.Edit" => NativeLaunchTarget::Editor,
+        "com.yuos.Term" => NativeLaunchTarget::Terminal,
+        "com.yuos.Store" => NativeLaunchTarget::Store,
+        "com.yuos.Settings" => NativeLaunchTarget::Settings,
+        "com.yuos.Files" => NativeLaunchTarget::Files,
+        "com.yuos.Edit" => NativeLaunchTarget::Editor,
         _ => return None,
     };
     // This snapshot selects only a compatibility backend. Its live capability
@@ -276,7 +276,7 @@ async fn open_editor(
     let _authorized =
         authorize_native_launch(authority, NativeLaunchTarget::Editor, path.as_deref())?;
     let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
-    launch_desktop_app(&environment, "com.clawos.Edit", uris).await
+    launch_desktop_app(&environment, "com.yuos.Edit", uris).await
 }
 
 fn settings_launch_args(uris: &[String]) -> Result<Vec<String>, String> {
@@ -304,7 +304,7 @@ async fn open_settings(
     let _authorized = authorize_native_launch(authority, NativeLaunchTarget::Settings, None)?;
     let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
     settings::launch(args, environment).await?;
-    Ok(json!({"launched": true, "app_id": "com.clawos.Settings", "launcher": settings::PROGRAM}))
+    Ok(json!({"launched": true, "app_id": "com.yuos.Settings", "launcher": settings::PROGRAM}))
 }
 
 fn store_launch_args(uris: &[String]) -> Result<Vec<String>, String> {
@@ -335,7 +335,7 @@ async fn open_store(
     if !status.success() {
         return Err(format!("native Store launcher failed: {status}"));
     }
-    Ok(json!({"launched": true, "app_id": "com.clawos.Store", "launcher": program}))
+    Ok(json!({"launched": true, "app_id": "com.yuos.Store", "launcher": program}))
 }
 
 fn terminal_launch_args(uris: &[String]) -> Result<Vec<String>, String> {
@@ -378,7 +378,7 @@ async fn open_terminal(
     if !status.success() {
         return Err(format!("native Terminal launcher failed: {status}"));
     }
-    Ok(json!({"launched": true, "app_id": "com.clawos.Term", "launcher": program}))
+    Ok(json!({"launched": true, "app_id": "com.yuos.Term", "launcher": program}))
 }
 
 fn files_reveal_path(uris: &[String]) -> Result<String, String> {
@@ -401,7 +401,7 @@ async fn reveal_files(
     let uri = url::Url::from_file_path(directory)
         .map_err(|_| "cannot construct Files directory URI")?.to_string();
     let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
-    let mut result = launch_desktop_app(&environment, "com.clawos.Files", &[uri]).await?;
+    let mut result = launch_desktop_app(&environment, "com.yuos.Files", &[uri]).await?;
     result["directory"] = json!(directory);
     Ok(result)
 }

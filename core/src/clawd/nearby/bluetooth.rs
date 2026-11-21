@@ -87,7 +87,7 @@ impl Registration {
             return Err("Bluetooth is off. Enable it explicitly; nearby sharing does not silently change its power state.".into());
         }
         let id = uuid::Uuid::new_v4();
-        let path: OwnedObjectPath = format!("/org/clawos/Nearby/advert_{}", id.simple())
+        let path: OwnedObjectPath = format!("/org/yuos/Nearby/advert_{}", id.simple())
             .try_into()
             .map_err(|e: zbus::zvariant::Error| e.to_string())?;
         let bytes = id.as_bytes();

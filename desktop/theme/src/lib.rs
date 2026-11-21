@@ -26,7 +26,7 @@ mod theme_provider;
 pub mod util;
 
 /// name of cosmic theme
-pub const NAME: &'static str = "com.clawos.Theme";
+pub const NAME: &'static str = "com.yuos.Theme";
 /// Name of the theme directory
 pub const THEME_DIR: &str = "themes";
 /// name of the palette directory

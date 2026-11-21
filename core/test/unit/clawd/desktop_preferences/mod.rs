@@ -170,7 +170,7 @@ fn pinned_owner_store_updates_real_config_not_app_home_and_rejects_aliases() {
     let store = files::OwnerFiles::new(unsafe { libc::geteuid() }, owner.clone());
     let result = apply(&write, &store, &proof).unwrap();
     assert_eq!(result["status"], "applied");
-    let real = owner.join(".config/cosmic/com.clawos.Comp/v1/xkb_config");
+    let real = owner.join(".config/cosmic/com.yuos.Comp/v1/xkb_config");
     assert_eq!(
         std::fs::read_to_string(&real).unwrap(),
         result["entries"][0]["value"]

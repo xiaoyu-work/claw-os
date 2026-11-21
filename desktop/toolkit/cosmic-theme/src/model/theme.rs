@@ -12,16 +12,16 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 
 /// ID for the current dark `ThemeBuilder` config
-pub const DARK_THEME_BUILDER_ID: &str = "com.clawos.Theme.Dark.Builder";
+pub const DARK_THEME_BUILDER_ID: &str = "com.yuos.Theme.Dark.Builder";
 
 /// ID for the current dark Theme config
-pub const DARK_THEME_ID: &str = "com.clawos.Theme.Dark";
+pub const DARK_THEME_ID: &str = "com.yuos.Theme.Dark";
 
 /// ID for the current light `ThemeBuilder`` config
-pub const LIGHT_THEME_BUILDER_ID: &str = "com.clawos.Theme.Light.Builder";
+pub const LIGHT_THEME_BUILDER_ID: &str = "com.yuos.Theme.Light.Builder";
 
 /// ID for the current light Theme config
-pub const LIGHT_THEME_ID: &str = "com.clawos.Theme.Light";
+pub const LIGHT_THEME_ID: &str = "com.yuos.Theme.Light";
 
 /// Alpha applied to surface colors (background / primary / secondary container `base`)
 /// when `ThemeBuilder::is_frosted` is enabled. Lower = more wallpaper bleed-through.

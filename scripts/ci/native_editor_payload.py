@@ -19,18 +19,18 @@ app_sources = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(app_sources)
 
 PRODUCTS = {
-    "editor": ("cosmic-edit", "com.clawos.Edit", ()),
-    "files": ("cosmic-files", "com.clawos.Files", ("bin/cosmic-files-applet",)),
-    "terminal": ("cosmic-term", "com.clawos.Term", ()),
-    "calendar": ("panel-calendar", "com.clawos.PanelCalendarButton", ()),
-    "store": ("cosmic-store", "com.clawos.Store", ()),
-    "desktop-widgets": ("widget-rail", "com.clawos.AppletWidgetRail", ()),
-    "clipboard": ("panel-clipboard", "com.clawos.AppletClipboard", ()),
-    "launcher": ("claw-launcher", "com.clawos.Launcher", ()),
-    "settings": ("cosmic-settings", "com.clawos.Settings", ()),
-    "capture": ("cosmic-screenshot", "com.clawos.Screenshot", ()),
-    "notifications": ("cosmic-notifications", "com.clawos.Notifications", ()),
-    "media-player": ("cosmic-player", "com.clawos.Player", ()),
+    "editor": ("cosmic-edit", "com.yuos.Edit", ()),
+    "files": ("cosmic-files", "com.yuos.Files", ("bin/cosmic-files-applet",)),
+    "terminal": ("cosmic-term", "com.yuos.Term", ()),
+    "calendar": ("panel-calendar", "com.yuos.PanelCalendarButton", ()),
+    "store": ("cosmic-store", "com.yuos.Store", ()),
+    "desktop-widgets": ("widget-rail", "com.yuos.AppletWidgetRail", ()),
+    "clipboard": ("panel-clipboard", "com.yuos.AppletClipboard", ()),
+    "launcher": ("claw-launcher", "com.yuos.Launcher", ()),
+    "settings": ("cosmic-settings", "com.yuos.Settings", ()),
+    "capture": ("cosmic-screenshot", "com.yuos.Screenshot", ()),
+    "notifications": ("cosmic-notifications", "com.yuos.Notifications", ()),
+    "media-player": ("cosmic-player", "com.yuos.Player", ()),
 }
 
 

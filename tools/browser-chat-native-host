@@ -163,7 +163,7 @@ def main() -> None:
         connection.request("POST", path, json.dumps(params, ensure_ascii=True), {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "X-ClawOS-Agent-Protocol-Version": str(PROTOCOL),
+            "X-YuOS-Agent-Protocol-Version": str(PROTOCOL),
         })
         with connection.getresponse() as response:
             if response.status != 200:

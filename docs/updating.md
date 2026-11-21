@@ -248,7 +248,7 @@ CopyQ/Wayland isolation or clear GUI publication gates.
 Text Editor's complete native source and descriptor are now built from the
 same immutable App repository pin. The signed `claw-os-desktop` package still
 owns `/usr/bin/cosmic-edit`, `/usr/lib/cos/apps/cosmic-edit` and the
-`com.clawos.Edit` desktop entry/resources. No user documents, editor settings,
+`com.yuos.Edit` desktop entry/resources. No user documents, editor settings,
 permissions or model credentials are moved, and no separate runtime updater
 is introduced.
 
@@ -257,7 +257,7 @@ Files follows the same immutable native source composition, preserving
 desktop resources in `claw-os-desktop`. The Agent package owns the shared
 `claw_files.document` parser used by the Document Engine client; it arrives
 through the same signed package, never a runtime download. Files metadata
-declares its tag-sidecar parent read; reveal uses only `com.clawos.Files`
+declares its tag-sidecar parent read; reveal uses only `com.yuos.Files`
 desktop authority, and summary memory is `self:cosmic-files` rather than
 `self:doc`. Existing grants are not unioned or silently transferred.
 
@@ -271,14 +271,14 @@ change; there is no new updater, data import or implicit grant transfer.
 
 Terminal now follows the same immutable native source composition. The signed
 desktop package still owns `/usr/bin/cosmic-term`, its descriptor and
-`com.clawos.Term` resources. Its paired OS desktop service preserves the
+`com.yuos.Term` resources. Its paired OS desktop service preserves the
 existing `proc.spawn:cosmic-term` launch grant; native command/PATH handlers
 share product logic without calling the `exec` App. Native PTYs, history,
 password state and the independent `exec` registry are not moved or unified.
 
 Store's complete native source now follows the same immutable App pin.
 `claw-os-desktop` still owns `/usr/bin/cosmic-store`, its native descriptor and
-`com.clawos.Store` resources. Its paired fixed-target OS launcher preserves
+`com.yuos.Store` resources. Its paired fixed-target OS launcher preserves
 `proc.spawn:cosmic-store`; the native query surface never receives pkg's
 transaction identity. Read-only source discovery and the retained package
 controller stay OS-owned; there is no runtime Git updater.
@@ -343,7 +343,7 @@ provider credentials are rewritten.
 Capture's complete native source, descriptor, locales and resources now come
 from the immutable App repository pin. `claw-os-desktop` still owns
 `/usr/bin/cosmic-screenshot`, `/usr/lib/cos/apps/cosmic-screenshot` and
-`com.clawos.Screenshot` resources. Existing screenshots and configuration are
+`com.yuos.Screenshot` resources. Existing screenshots and configuration are
 neither copied nor renamed; the default interactive OS portal UI is unchanged.
 
 The Agent package provides `claw-os-capture-v1`, the typed screenshot service
@@ -950,7 +950,7 @@ not implement reopening keeps its own lifecycle.
 The Quiet Shell's Claw AI button needs the matching Agent supervisor, which
 starts the existing native Agent UI in the current authenticated display.
 The Launcher also needs the matching signed `claw-app-launcher-desktop`
-package. That package keeps its Debian name and `com.clawos.Launcher`
+package. That package keeps its Debian name and `com.yuos.Launcher`
 desktop entry but replaces the AppID and command with `claw-launcher`.
 The separate `launcher` MCP App keeps its identity. The renamed App does not
 inherit old GUI permissions or private data; the old data is not deleted.

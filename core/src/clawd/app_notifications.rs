@@ -94,7 +94,7 @@ fn validate(request: AppNotificationRequest) -> Result<Intent, BrokerError> {
             );
             draft.presentation = Some(NotificationPresentation {
                 app_name: "Notifications".into(),
-                icon: "com.clawos.Notifications".into(),
+                icon: "com.yuos.Notifications".into(),
                 expire_ms: -1,
                 transient: false,
             });

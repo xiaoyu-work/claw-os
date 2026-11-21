@@ -1,6 +1,6 @@
 polkit.addRule(function(action, subject) {
     if (subject.user !== "_greetd" || !subject.local || !subject.active) return;
-    if (action.id !== "org.clawos.local-desktop-setup.create-owner" &&
+    if (action.id !== "org.yuos.local-desktop-setup.create-owner" &&
         action.id !== "org.freedesktop.NetworkManager.network-control" &&
         action.id !== "org.freedesktop.NetworkManager.settings.modify.system") return;
     try {

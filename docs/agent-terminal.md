@@ -435,7 +435,7 @@ sudo unshare --mount --pid --fork --mount-proc --net \
   --cos target/debug/yu \
   --clawd target/debug/clawd \
   --helper target/debug/claw-approval-helper \
-  --policy rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy \
+  --policy rootfs/overlay/usr/share/polkit-1/actions/org.yuos.approval.policy \
   --original-mount-namespace "$original_mount" \
   --original-pid-namespace "$original_pid"
 ```

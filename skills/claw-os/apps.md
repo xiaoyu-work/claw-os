@@ -661,7 +661,7 @@ requesting desktop user, never as root. Accuracy can be `country`, `city`,
 `zone1970.tab` offline and returns advisory IANA timezone candidates without
 changing the system timezone; this timezone-matching step makes no network
 request. GeoClue may use whichever location sources the system administrator
-enabled. The image allows `com.clawos.Agent` through GeoClue because Claw's
+enabled. The image allows `com.yuos.Agent` through GeoClue because Claw's
 session capability approval is the built-in authorization mechanism.
 
 ## Package Management

@@ -570,8 +570,8 @@ install -m 644 "$SCRIPT_DIR/common/50claw-os-security-floor" \
     "$AGENT_STAGE/etc/apt/apt.conf.d/50claw-os-security-floor"
 
 install -m 644 \
-    "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
-    "$AGENT_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
+    "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.yuos.approval.policy" \
+    "$AGENT_STAGE/usr/share/polkit-1/actions/org.yuos.approval.policy"
 
 CLAW_SEMANTIC_DAEMON_BIN="$(
     ensure_bin claw-semantic-daemon claw-semantic "${RUST_TARGET/-musl/-gnu}"

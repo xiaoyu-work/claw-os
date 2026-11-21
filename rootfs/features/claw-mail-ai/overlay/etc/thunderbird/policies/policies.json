@@ -1,9 +1,9 @@
 {
   "policies": {
     "ExtensionSettings": {
-      "claw-mail-ai@claw.os": {
+      "yu-mail-ai@yuos.io": {
         "installation_mode": "force_installed",
-        "install_url": "file:///usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi",
+        "install_url": "file:///usr/lib/thunderbird/distribution/extensions/yu-mail-ai@yuos.io.xpi",
         "default_area": "navbar"
       }
     },

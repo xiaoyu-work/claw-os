@@ -62,7 +62,7 @@ def authorize(uid, session, action):
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
         result = subprocess.run(
-            ("/usr/bin/pkcheck", "--action-id", "org.clawos.desktop." + action,
+            ("/usr/bin/pkcheck", "--action-id", "org.yuos.desktop." + action,
              "--process", f"{pid},{start},{uid}", "--allow-user-interaction"),
             stdin=subprocess.DEVNULL, timeout=75, check=False,
         )

@@ -11,18 +11,18 @@ use tokio::io::AsyncBufReadExt;
 use zbus::{connection::Builder, proxy};
 
 #[proxy(
-    interface = "com.clawos.NotificationsSocket",
-    default_service = "com.clawos.NotificationsSocket",
-    default_path = "/com/clawos/NotificationsSocket"
+    interface = "com.yuos.NotificationsSocket",
+    default_service = "com.yuos.NotificationsSocket",
+    default_path = "/com/yuos/NotificationsSocket"
 )]
 trait Socket {
     fn get_fd(&self) -> zbus::Result<zbus::zvariant::OwnedFd>;
 }
 
 #[proxy(
-    interface = "com.clawos.NotificationPresentation1",
-    default_service = "com.clawos.NotificationPresentation1",
-    default_path = "/com/clawos/NotificationPresentation1"
+    interface = "com.yuos.NotificationPresentation1",
+    default_service = "com.yuos.NotificationPresentation1",
+    default_path = "/com/yuos/NotificationPresentation1"
 )]
 trait Presentation {
     fn version(&self) -> zbus::Result<u32>;

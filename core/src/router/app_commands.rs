@@ -995,7 +995,7 @@ fn scaffold_main_py(id: &str, want_ops: bool, want_desktop: bool) -> String {
 }
 
 ///
-/// Writes `<applications_dir>/com.clawos.<Id>.desktop` with
+/// Writes `<applications_dir>/com.yuos.<Id>.desktop` with
 /// `Exec=yu app <id> <exec> [%F]`. Routing the launch through
 /// `yu app <id> ...` (rather than exec-ing the app binary) is what
 /// makes the GUI process kernel-spawned, so `COS_APP_ID` identity,
@@ -1060,7 +1060,7 @@ fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, S
 
     let dir = applications_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let file = dir.join(format!("com.clawos.{id}.desktop"));
+    let file = dir.join(format!("com.yuos.{id}.desktop"));
     std::fs::write(&file, entry).map_err(|e| format!("write {}: {e}", file.display()))?;
 
     // Refresh the MIME/desktop cache so associations take effect without

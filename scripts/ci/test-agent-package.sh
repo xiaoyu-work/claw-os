@@ -80,7 +80,7 @@ installed() {
         --cos /usr/local/bin/yu \
         --clawd /usr/local/bin/clawd \
         --helper /usr/local/bin/claw-approval-helper \
-        --policy /usr/share/polkit-1/actions/org.clawos.approval.policy \
+        --policy /usr/share/polkit-1/actions/org.yuos.approval.policy \
         --original-mount-namespace "$original_mount" \
         --original-pid-namespace "$original_pid" \
         --original-network-namespace "$original_network"

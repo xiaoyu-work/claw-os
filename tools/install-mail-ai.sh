@@ -7,7 +7,7 @@
 #
 #   - WebExtension XPI          → /usr/lib/thunderbird/distribution/extensions/ (package-owned)
 #   - Thunderbird policies      → /etc/thunderbird/policies/policies.json
-#   - Thunderbird NM manifest   → /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
+#   - Thunderbird NM manifest   → /etc/thunderbird/native-messaging-hosts/os.yuos.mail_ai.json
 #   - Native host launcher      → /usr/lib/cos/claw-mail-ai-host (package-owned)
 #   - Shared App + SDK/runtime   → /usr/lib/cos/apps/mail-ai/, /usr/lib/cos/python/ (package-owned)
 #
@@ -23,12 +23,12 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-EXT_ID="claw-mail-ai@claw.os"
+EXT_ID="yu-mail-ai@yuos.io"
 APP_DEST="/usr/lib/cos/apps/mail-ai"
 SDK_DEST="/usr/lib/cos/python/claw_os_sdk"
 RUNTIME_DEST="/usr/lib/cos/python/cos_runtime"
 HOST_LAUNCHER="/usr/lib/cos/claw-mail-ai-host"
-NM_MANIFEST="/etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json"
+NM_MANIFEST="/etc/thunderbird/native-messaging-hosts/os.yuos.mail_ai.json"
 POLICY_FILE="/etc/thunderbird/policies/policies.json"
 XPI_DEST_DIR="/usr/lib/thunderbird/distribution/extensions"
 XPI_DEST="${XPI_DEST_DIR}/${EXT_ID}.xpi"
@@ -70,7 +70,7 @@ echo "[claw-mail-ai] installing NM manifest → ${NM_MANIFEST}"
 install -d -m 0755 "$(dirname "${NM_MANIFEST}")"
 cat > "${NM_MANIFEST}" <<EOF
 {
-  "name": "os.claw.mail_ai",
+  "name": "os.yuos.mail_ai",
   "description": "Claw Mail AI — Native Messaging bridge between Thunderbird and apps/mail-ai",
   "path": "${HOST_LAUNCHER}",
   "type": "stdio",

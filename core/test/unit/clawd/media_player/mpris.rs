@@ -194,7 +194,7 @@ async fn player(bus: &Bus, name: &str, state: Arc<Mutex<State>>, delay: Duration
             OBJECT,
             Root {
                 delay,
-                desktop: "com.clawos.Player",
+                desktop: "com.yuos.Player",
             },
         )
         .unwrap()

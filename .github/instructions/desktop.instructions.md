@@ -12,7 +12,7 @@ applyTo: "desktop/**/*"
 - Scope changes to the owning component; avoid workspace-wide reformatting of
   the vendored product fork.
 - Internal `cosmic-*` binary/crate names may remain even when public App IDs
-  use `com.clawos.*`.
+  use `com.yuos.*`.
 - `desktop/icons-tela/links/` contains case-sensitive symlink names. Never
   commit Windows case-collision phantom modifications.
 - Use the component's Cargo/just manifest and tests rather than assuming the

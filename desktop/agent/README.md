@@ -1,4 +1,4 @@
-# ClawOS Agent App (`com.clawos.Agent`)
+# ClawOS Agent App (`com.yuos.Agent`)
 
 The user-facing face of the ClawOS system Agent. The brain (LLM
 runtime, providers, tools, caps, memory) lives in `core/src/agent/`

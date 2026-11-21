@@ -143,7 +143,7 @@ fn detect_terminal() -> (PathBuf, &'static str) {
             })
             .collect();
 
-    for id in ["com.clawos.Term"] {
+    for id in ["com.yuos.Term"] {
         for (terminal_id, exec) in &terminal_apps {
             if terminal_id.as_str() == id {
                 return (PathBuf::from(exec), "-e");

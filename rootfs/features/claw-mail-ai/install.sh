@@ -6,9 +6,9 @@
 # Lay-down:
 #   /usr/lib/cos/apps/mail-ai/               — shared Python package (from agent package)
 #   /usr/lib/cos/claw-mail-ai-host           — trusted native launcher (from agent package)
-#   /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
+#   /etc/thunderbird/native-messaging-hosts/os.yuos.mail_ai.json
 #                                            — NM host manifest
-#   /usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi
+#   /usr/lib/thunderbird/distribution/extensions/yu-mail-ai@yuos.io.xpi
 #                                            — package-owned UI protocol adapter
 #   /etc/thunderbird/policies/policies.json  — pin/lock + privacy defaults
 #
@@ -19,7 +19,7 @@ set -euo pipefail
 FEATURE_DIR="$SCRIPT_DIR/features/claw-mail-ai"
 APP_DEST="$ROOTFS/usr/lib/cos/apps/mail-ai"
 
-EXT_ID="claw-mail-ai@claw.os"
+EXT_ID="yu-mail-ai@yuos.io"
 XPI_DEST="$ROOTFS/usr/lib/thunderbird/distribution/extensions/${EXT_ID}.xpi"
 
 # ---------------------------------------------------------------------------

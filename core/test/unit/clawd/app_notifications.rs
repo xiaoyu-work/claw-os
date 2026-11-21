@@ -76,7 +76,7 @@ fn decision_for_app(app: Option<&str>, caps: Vec<Cap>) -> Decision {
 fn request() -> Value {
     json!({
         "action":"post", "summary":"Ready", "body":"", "app_name":"Label only",
-        "icon":"com.clawos.Notifications", "expire_ms":0, "transient":true,
+        "icon":"com.yuos.Notifications", "expire_ms":0, "transient":true,
         "dedupe_key":"repeat",
     })
 }

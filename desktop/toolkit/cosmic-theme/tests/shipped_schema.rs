@@ -1,4 +1,4 @@
-//! `com.clawos.Theme.{Light,Dark}` is a *derived* config: every field is
+//! `com.yuos.Theme.{Light,Dark}` is a *derived* config: every field is
 //! whatever `ThemeBuilder::build()` produced from the matching
 //! `.Builder` entry. The two drifted apart once already — the builders
 //! carried the Claw palette while the derived themes still held stock
@@ -71,8 +71,8 @@ fn builder_from(fields: &HashMap<String, String>, is_dark: bool) -> ThemeBuilder
 /// Rebuild a shipped theme from its builder and assert the on-disk
 /// derived fields still match.
 fn assert_derived(mode: &str, is_dark: bool) {
-    let builder_fields = read_fields(&schema_dir(&format!("com.clawos.Theme.{mode}.Builder")));
-    let theme_fields = read_fields(&schema_dir(&format!("com.clawos.Theme.{mode}")));
+    let builder_fields = read_fields(&schema_dir(&format!("com.yuos.Theme.{mode}.Builder")));
+    let theme_fields = read_fields(&schema_dir(&format!("com.yuos.Theme.{mode}")));
 
     let expected = builder_from(&builder_fields, is_dark).build();
 
@@ -156,7 +156,7 @@ fn dark_theme_is_derived_from_its_builder() {
 /// (`#005CFE`) in both modes.
 #[test]
 fn shipped_defaults_are_light_and_branded() {
-    let mode_dir = schema_dir("com.clawos.Theme.Mode");
+    let mode_dir = schema_dir("com.yuos.Theme.Mode");
     let is_dark: bool =
         ron::from_str(fs::read_to_string(mode_dir.join("is_dark")).unwrap().trim()).unwrap();
     assert!(!is_dark, "fresh installs boot into light mode");
@@ -166,7 +166,7 @@ fn shipped_defaults_are_light_and_branded() {
         // builder, so reading the accent off the rebuilt theme is
         // equivalent to reading it off disk.
         let theme = builder_from(
-            &read_fields(&schema_dir(&format!("com.clawos.Theme.{mode}.Builder"))),
+            &read_fields(&schema_dir(&format!("com.yuos.Theme.{mode}.Builder"))),
             dark,
         )
         .build();
@@ -179,7 +179,7 @@ fn shipped_defaults_are_light_and_branded() {
         );
         assert_eq!(hex, (0x00, 0x5C, 0xFE), "{mode} accent is not Claw blue");
 
-        let fields = read_fields(&schema_dir(&format!("com.clawos.Theme.{mode}")));
+        let fields = read_fields(&schema_dir(&format!("com.yuos.Theme.{mode}")));
         assert_eq!(parse::<bool>(&fields, "is_dark"), dark);
     }
 }

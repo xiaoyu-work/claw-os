@@ -1,8 +1,8 @@
 //! One-shot regenerator for the shipped default theme schemas.
 //!
-//! `com.clawos.Theme.{Light,Dark}` are *derived* configs: every field
+//! `com.yuos.Theme.{Light,Dark}` are *derived* configs: every field
 //! is produced by running `ThemeBuilder::build()` over the matching
-//! `com.clawos.Theme.{Light,Dark}.Builder` values. The two had drifted
+//! `com.yuos.Theme.{Light,Dark}.Builder` values. The two had drifted
 //! apart — the builders carried the Claw brand palette while the
 //! derived themes still held stock COSMIC greys, so booting into light
 //! mode rendered a grey desktop instead of the cool blue-white one the
@@ -14,8 +14,8 @@
 //! cargo run --example regen_default_theme -- ../../settings/resources/default_schema
 //! ```
 //!
-//! Reads `<dir>/com.clawos.Theme.<Mode>.Builder/v1/*`, rebuilds the
-//! theme, and rewrites `<dir>/com.clawos.Theme.<Mode>/v1/*` using the
+//! Reads `<dir>/com.yuos.Theme.<Mode>.Builder/v1/*`, rebuilds the
+//! theme, and rewrites `<dir>/com.yuos.Theme.<Mode>/v1/*` using the
 //! same per-field RON layout `cosmic-config` writes at runtime.
 
 use std::collections::HashMap;
@@ -88,8 +88,8 @@ fn builder_from_fields(fields: &HashMap<String, String>, is_dark: bool) -> Theme
 }
 
 fn regen(schema_dir: &Path, mode: &str, is_dark: bool) {
-    let builder_dir = schema_dir.join(format!("com.clawos.Theme.{mode}.Builder/v1"));
-    let theme_dir = schema_dir.join(format!("com.clawos.Theme.{mode}/v1"));
+    let builder_dir = schema_dir.join(format!("com.yuos.Theme.{mode}.Builder/v1"));
+    let theme_dir = schema_dir.join(format!("com.yuos.Theme.{mode}/v1"));
 
     let builder = builder_from_fields(&read_fields(&builder_dir), is_dark);
     let mut theme = builder.build();

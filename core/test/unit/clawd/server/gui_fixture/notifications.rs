@@ -242,7 +242,7 @@ impl Fixture {
         assert_eq!(unmuted["preferences"]["muted"], false);
         let private_mute =
             Path::new("/run/display-home/.local/share/cos/apps/cosmic-notifications")
-                .join(".config/cosmic/com.clawos.Notifications/v1/do_not_disturb");
+                .join(".config/cosmic/com.yuos.Notifications/v1/do_not_disturb");
         assert!(
             private_mute.is_file(),
             "native preference acknowledgement did not persist the original private product key"
@@ -252,7 +252,7 @@ impl Fixture {
             OWNER
         );
         assert!(!Path::new(
-            "/run/display-home/.config/cosmic/com.clawos.Notifications/v1/do_not_disturb"
+            "/run/display-home/.config/cosmic/com.yuos.Notifications/v1/do_not_disturb"
         )
         .exists());
         let first_record = self.service.get(OWNER, &self.first.id).unwrap();

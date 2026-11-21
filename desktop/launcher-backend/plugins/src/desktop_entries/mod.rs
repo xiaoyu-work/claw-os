@@ -335,8 +335,8 @@ fn desktop_entry_category(entry: &DesktopEntry) -> Option<SearchResultCategory> 
 
 fn is_settings_entry(app_id: &str, categories: &[&str]) -> bool {
     let app_id = app_id.to_ascii_lowercase();
-    app_id == "com.clawos.settings"
-        || app_id.starts_with("com.clawos.settings.")
+    app_id == "com.yuos.settings"
+        || app_id.starts_with("com.yuos.settings.")
         || categories
             .iter()
             .any(|category| category.eq_ignore_ascii_case("Settings"))

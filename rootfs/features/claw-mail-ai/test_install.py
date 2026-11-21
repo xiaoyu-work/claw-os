@@ -24,7 +24,7 @@ def _fixture(tmp_path):
     for package in ("claw_os_sdk", "cos_runtime"):
         _write(rootfs / "usr/lib/cos/python" / package / "__init__.py", "installed")
     _write(rootfs / "usr/lib/cos/claw-mail-ai-host", "#!/bin/sh\nexit 0\n", 0o755)
-    _write(rootfs / "usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi",
+    _write(rootfs / "usr/lib/thunderbird/distribution/extensions/yu-mail-ai@yuos.io.xpi",
            "installed XPI")
     env = {
         **os.environ,
@@ -56,7 +56,7 @@ def test_feature_preserves_the_canonical_package_and_sdk(tmp_path):
     assert not Path(env["PROJECT_DIR"]).exists()
     assert (rootfs / "usr/share/doc/claw-mail-ai/README.md").read_text() == "installed README.md"
     assert not (rootfs / "usr/lib/cos/mail-ai").exists()
-    assert (rootfs / "etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json").is_file()
+    assert (rootfs / "etc/thunderbird/native-messaging-hosts/os.yuos.mail_ai.json").is_file()
 
 
 @pytest.mark.parametrize("missing", ["app.json", "main.py", "server.py", "native_host.py", "README.md"])
@@ -75,7 +75,7 @@ def test_feature_refuses_incomplete_installed_mail_package(tmp_path, missing):
 
 def test_feature_refuses_missing_package_owned_extension(tmp_path):
     rootfs, env = _fixture(tmp_path)
-    (rootfs / "usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi").unlink()
+    (rootfs / "usr/lib/thunderbird/distribution/extensions/yu-mail-ai@yuos.io.xpi").unlink()
     result = subprocess.run(
         ["bash", str(FEATURE / "install.sh")],
         env=env, text=True, capture_output=True, timeout=30,

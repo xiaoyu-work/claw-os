@@ -30,7 +30,7 @@ fn files_tools_derive_exact_filesystem_desktop_and_owned_memory_scopes() {
         caps("files.reveal"),
         vec![
             Cap::new(Verb::FS_META, Scope::path("/work/document")),
-            Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files")),
+            Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.yuos.Files")),
         ]
     );
     assert_eq!(
@@ -63,7 +63,7 @@ fn editor_tools_derive_only_owned_service_capabilities() {
         open.into_iter().flatten().collect::<Vec<_>>(),
         vec![crate::caps::Cap::new(
             crate::caps::Verb::DESKTOP_LAUNCH,
-            crate::caps::Scope::name("com.clawos.Edit")
+            crate::caps::Scope::name("com.yuos.Edit")
         )]
     );
     let args = BTreeMap::from([("path".into(), serde_json::json!("/work/document"))]);

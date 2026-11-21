@@ -31,7 +31,7 @@ import xml.etree.ElementTree as ET
 
 PASSWORD = "Claw-fixture-only-42"
 HELPER = Path("/usr/local/bin/claw-approval-helper")
-ACTION = "org.clawos.approval.decide"
+ACTION = "org.yuos.approval.decide"
 SOCKET = Path("/run/cos/clawd.sock")
 
 
@@ -542,7 +542,7 @@ def run(args):
             ):
                 shutil.copyfile(source, destination)
                 destination.chmod(0o755)
-            policy = Path("/usr/share/polkit-1/actions/org.clawos.approval.policy")
+            policy = Path("/usr/share/polkit-1/actions/org.yuos.approval.policy")
             policy.write_bytes(args.policy.read_bytes())
             defaults = ET.parse(policy).find(f"./action[@id='{ACTION}']/defaults")
             assert defaults is not None

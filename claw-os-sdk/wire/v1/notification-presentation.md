@@ -12,9 +12,9 @@ Existing CLI/MCP wire schemas are unchanged.
 The Host supplies a private connection to its selected presenter. The existing
 `PANEL_NOTIFICATIONS_FD`, `DAEMON_NOTIFICATIONS_FD` and `COSMIC_NOTIFICATIONS`
 descriptor names retain their values for compatibility. The panel's existing
-`com.clawos.NotificationsSocket.GetFd` handoff is unchanged. The new interface
-on each private applet connection is `com.clawos.NotificationPresentation1`,
-at `/com/clawos/NotificationPresentation1`.
+`com.yuos.NotificationsSocket.GetFd` handoff is unchanged. The new interface
+on each private applet connection is `com.yuos.NotificationPresentation1`,
+at `/com/yuos/NotificationPresentation1`.
 
 No client opens a new bus/socket, selects an App, supplies a publisher/App ID,
 or gains authority from this protocol. Any appropriately hosted App can
@@ -64,7 +64,7 @@ error, never a fallback to App configuration files.
 
 Only these fields are accepted; the JSON limit is 256 bytes. The current
 Notifications App maps `muted` to its existing `do_not_disturb` key in
-`com.clawos.Notifications/v1`. A missing key keeps the existing App default;
+`com.yuos.Notifications/v1`. A missing key keeps the existing App default;
 malformed settings and failed writes are errors. A change writes only that
 key, never anchor, maximum count, timeout, theme or other product preferences.
 The App broadcasts external configuration changes as well.
@@ -74,7 +74,7 @@ still controls the same additional popup mute. It does not replace the
 Notification Service's durable DND schedule or delivery policy. Installation,
 permission review and user approval remain separate OS responsibilities.
 
-The App keeps its legacy private `com.clawos.NotificationsApplet` methods and
+The App keeps its legacy private `com.yuos.NotificationsApplet` methods and
 notification signal for older hosts. The updated OS consumer requires
 presentation v1. Deployment must supply a compatible selected presenter;
 the old App-owned config/util build artifact is not a compatibility fallback.

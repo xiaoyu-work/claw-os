@@ -3,7 +3,7 @@
 use crate::BridgeError;
 use serde::Deserialize;
 
-pub const EDITOR_ID: &str = "com.clawos.Edit";
+pub const EDITOR_ID: &str = "com.yuos.Edit";
 
 /// Open the native editor, optionally with one local file. The broker resolves
 /// the path, derives fs.read, and launches in the authenticated owner's desktop.

@@ -1,5 +1,5 @@
 //! `cos-agent-bridge` — local HTTP+SSE daemon connecting the ClawOS
-//! Agent UI (the desktop App at `com.clawos.Agent`) to `clawd`.
+//! Agent UI (the desktop App at `com.yuos.Agent`) to `clawd`.
 //!
 //! The bridge is intentionally thin: it owns no LLM state, holds no
 //! credentials, and persists nothing of its own. Chat turns are submitted to

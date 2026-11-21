@@ -177,7 +177,7 @@ impl Application for App {
     type Executor = executor::Default;
     type Flags = Flags;
     type Message = Message;
-    const APP_ID: &'static str = "com.clawos.Agent";
+    const APP_ID: &'static str = "com.yuos.Agent";
 
     fn core(&self) -> &Core {
         &self.core

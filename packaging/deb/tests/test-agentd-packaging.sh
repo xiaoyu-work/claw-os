@@ -102,14 +102,14 @@ assert_contains "$RELEASE_WORKFLOW" 'bash scripts/ci/test-agent-package.sh insta
 assert_contains "$AGENT_PACKAGE_TESTS" \
     'python3 -B core/tests/approval_polkit_process.py' \
     "the installed package must exercise actual PAM authentication, not a YES override"
-python3 - "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" <<'PY'
+python3 - "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.yuos.approval.policy" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
 actions = ET.parse(sys.argv[1]).getroot().findall("action")
 assert len(actions) == 1
 action = actions[0]
-assert action.attrib["id"] == "org.clawos.approval.decide"
+assert action.attrib["id"] == "org.yuos.approval.decide"
 for audience in ("allow_any", "allow_inactive", "allow_active"):
     assert action.findtext(f"defaults/{audience}") == "auth_self", audience
 assert {

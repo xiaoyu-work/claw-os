@@ -8,11 +8,11 @@ use serde_json::json;
 const APP_ID: &str = "com.example.App";
 const WINDOW_ID: &str = "11111111111111111111111111111111:402653184";
 const NATIVE_TARGETS: [(NativeLaunchTarget, &str, &str); 5] = [
-    (NativeLaunchTarget::Terminal, "com.clawos.Term", "cosmic-term"),
-    (NativeLaunchTarget::Store, "com.clawos.Store", "cosmic-store"),
-    (NativeLaunchTarget::Settings, "com.clawos.Settings", "cosmic-settings"),
-    (NativeLaunchTarget::Files, "com.clawos.Files", "cosmic-files"),
-    (NativeLaunchTarget::Editor, "com.clawos.Edit", "cosmic-edit"),
+    (NativeLaunchTarget::Terminal, "com.yuos.Term", "cosmic-term"),
+    (NativeLaunchTarget::Store, "com.yuos.Store", "cosmic-store"),
+    (NativeLaunchTarget::Settings, "com.yuos.Settings", "cosmic-settings"),
+    (NativeLaunchTarget::Files, "com.yuos.Files", "cosmic-files"),
+    (NativeLaunchTarget::Editor, "com.yuos.Edit", "cosmic-edit"),
 ];
 
 #[test]
@@ -126,7 +126,7 @@ fn native_launch_rechecks_revocation_for_the_source_session() {
 #[test]
 fn settings_launch_page_is_data_not_path_or_command_option() {
     assert!(settings_launch_args(&[]).unwrap().is_empty());
-    validate_action("launch", None, Some("com.clawos.Settings"), &["settings://date-time".into()])
+    validate_action("launch", None, Some("com.yuos.Settings"), &["settings://date-time".into()])
         .unwrap();
     assert_eq!(settings_launch_args(&["settings://date-time".into()]).unwrap(), vec!["date-time"]);
     for uris in [
@@ -144,7 +144,7 @@ fn settings_launch_page_is_data_not_path_or_command_option() {
 async fn settings_launch_requires_exact_original_proc_scope_before_desktop_access() {
     for (index, caps) in [
         vec![], vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("desktop"))],
-        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Settings"))],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.yuos.Settings"))],
         vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-store"))],
     ].into_iter().enumerate() {
         let decision = decision_for_app(Some("cosmic-settings"), caps, &format!("settings-denied-{index}"));
@@ -171,7 +171,7 @@ fn store_launch_package_is_data_not_executable_or_option() {
 async fn store_launch_requires_original_exact_proc_scope_before_desktop_access() {
     for (index, caps) in [
         vec![], vec![Cap::new(Verb::SYS_PACKAGE, Scope::wild())],
-        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Store"))],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.yuos.Store"))],
         vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-term"))],
     ].into_iter().enumerate() {
         let decision = decision_for_app(Some("cosmic-store"), caps, &format!("store-denied-{index}"));
@@ -214,7 +214,7 @@ fn terminal_launch_directory_is_data_not_arguments_or_an_app() {
 async fn terminal_launch_requires_original_exact_proc_scope_before_desktop_access() {
     for (index, caps) in [
         vec![],
-        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Term"))],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.yuos.Term"))],
         vec![Cap::new(Verb::PROC_SPAWN, Scope::name("other-program"))],
     ].into_iter().enumerate() {
         let decision = decision_for_app(Some("cosmic-term"), caps, &format!("term-denied-{index}"));
@@ -255,7 +255,7 @@ async fn files_reveal_requires_both_exact_capabilities_before_desktop_access() {
     for (index, caps) in [
         vec![Cap::new(Verb::FS_META, Scope::path(directory.to_str().unwrap()))],
         vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-files"))],
-        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files"))],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.yuos.Files"))],
         vec![Cap::new(Verb::FS_META, Scope::path("/not-the-requested-directory")),
              Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-files"))],
         vec![Cap::new(Verb::FS_READ, Scope::path(directory.to_str().unwrap())),

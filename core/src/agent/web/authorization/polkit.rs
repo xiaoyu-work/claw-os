@@ -15,9 +15,9 @@ use zbus::{Connection, Proxy};
 
 use super::{Failure, Session, AUTHORIZATION_TIMEOUT};
 
-const ACTION: &str = "org.clawos.approval.decide";
+const ACTION: &str = "org.yuos.approval.decide";
 const AUTHORITY: &str = "org.freedesktop.PolicyKit1";
-const OBJECT_PATH: &str = "/org/clawos/AgentWeb/Authentication";
+const OBJECT_PATH: &str = "/org/yuos/AgentWeb/Authentication";
 const BUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Agent {

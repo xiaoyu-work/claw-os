@@ -4,9 +4,9 @@
 use zbus::proxy;
 
 #[proxy(
-    default_service = "com.clawos.NotificationPresentation1",
-    interface = "com.clawos.NotificationPresentation1",
-    default_path = "/com/clawos/NotificationPresentation1"
+    default_service = "com.yuos.NotificationPresentation1",
+    interface = "com.yuos.NotificationPresentation1",
+    default_path = "/com/yuos/NotificationPresentation1"
 )]
 pub trait NotificationPresentation {
     fn version(&self) -> zbus::Result<u32>;

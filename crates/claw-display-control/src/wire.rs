@@ -385,7 +385,7 @@ impl Packet for AuthorityCommand {
             target.validate()?;
         }
         if let Self::LaunchNative { desktop_id, .. } = self {
-            if !valid_desktop_id(desktop_id) || desktop_id.starts_with("com.clawos.") {
+            if !valid_desktop_id(desktop_id) || desktop_id.starts_with("com.yuos.") {
                 return Err(Error::Protocol("invalid native desktop entry ID"));
             }
         }

@@ -476,7 +476,7 @@
           "description": "Additional GUI surfaces, selected only by yu app <id> --gui:<name> [literal user args...]. No executable/path input or capability inheritance from other surfaces."
         },
         "name": { "$ref": "#/$defs/localizedText", "description": "Display name for the launcher entry. Defaults to the manifest name." },
-        "icon": { "type": "string", "description": "Icon name (XDG icon theme) or path for the .desktop Icon= field. Defaults to com.clawos.<Id>." },
+        "icon": { "type": "string", "description": "Icon name (XDG icon theme) or path for the .desktop Icon= field. Defaults to com.yuos.<Id>." },
         "categories": { "type": "array", "items": { "type": "string" }, "description": "XDG menu categories (e.g. [\"Utility\"]). ClawOS is always prepended." },
         "mime_types": { "type": "array", "items": { "type": "string" }, "description": "MIME types this app can open (generates MimeType= + file associations)." },
         "single_instance": { "type": "boolean", "description": "If true, the launcher reuses a running instance instead of spawning a new one." },

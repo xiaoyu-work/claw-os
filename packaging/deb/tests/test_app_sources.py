@@ -604,8 +604,8 @@ def test_os_installer_owns_shared_desktop_policy_without_app_sources():
     assert (source / "rules.d/claw-settings.rules").is_file()
     import xml.etree.ElementTree as ET
 
-    action = ET.parse(source / "actions/com.clawos.Settings.Users.policy").find("action")
-    assert action.get("id") == "com.clawos.Settings.Users.Admin"
+    action = ET.parse(source / "actions/com.yuos.Settings.Users.policy").find("action")
+    assert action.get("id") == "com.yuos.Settings.Users.Admin"
     assert {node.tag: node.text for node in action.find("defaults")} == {
         "allow_any": "no", "allow_inactive": "no", "allow_active": "auth_admin_keep",
     }
@@ -616,7 +616,7 @@ def test_os_installer_owns_shared_desktop_policy_without_app_sources():
     "usr/lib/cos/python/_shared/atomic.py",
     "usr/lib/cos/python/canonical_argv.py",
     "usr/lib/cos/python/claw_files/document.py",
-    "usr/share/applications/com.clawos.Files.desktop",
+    "usr/share/applications/com.yuos.Files.desktop",
     "usr/bin/claw-applet-calendar",
 ])
 def test_os_package_refuses_app_support_library_and_native_resource_ownership(tmp_path, relative):

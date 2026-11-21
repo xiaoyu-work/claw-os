@@ -6,7 +6,7 @@
   <vendor>Claw OS</vendor>
   <vendor_url>https://github.com/xiaoyu-work/claw-os</vendor_url>
 
-  <action id="org.clawos.approval.decide">
+  <action id="org.yuos.approval.decide">
     <description>Confirm a Claw OS permission decision</description>
     <message>Enter your sign-in password to confirm your choice in Claw OS.</message>
     <defaults>

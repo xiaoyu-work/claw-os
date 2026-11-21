@@ -202,7 +202,7 @@ impl Verb {
 
     // -- Desktop apps ------------------------------------------------------
     // `desktop.launch` gates AI-initiated launches of installed GUI apps.
-    // Scope is the `.desktop` AppID (e.g. `com.clawos.Files`); the kernel
+    // Scope is the `.desktop` AppID (e.g. `com.yuos.Files`); the kernel
     // never lets the agent name a binary path or pass a `-e bash` payload
     // — args are restricted to URI/path substitutions in the entry's
     // `Exec=` line. `yu app exec start <binary>` is the power-user path

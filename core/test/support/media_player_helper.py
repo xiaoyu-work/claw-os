@@ -96,7 +96,7 @@ def main():
         other = start(["/usr/bin/cosmic-player", "--other"], env=env)
         assert ready(other) == "other-ready"
         ui = start(["/usr/bin/cosmic-player"], env=env, stdin=subprocess.PIPE)
-        assert ready(ui) == f"org.mpris.MediaPlayer2.com.clawos.Player.pid{ui.pid}"
+        assert ready(ui) == f"org.mpris.MediaPlayer2.com.yuos.Player.pid{ui.pid}"
 
         def call(action, *, permit=True, timeout_ms=4000, success=True):
             parent, child = socket.socketpair()

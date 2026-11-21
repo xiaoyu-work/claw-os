@@ -225,7 +225,7 @@ async fn post(
         .notify(
             presentation.map_or("Yu OS Agent", |value| &value.app_name),
             replaces,
-            presentation.map_or("com.clawos.Agent", |value| &value.icon),
+            presentation.map_or("com.yuos.Agent", |value| &value.icon),
             &notification.title,
             &plain_body(&notification.body),
             &["default", "Acknowledge"],

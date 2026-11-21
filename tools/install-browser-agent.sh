@@ -6,9 +6,9 @@
 #   - WebExtension source       → /usr/share/claw/extensions/claw-agent-browser/
 #   - OS transport (Python)     → /usr/lib/cos/browser-native-host.py
 #   - Chromium managed policy   → /etc/chromium/policies/managed/claw-agent.json
-#   - Chromium NM host manifest → /etc/chromium/native-messaging-hosts/com.clawos.browser.json
+#   - Chromium NM host manifest → /etc/chromium/native-messaging-hosts/com.yuos.browser.json
 #   - Native host launcher      → /usr/lib/cos/claw-browser-host
-#   - Separate chat NM manifest → /etc/chromium/native-messaging-hosts/com.clawos.browser_chat.json
+#   - Separate chat NM manifest → /etc/chromium/native-messaging-hosts/com.yuos.browser_chat.json
 #
 # Run as root.  Re-run is idempotent (overwrites).
 #
@@ -26,8 +26,8 @@ EXT_DEST="/usr/share/claw/extensions/claw-agent-browser"
 HOST_LAUNCHER="/usr/lib/cos/claw-browser-host"
 HOST_IMPL="/usr/lib/cos/browser-native-host.py"
 CHAT_HOST="/usr/lib/cos/browser-chat-native-host"
-NM_MANIFEST="/etc/chromium/native-messaging-hosts/com.clawos.browser.json"
-CHAT_MANIFEST="/etc/chromium/native-messaging-hosts/com.clawos.browser_chat.json"
+NM_MANIFEST="/etc/chromium/native-messaging-hosts/com.yuos.browser.json"
+CHAT_MANIFEST="/etc/chromium/native-messaging-hosts/com.yuos.browser_chat.json"
 POLICY_FILE="/etc/chromium/policies/managed/claw-agent.json"
 
 # Extension ID is deterministic when packed with a known key, but for the MVP
@@ -77,7 +77,7 @@ else
 fi
 cat > "${NM_MANIFEST}" <<EOF
 {
-  "name": "com.clawos.browser",
+  "name": "com.yuos.browser",
   "description": "Claw Agent — bridge between Chromium and the yu kernel",
   "path": "${HOST_LAUNCHER}",
   "type": "stdio",
@@ -89,7 +89,7 @@ chmod 0644 "${NM_MANIFEST}"
 if [[ -x "${CHAT_HOST}" ]]; then
   cat > "${CHAT_MANIFEST}" <<EOF
 {
-  "name": "com.clawos.browser_chat",
+  "name": "com.yuos.browser_chat",
   "description": "Claw Agent chat for Helium",
   "path": "${CHAT_HOST}",
   "type": "stdio",

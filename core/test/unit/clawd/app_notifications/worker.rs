@@ -417,7 +417,7 @@ async fn notifications_actual_native_worker_durable_delivery_and_owner_bound_ui(
             &(
                 "Claw OS Agent",
                 desktop_id,
-                "com.clawos.Agent",
+                "com.yuos.Agent",
                 "Forged",
                 "Forged",
                 Vec::<&str>::new(),

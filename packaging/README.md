@@ -168,7 +168,7 @@ claims; their source staging is retained only for explicit fixtures.
 `claw-os-agent` was the exact same package on Ubuntu and Claw OS. It included
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
 It also owns the Mail XPI at
-`/usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi`, built
+`/usr/lib/thunderbird/distribution/extensions/yu-mail-ai@yuos.io.xpi`, built
 reproducibly by the Mail product in
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail).
 This small UI protocol adapter
@@ -329,7 +329,7 @@ payload, and normal signed package updates remain the only installed update path
 
 Media Player is composed at `build/native-apps/cosmic-player` with its full
 native source and original locked renderer. Desktop owns `/usr/bin/cosmic-player`,
-the `com.clawos.Player` resources/thumbnailer and the seven-tool descriptor;
+the `com.yuos.Player` resources/thumbnailer and the seven-tool descriptor;
 Agent provides the required `claw-os-media-player-v1` adapter. Observation and
 control require separate exact grants and operate only this owner's installed
 native Player. There is no worker bus or second playback state. Replace the

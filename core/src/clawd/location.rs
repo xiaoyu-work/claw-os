@@ -24,7 +24,7 @@ const GEOCLUE_MANAGER_PATH: &str = "/org/freedesktop/GeoClue2/Manager";
 const GEOCLUE_MANAGER_INTERFACE: &str = "org.freedesktop.GeoClue2.Manager";
 const GEOCLUE_CLIENT_INTERFACE: &str = "org.freedesktop.GeoClue2.Client";
 const GEOCLUE_LOCATION_INTERFACE: &str = "org.freedesktop.GeoClue2.Location";
-const GEOCLUE_DESKTOP_ID: &str = "com.clawos.Agent";
+const GEOCLUE_DESKTOP_ID: &str = "com.yuos.Agent";
 
 pub async fn query(
     params: Value,

@@ -180,7 +180,7 @@ packagekit
 libclang-dev
 
 # --- Fonts and icons ---
-# Inter is the default UI font (com.clawos.Tk interface_font = "Inter").
+# Inter is the default UI font (com.yuos.Tk interface_font = "Inter").
 # JetBrains Mono is the default monospace (monospace_font = "JetBrains Mono"),
 # used by cos-term, cos-edit and any libcosmic monospace context.
 # Noto Sans CJK provides Chinese/Japanese/Korean fallback;

@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 pub mod proxy;
 
 pub const VERSION: u32 = 1;
-pub const INTERFACE: &str = "com.clawos.NotificationPresentation1";
-pub const OBJECT_PATH: &str = "/com/clawos/NotificationPresentation1";
+pub const INTERFACE: &str = "com.yuos.NotificationPresentation1";
+pub const OBJECT_PATH: &str = "/com/yuos/NotificationPresentation1";
 pub const PANEL_FD_ENV: &str = "PANEL_NOTIFICATIONS_FD";
 pub const PRESENTER_FD_ENV: &str = "DAEMON_NOTIFICATIONS_FD";
 pub const APPLET_FD_ENV: &str = "COSMIC_NOTIFICATIONS";

@@ -12,7 +12,7 @@ use zbus::{Connection, Proxy};
 use super::{remaining, MediaPlayerAction, MAX_OUTPUT};
 use crate::clawd::transport::peer::Credentials;
 
-const PREFIX: &str = "org.mpris.MediaPlayer2.com.clawos.Player.";
+const PREFIX: &str = "org.mpris.MediaPlayer2.com.yuos.Player.";
 const OBJECT: &str = "/org/mpris/MediaPlayer2";
 const INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
 
@@ -229,7 +229,7 @@ pub(super) async fn execute(
         .get_property("DesktopEntry")
         .await
         .map_err(|error| error.to_string())?;
-    if desktop != "com.clawos.Player" {
+    if desktop != "com.yuos.Player" {
         return Err("Media Player endpoint has the wrong desktop identity".into());
     }
     if dbus

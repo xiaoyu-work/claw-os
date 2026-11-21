@@ -99,8 +99,8 @@ install -Dm0755 "$session/claw-desktop-login" "$stage/usr/libexec/claw-desktop-l
 for name in claw-system-settings claw-os-updates; do
     install -Dm0755 "$session/$name" "$stage/usr/libexec/$name"
 done
-install -Dm0644 "$session/org.clawos.desktop.settings.policy" \
-    "$stage/usr/share/polkit-1/actions/org.clawos.desktop.settings.policy"
+install -Dm0644 "$session/org.yuos.desktop.settings.policy" \
+    "$stage/usr/share/polkit-1/actions/org.yuos.desktop.settings.policy"
 units="$stage/usr/lib/systemd/system"
 for file in "$session"/claw-os-update-*.service "$session"/claw-os-update-*.timer; do
     install -Dm0644 "$file" "$units/${file##*/}"

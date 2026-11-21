@@ -170,8 +170,8 @@ registration remain unchanged. Reload the extension/browser explicitly.
 | --- | --- |
 | `/usr/share/claw/extensions/claw-agent-browser/` | unpacked extension |
 | `/etc/chromium/policies/managed/claw-agent.json` | extension policy |
-| `/etc/chromium/native-messaging-hosts/com.clawos.browser.json` | native-host registration pinned to the extension id |
-| `/etc/chromium/native-messaging-hosts/com.clawos.browser_chat.json` | separate chat registration, when Desktop chat host is installed |
+| `/etc/chromium/native-messaging-hosts/com.yuos.browser.json` | native-host registration pinned to the extension id |
+| `/etc/chromium/native-messaging-hosts/com.yuos.browser_chat.json` | separate chat registration, when Desktop chat host is installed |
 | `/usr/lib/cos/claw-browser-host` | fixed native-host launcher |
 | `/usr/lib/cos/browser-native-host.py` | OS-owned Native Messaging/socket bridge |
 | `/usr/lib/cos/browser-chat-native-host` | Desktop-owned client for the existing local Agent bridge |

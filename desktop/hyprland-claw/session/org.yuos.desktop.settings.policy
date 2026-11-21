@@ -3,7 +3,7 @@
   "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
   <vendor>Yu OS</vendor>
-  <action id="org.clawos.desktop.automatic-login">
+  <action id="org.yuos.desktop.automatic-login">
     <description>Change automatic login</description>
     <message>Administrator authentication is required to change automatic login</message>
     <message xml:lang="zh-CN">更改开机自动登录需要管理员验证</message>
@@ -13,7 +13,7 @@
       <allow_active>auth_admin</allow_active>
     </defaults>
   </action>
-  <action id="org.clawos.desktop.system-updates">
+  <action id="org.yuos.desktop.system-updates">
     <description>Manage Yu OS updates</description>
     <message>Administrator authentication is required to manage Yu OS updates</message>
     <message xml:lang="zh-CN">管理 Yu OS 系统更新需要管理员验证</message>
@@ -23,7 +23,7 @@
       <allow_active>auth_admin</allow_active>
     </defaults>
   </action>
-  <action id="org.clawos.desktop.accounts">
+  <action id="org.yuos.desktop.accounts">
     <description>Manage local user passwords and accounts</description>
     <message>Administrator authentication is required to change local user accounts</message>
     <message xml:lang="zh-CN">更改本地用户账号需要管理员验证</message>

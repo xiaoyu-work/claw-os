@@ -104,7 +104,7 @@ case "$component" in
             usr/share/claw-os/oobe/shell.qml
             usr/share/claw-os/oobe/wallpaper-blurred.jpg
             usr/share/backgrounds/claw-os/claw-default.jpg
-            usr/share/polkit-1/actions/org.clawos.local-desktop-setup.policy
+            usr/share/polkit-1/actions/org.yuos.local-desktop-setup.policy
             usr/share/polkit-1/rules.d/claw-local-desktop-setup.rules
             etc/xdg/hypr/hyprland.lua
             usr/share/wayland-sessions/claw.desktop
@@ -113,7 +113,7 @@ case "$component" in
             usr/local/bin/cos-agent-ui
             usr/local/bin/cos-agent-bridge
             usr/local/bin/cos-ask-claw-launcher
-            usr/share/applications/com.clawos.Agent.desktop
+            usr/share/applications/com.yuos.Agent.desktop
         )
         ;;
 esac

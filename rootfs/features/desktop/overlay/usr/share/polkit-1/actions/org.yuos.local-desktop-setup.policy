@@ -3,7 +3,7 @@
  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
 <policyconfig>
-  <action id="org.clawos.local-desktop-setup.create-owner">
+  <action id="org.yuos.local-desktop-setup.create-owner">
     <description>Create the first local Claw OS account</description>
     <message>Authorization is required to create the first local account</message>
     <defaults>

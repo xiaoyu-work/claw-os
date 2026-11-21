@@ -148,7 +148,7 @@ pub struct Manifest {
     /// Optional desktop GUI surface. Presence of this block is the
     /// single signal that the app wants a graphical entry: at
     /// `yu app install` the kernel emits a
-    /// `/usr/share/applications/com.clawos.<Id>.desktop` launcher whose
+    /// `/usr/share/applications/com.yuos.<Id>.desktop` launcher whose
     /// `Exec` routes through `yu app <id> <exec>` so the GUI process is
     /// kernel-spawned (identity/audit/consent apply exactly as they do
     /// for the headless path). Absent means the app is CLI/agent-only.

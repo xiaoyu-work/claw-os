@@ -8,7 +8,7 @@ use cosmic::widget::dropdown::popup_dropdown;
 use cosmic::widget::{list_column, settings, toggler};
 use cosmic::Element;
 
-const ID: &str = "com.clawos.AppletExample";
+const ID: &str = "com.yuos.AppletExample";
 
 pub struct Window {
     core: Core,
