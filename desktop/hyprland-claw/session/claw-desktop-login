@@ -81,15 +81,24 @@ def render():
         print("Claw OS: invalid boot login preference; sign-in required", file=sys.stderr)
         saved = None
     config = tomllib.loads(source)
+    vt = config.get("terminal", {}).get("vt")
+    fixed_vt = type(vt) is int and 1 <= vt <= 63
+    if fixed_vt:
+        # greetd clears this VT in text mode between Cage and Hyprland.
+        # Hide only the graphical VT's text cursor, not the recovery consoles.
+        try:
+            with open(os.open(f"/dev/tty{vt}", os.O_WRONLY | os.O_NOCTTY | os.O_NOFOLLOW), "wb") as terminal:
+                terminal.write(b"\x1b[?25l")
+        except OSError as error:
+            print(f"Claw OS: could not hide the greeter VT cursor: {error}", file=sys.stderr)
     runfile = Path(config.get("general", {}).get("runfile", "/run/greetd.run"))
     if (saved and not ATTEMPT.exists() and not runfile.exists() and "initial_session" not in config
             and not any(Path(path).exists() for path in ("/run/nologin", "/etc/nologin"))):
         # greetd records its own runfile only after a successful start.
         ATTEMPT.touch(mode=0o600, exist_ok=False)
-        vt = config.get("terminal", {}).get("vt")
         # Unlike a handoff from the greeter, startup has no active graphical
         # VT yet. Wait for the configured VT before PAM opens the compositor.
-        if type(vt) is int and 1 <= vt <= 63:
+        if fixed_vt:
             try:
                 subprocess.run(("/usr/bin/chvt", str(vt)), stdin=subprocess.DEVNULL,
                                timeout=8, check=True)
