@@ -96,6 +96,10 @@ mksquashfs "$ROOTFS" "$ISO_BUILD/live/filesystem.squashfs" \
     -comp zstd -Xcompression-level 19 \
     -noappend
 
+if [[ ,$ISO_FEATURES, == *,surface-drivers,* || ${CLAW_PLATFORM:-} == @(x86-surface-laptop-7-intel|aarch64-qualcomm) ]]; then
+    bash "$SCRIPT_DIR/surface-input/build.sh" "$ROOTFS" "$ISO_BUILD/live" "${CLAW_PLATFORM:-amd64}"
+fi
+
 cp "$KERNEL" "$ISO_BUILD/live/vmlinuz"
 cp "$INITRD" "$ISO_BUILD/live/initrd.img"
 

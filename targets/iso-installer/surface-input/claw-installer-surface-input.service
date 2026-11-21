@@ -1,0 +1,14 @@
+[Unit]
+Description=Prepare Surface Laptop 7 input for the live installer
+After=systemd-udevd.service
+Before=getty@tty1.service
+ConditionPathExists=/run/live/medium
+ConditionPathExists=|/sys/bus/acpi/devices/MSHW0551:00
+ConditionFirmware=|device-tree-compatible(microsoft,romulus13)
+ConditionFirmware=|device-tree-compatible(microsoft,romulus13-spi)
+ConditionFirmware=|device-tree-compatible(microsoft,romulus15)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/cos/init/claw-installer-surface-input
+TimeoutStartSec=50

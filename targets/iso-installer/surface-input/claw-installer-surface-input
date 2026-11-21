@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+modprobe -a hid_multitouch uinput
+touch /run/claw-installer-surface-input
+udevadm trigger --action=change --subsystem-match=hidraw || true
+
+keyboard=/dev/input/claw-surface-keyboard
+touchpad=/dev/input/claw-surface-touchpad
+# The SPI pad can stop answering during a HID driver rebind; reprobe only the built-in pad.
+for _ in 1 2 3 4 5 6 7 8; do
+    if udevadm wait --timeout=5 "$keyboard" "$touchpad" 2>/dev/null; then
+        exit 0
+    fi
+    if [ -e "$touchpad" ]; then
+        continue
+    fi
+    for node in /sys/class/hidraw/hidraw*; do
+        case "$(readlink "$node/device")" in
+            *:045E:0C77.*|*:045E:0C9F.*) udevadm trigger --action=change "$node" || true ;;
+        esac
+    done
+done
+udevadm wait --timeout=5 "$keyboard" "$touchpad"

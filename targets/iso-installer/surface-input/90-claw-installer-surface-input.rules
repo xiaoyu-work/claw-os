@@ -1,0 +1,2 @@
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", KERNELS=="01:15:01:01:00", SYMLINK+="input/claw-surface-keyboard"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", ATTRS{name}=="IPTSD Virtual Touchpad 045E:0C77|IPTSD Virtual Touchpad 045E:0C9F", SYMLINK+="input/claw-surface-touchpad"
