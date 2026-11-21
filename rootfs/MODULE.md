@@ -42,7 +42,9 @@ artifacts satisfy composition without a second binary/package build. It
 configures the signed App channel and installs the checked App/support/library
 `.deb` closure in the ordinary transaction, without deleting an existing Apps
 root or copying product source into Agent. Desktop uses the same independent
-package graph, including matching native packages.
+package graph, including matching native packages. The manual installer build
+opts into prebuilt-only composition after verifying all three same-run system
+packages; missing artifacts cannot start another build.
 
 Production Desktop no longer resolves App `main`, mounts native App sources or
 copies App manifests. Shell product UI/private-library links are removed,

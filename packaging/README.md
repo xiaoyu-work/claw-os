@@ -615,6 +615,7 @@ The **Release Claw OS** workflow (`release.yml`) has one target selector:
 | `base` | `claw-os-base` (`Architecture: all`) |
 | `core` | Agent and Base together, without Desktop or image builds; coordinated protocol updates and headless recovery |
 | `desktop` | `claw-os-desktop` for amd64 and arm64, using native GitHub-hosted Ubuntu runners |
+| `installer` | Candidate amd64 Desktop Calamares ISO and checksum, verified against same-run signed packages; workflow artifacts only |
 | `images` | Shared-rootfs Docker/WSL images; consumes same-run signed Agent/Base packages without publishing them to APT |
 | `website` | Website and Pages composition; preserves every existing package |
 | `all` | Shared tests, all packages, Docker/WSL and one Pages publication |

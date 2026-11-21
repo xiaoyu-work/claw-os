@@ -21,6 +21,10 @@ BASE_DEB="$DEBS_DIR/claw-os-base_${FILE_VERSION}_all.deb"
 # Build this exact version if missing — stale packages from an earlier local
 # build must never satisfy the check.
 if [ ! -f "$AGENT_DEB" ] || [ ! -f "$BASE_DEB" ]; then
+    if [ "${CLAW_PREBUILT_SYSTEM_PACKAGES:-0}" = 1 ]; then
+        echo "error: installer requires the prepared Agent and Base packages for $COS_VERSION" >&2
+        exit 1
+    fi
     echo "  :: Claw OS agent/base packages not found -- building them"
     "$PROJECT_DIR/packaging/deb/build-debs.sh"
 fi

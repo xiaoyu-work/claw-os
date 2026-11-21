@@ -13,11 +13,12 @@ on:
           - base
           - core
           - desktop
+          - installer
           - images
           - website
           - all
       desktop_shell_version:
-        description: "Approved immutable Desktop Shell build version (required for desktop or all)"
+        description: "Approved immutable Desktop Shell build version (required for desktop, installer or all)"
         required: false
         type: string
       release_security_bootstrap:
@@ -46,6 +47,7 @@ jobs:
       agent: ${{ steps.plan.outputs.agent }}
       base: ${{ steps.plan.outputs.base }}
       desktop: ${{ steps.plan.outputs.desktop }}
+      installer: ${{ steps.plan.outputs.installer }}
       images: ${{ steps.plan.outputs.images }}
       pages: ${{ steps.plan.outputs.pages }}
     steps:
@@ -54,7 +56,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install isolated Desktop Shell verifier dependency
-        if: inputs.target == 'desktop' || inputs.target == 'all'
+        if: inputs.target == 'desktop' || inputs.target == 'installer' || inputs.target == 'all'
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap
 
       - name: Freeze release version, authenticated Apps and Desktop Shell input
@@ -453,6 +455,87 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           overwrite: true
+
+  build-installer:
+    needs: [prepare, build-agent, build-base, build-desktop]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.installer == 'true' }}
+    runs-on: ubuntu-24.04
+    env:
+      ARCH: amd64
+      COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      CLAW_APP_PACKAGE_ROOT: ${{ github.workspace }}/build/release/app-packages
+      COS_APT_PUBLIC_KEY_FILE: ${{ github.workspace }}/build/release/claw-os-archive-keyring.gpg
+      CLAW_OS_RELEASE_SECURITY_KEYRING: ${{ github.workspace }}/build/release/claw-os-archive-keyring.gpg
+    steps:
+      - name: Prepare hosted-runner space
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-release-inputs
+          path: build/release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-agent-amd64
+          path: build/debs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-base
+          path: build/debs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-desktop-amd64
+          path: build/debs
+
+      - name: Install ISO build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            debootstrap curl ca-certificates python3 gnupg dpkg-dev bubblewrap \
+            squashfs-tools xorriso mtools grub-common grub-efi-amd64-bin grub-pc-bin
+
+      - name: Verify the same-run system packages and signed App closure
+        run: |
+          for component in agent base desktop; do
+            bash scripts/ci/verify-package.sh "$component"
+          done
+
+      - name: Compose a Debian 13 Desktop installer from the verified packages
+        run: |
+          sudo --preserve-env=ARCH,COS_PACKAGE_VERSION,COS_APT_PUBLIC_KEY_FILE,CLAW_APP_PACKAGE_ROOT \
+            env CLAW_PREBUILT_SYSTEM_PACKAGES=1 ./build.sh iso-installer
+
+      - name: Verify package versions and BIOS and UEFI boot entries
+        run: |
+          for component in agent base desktop; do
+            test "$(sudo chroot build/claw-os-rootfs dpkg-query -W -f='${Version} ${db:Status-Status}' "claw-os-$component")" \
+              = "$COS_PACKAGE_VERSION installed"
+          done
+          iso=claw-os-installer-amd64.iso
+          cd build
+          boot_report=$(xorriso -indev "$iso" -report_el_torito plain)
+          grep -Eq 'El Torito boot img.*BIOS' <<<"$boot_report"
+          grep -Eq 'El Torito boot img.*UEFI' <<<"$boot_report"
+          sha256sum "$iso" > "$iso.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-desktop-installer-amd64
+          path: |
+            build/claw-os-installer-amd64.iso
+            build/claw-os-installer-amd64.iso.sha256
+          retention-days: 30
+          if-no-files-found: error
 
   publish-pages:
     needs: [prepare, build-agent, build-base, build-desktop, build-website]

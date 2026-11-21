@@ -4,11 +4,12 @@ set -euo pipefail
 APP_PACKAGE_INPUTS="$(python3 "$PROJECT_DIR/scripts/app_packages.py" check \
     --variant desktop --architecture "$DEB_ARCH")"
 
+FILE_VERSION="${COS_VERSION//:/%3a}"
+DESKTOP_DEB="$PROJECT_DIR/build/debs/claw-os-desktop_${FILE_VERSION}_${DEB_ARCH}.deb"
 install -d "$ROOTFS/build"
 work="$(mktemp -d "$ROOTFS/build/claw-desktop.XXXXXX")"
 inside="${work#"$ROOTFS"}"
 stage="$work/package"
-install -d "$work/source" "$stage"
 cleanup() {
     if mountpoint -q "$work/source"; then
         umount "$work/source" || return 1
@@ -17,24 +18,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python3 "$PROJECT_DIR/scripts/desktop_shell.py" stage --architecture "$DEB_ARCH" --stage "$stage"
-mount --bind "$PROJECT_DIR" "$work/source"
-mount --make-private "$work/source"
-mount -o remount,bind,ro "$work/source"
-(umask 022; cp -a --no-preserve=mode,ownership "$SCRIPT_DIR/features/desktop/overlay/." "$stage/")
+if [[ "${CLAW_PREBUILT_SYSTEM_PACKAGES:-0}" == 1 ]]; then
+    if [[ "${DESKTOP_PACKAGE_ONLY:-0}" == 1 || ! -f "$DESKTOP_DEB" ]]; then
+        echo "error: installer requires the prepared Desktop package for $COS_VERSION" >&2
+        exit 1
+    fi
+else
+    install -d "$work/source" "$stage"
+    python3 "$PROJECT_DIR/scripts/desktop_shell.py" stage --architecture "$DEB_ARCH" --stage "$stage"
+    mount --bind "$PROJECT_DIR" "$work/source"
+    mount --make-private "$work/source"
+    mount -o remount,bind,ro "$work/source"
+    (umask 022; cp -a --no-preserve=mode,ownership "$SCRIPT_DIR/features/desktop/overlay/." "$stage/")
 
-echo "  :: building Claw OS Hyprland and desktop services against Debian $SUITE"
-chroot "$ROOTFS" /bin/bash "$inside/source/desktop/hyprland-claw/stage-desktop.sh" \
-    "$inside/source" "$inside/package" "$inside"
-CLAW_DESKTOP_RUNTIME_DEPS="$(cat "$work/runtime-depends")" \
-    "$PROJECT_DIR/packaging/deb/build-desktop-deb.sh" "$stage"
+    echo "  :: building Claw OS Hyprland and desktop services against Debian $SUITE"
+    chroot "$ROOTFS" /bin/bash "$inside/source/desktop/hyprland-claw/stage-desktop.sh" \
+        "$inside/source" "$inside/package" "$inside"
+    CLAW_DESKTOP_RUNTIME_DEPS="$(cat "$work/runtime-depends")" \
+        "$PROJECT_DIR/packaging/deb/build-desktop-deb.sh" "$stage"
 
-if [[ "${DESKTOP_PACKAGE_ONLY:-0}" == 1 ]]; then
-    exit 0
+    if [[ "${DESKTOP_PACKAGE_ONLY:-0}" == 1 ]]; then
+        exit 0
+    fi
 fi
 
-FILE_VERSION="${COS_VERSION//:/%3a}"
-DESKTOP_DEB="$PROJECT_DIR/build/debs/claw-os-desktop_${FILE_VERSION}_${DEB_ARCH}.deb"
 install -m0644 "$DESKTOP_DEB" "$work/desktop.deb"
 install -d "$work/apps"
 cp -- "$APP_PACKAGE_INPUTS"/archives/*.deb "$work/apps/"
