@@ -13,8 +13,9 @@ for `app` packages; it cannot authenticate Skills, MCP packages or Agent
 extensions. The existing GPG APT archive key is separate and unchanged.
 
 Publisher authentication verifies package bytes, not runtime permission.
-Every installed App still requires the ordinary protected review, Host,
-capability and sandbox gates. There is no business-name entitlement.
+Only the separate, exact [OS preinstall selection](../../../../README.md#preinstalled-app-defaults)
+can replace ordinary first-use review with declared runtime defaults. All Apps
+still use the same Host, capability and sandbox gates.
 
 * **Built-in content still works.** Apps and Skills the Debian package
   installs under `/usr/lib/cos` are trusted through *package-manager

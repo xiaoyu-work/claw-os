@@ -284,6 +284,8 @@ pub enum Issuer {
     TrustedSession,
     /// Minted when the owner approved an exact capability.
     Approval,
+    /// Minted for an exact GUI file covered by the OS's approved App defaults.
+    PreinstalledApp,
     /// Minted for a `clawd`-run scheduler command.
     Scheduler,
 }
@@ -295,6 +297,7 @@ impl Issuer {
             Issuer::AppGateway => "app-gateway",
             Issuer::TrustedSession => "trusted-session",
             Issuer::Approval => "approval",
+            Issuer::PreinstalledApp => "preinstalled-app",
             Issuer::Scheduler => "scheduler",
         }
     }

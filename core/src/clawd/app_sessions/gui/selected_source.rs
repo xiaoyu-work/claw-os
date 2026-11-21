@@ -40,6 +40,7 @@ pub(super) fn reverify(
     let _retained_binding = Span::new(Step::RetainedBinding);
     if current.identity() != retained.identity()
         || PackageRef::of(&current) != PackageRef::of(retained)
+        || current.envelope_sha256() != retained.envelope_sha256()
         || current.manifest_path() != retained.manifest_path()
         || current.entrypoints() != retained.entrypoints()
         || current.resources() != retained.resources()

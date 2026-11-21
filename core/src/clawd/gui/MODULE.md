@@ -12,8 +12,8 @@ Without that field, the constrained union of fixed/wild **operation** needs
 retains its legacy semantics. A named `desktop.entries.<name>` always declares
 its own needs, never a union with operations, MCP or another GUI. Fixed needs
 outside launcher delegation use the ordinary exact-owner approval flow unless
-the owner already saved a supported exact choice for this verified App and
-launched it directly. A signature or GUI declaration alone grants nothing.
+the owner already saved a supported exact choice or the OS preapproved this
+build and its direct GUI declaration. A signature or GUI declaration alone grants nothing.
 Wild needs still inherit only the launcher's bounded scopes.
 Argument-bound GUI needs are unsupported/unbound. Explicit conditional GUI
 needs are also unbound, not unconditional grants; the legacy operation union
@@ -51,9 +51,9 @@ do not block startup and never create an approval request. Mandatory `needs`
 remain strict, including required `ui.panel`; optional declarations do not
 subtract from them or from the default GUI's legacy operation union.
 
-For ordinary Apps, Root first settles the complete mandatory plan, then
-admits optional caps from the authenticated parent, a supported saved owner
-choice for a direct GUI launch, or a still-live exact reusable approval.
+Root first settles the complete mandatory plan, then admits optional caps
+from the authenticated parent, a supported saved owner choice, an applicable
+OS default for a direct GUI launch, or a still-live exact reusable approval.
 Reusable admission spends one bounded use, never a once
 grant or a restoration receipt, and retains its expiry and revocation checks.
 Optional Wild requests retain the existing bounded parent-only inheritance;
@@ -288,13 +288,13 @@ the read-only filtered native view. The exact mandatory capability, not a broade
 Home grant or optional declaration, binds that one directory.
 Legacy operation unions, optional needs, App identity and broad parent rights
 do not prove this window's browsing consent. A matching saved `fs.meta`
-choice for a direct GUI launch avoids a repeat question; without it,
+choice or OS preinstalled default avoids a repeat question; without either,
 `supervision::admit_home_metadata` uses the ordinary protected exact-window
 review and the CLI retries the same registration after consent.
 The manager preflight call is required before Starting; the supervisor's
 second admission check is fail-closed and cannot replace that retry point.
 
-The supervisor either binds the saved policy within the current GUI lease or
+The supervisor either binds the applicable policy within the current GUI lease or
 spends the window decision once and retains its exact expiry and generation.
 The original GUI capability remains in the
 live grant; only raw Home bind derivation is suppressed. The filtered mount
@@ -344,11 +344,11 @@ checked on every use. The retained directory identity and running package
 reference must also match; descriptor pinning is not treated as immutability.
 Only that freshly matched package can validate the retained manifest's needs.
 
-Only a current OS file-picker selection for the matching instance, mode, path
-and pinned revision can avoid an additional approval. Otherwise the proposal
-uses the ordinary exact-owner review. Both decisions bind one regular file,
-read-only access, the retained identity/revision and the live GUI.
-Root issues a separate finite `Issuer::Approval` read grant, preserving ordinary
+An exact OS-preinstalled default held by this window or a current OS file-picker
+selection for the matching mode, path and pinned revision avoids an additional
+approval. Otherwise the proposal uses the ordinary exact-owner review. Each
+path binds one regular file, read-only access, the retained identity/revision
+and the live GUI. Root issues a separate finite read grant, preserving ordinary
 package/denial, Activity and Workspace checks, without changing parent/global
 or immutable GUI startup caps. The Root-held grant is `GuiResource`-only and
 unindexed; no handle reaches the App. Its effective native lease is one pinned

@@ -587,7 +587,7 @@ impl AppServiceManager {
                 "App package changed before service startup",
             ));
         }
-        if !crate::approvals::system_review::has_accepted(
+        if !super::system_review::app_activation_confirmed(
             spec.owner_uid,
             app.require_verified()
                 .map_err(RuntimeStartError::admission)?,
@@ -1121,7 +1121,7 @@ impl AppServiceManager {
             let current_contract = current_app(&key.app_id).ok().and_then(|app| {
                 let verified = app.require_verified().ok()?;
                 super::trust_withdrawal::check_package(key.owner_uid, verified).ok()?;
-                match crate::approvals::system_review::has_accepted(key.owner_uid, verified) {
+                match super::system_review::app_activation_confirmed(key.owner_uid, verified) {
                     Ok(true) => {}
                     Ok(false) => return None,
                     Err(error) => {

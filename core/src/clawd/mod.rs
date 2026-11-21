@@ -72,6 +72,7 @@ pub mod packages;
 pub(crate) mod package_transactions;
 pub mod permissions;
 pub mod power;
+mod preinstalled;
 pub mod printer;
 pub mod protocol;
 pub mod regional_settings;

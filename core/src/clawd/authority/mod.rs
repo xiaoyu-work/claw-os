@@ -777,7 +777,7 @@ fn authorize_gui_file_at(
         || authorization.operation_digest.as_deref() != Some(binding.operation_digest)
         || authorization.context.is_some() || authorization.execution.is_some()
     { return Err("selected read approval does not match the live GUI/owner/capability/operation".into()); }
-    issue_gui_file(binding, route, approval.generation, approval.expires_in())
+    issue_gui_file(binding, route, approval.generation, approval.expires_in(), Issuer::Approval)
 }
 
 #[cfg(target_os = "linux")]
@@ -789,13 +789,33 @@ pub(super) fn authorize_picker_file(
     let generation = crate::approvals::generations::current(
         Some(binding.gui.owner_uid), binding.approval_session,
     )?;
-    issue_gui_file(binding, route, generation, consent.expires_in())
+    issue_gui_file(binding, route, generation, consent.expires_in(), Issuer::Approval)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn authorize_preinstalled_gui_file(
+    binding: GuiFileApproval<'_>,
+    registration: &super::app_sessions::gui::Registration,
+    route: &'static str,
+) -> Result<(GrantView, Authorized), String> {
+    if binding.gui.owner_uid != registration.owner()
+        || binding.gui.subject.session_id.as_deref() != Some(registration.session_id.as_str())
+        || binding.gui.subject.app_id.as_deref() != Some(registration.launch.app_id())
+        || !registration.default_permission(binding.capability)
+    {
+        return Err("selected file is outside the App's OS defaults".into());
+    }
+    let generation = crate::approvals::generations::current(
+        Some(registration.owner()), binding.approval_session,
+    )?;
+    let lifetime = binding.lifetime;
+    issue_gui_file(binding, route, generation, lifetime, Issuer::PreinstalledApp)
 }
 
 #[cfg(target_os = "linux")]
 fn issue_gui_file(
     binding: GuiFileApproval<'_>, route: &'static str, generation: u32,
-    expires_in: std::time::Duration,
+    expires_in: std::time::Duration, issuer: Issuer,
 ) -> Result<(GrantView, Authorized), String> {
     let owner = binding.gui.owner_uid;
     let session = binding.gui.subject.session_id.as_deref().ok_or("GUI read has no bound session")?;
@@ -824,7 +844,7 @@ fn issue_gui_file(
         .filter(|principal| principal.start_time_ticks == Some(binding.process.start_ticks()))
         .ok_or("selected read process identity changed")?;
     let (_handle, view) = authority().issue_with_generation(Issuance {
-        issuer: Issuer::Approval, principal, binding: Binding::ProcessTree,
+        issuer, principal, binding: Binding::ProcessTree,
         subject: current.subject, audience: AudienceSet::one(Audience::GuiResource),
         caps: CapSet::from_caps([binding.capability.clone()]), lifetime, uses: Uses::Unbounded,
         index_session: false,
@@ -886,10 +906,11 @@ fn exercise_gui_file_at(
 ) -> Result<Authorized, String> {
     let view = authority().consume(id, std::slice::from_ref(capability), &presentation)
         .map_err(|error| error.to_string())?;
-    if view.issuer != Issuer::Approval || presentation.audience != Audience::GuiResource
+    if !matches!(view.issuer, Issuer::Approval | Issuer::PreinstalledApp)
+        || presentation.audience != Audience::GuiResource
         || !matches!(capability.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE)
         || view.subject.app_id.is_none()
-    { return Err("selected read is not an ordinary approved GUI read grant".into()); }
+    { return Err("selected file is not bound to a GUI resource grant".into()); }
     if presentation.route != route { return Err("selected file authority has another access kind".into()); }
     let decision = Decision::new(view, route, Audience::GuiResource,
         presentation, None, None, &Requirement::exact([capability.clone()]));

@@ -114,6 +114,7 @@ fn data_path_allowed(path: &Path, directory: bool) -> bool {
     ![
         "usr/lib/cos/bin",
         "usr/lib/cos/trust",
+        "usr/lib/cos/preinstalled-apps",
         "usr/lib/cos/apt",
         "usr/lib/cos/python/claw_os_sdk",
         "usr/lib/cos/python/cos_runtime",

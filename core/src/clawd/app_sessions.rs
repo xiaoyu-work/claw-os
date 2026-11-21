@@ -366,13 +366,13 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     #[cfg(not(target_os = "linux"))]
     let desktop_shell = false;
     #[cfg(target_os = "linux")]
-    let system_menu_app = gui_draft.as_ref().is_some_and(|draft| draft.system_menu_app);
-    #[cfg(not(target_os = "linux"))]
-    let system_menu_app = false;
-    #[cfg(target_os = "linux")]
     let owner_settings = gui_draft.as_ref().is_some_and(|draft| draft.owner_settings);
     #[cfg(not(target_os = "linux"))]
     let owner_settings = false;
+    let preinstalled = super::preinstalled::approved(&package);
+    let explicit_gui = kind == LaunchKind::Gui && !app.manifest.gui_entry(gui_entry.as_deref())?.legacy_needs;
+    let os_defaults = preinstalled && launcher.parent.is_none() && client.extension_host.is_none()
+        && (explicit_gui || kind != LaunchKind::Gui && client.attended_local);
 
     let (command, mut plan, caller_invoke) = match kind {
         LaunchKind::Operation => {
@@ -422,7 +422,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         }
         plan.missing.clear();
     }
-    if !desktop_shell && !system_menu_app {
+    if !desktop_shell && !preinstalled {
         super::system_review::require_app_review(uid, &app, &delegation.requester)?;
     }
     let policy = crate::approvals::app_policy::InstalledPolicy::from_app(uid, &app, &home)
@@ -432,16 +432,17 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let apply_saved = gui_draft.as_ref().is_some_and(|draft| draft.owner_launch);
     #[cfg(not(target_os = "linux"))]
     let apply_saved = false;
-    if apply_saved {
-        // The owner chose this exact App. Its launcher admission is not a
-        // permission the App keeps, nor an Agent-invocation grant.
-        plan.missing.retain(|cap| cap != &caller_invoke && !policy.allows(cap));
-    }
+    // The local launcher's admission never reaches the App as a capability.
+    plan.missing.retain(|cap| {
+        !(apply_saved && policy.allows(cap)
+            || os_defaults && super::preinstalled::allows(cap, &home)
+            || (apply_saved || os_defaults) && cap == &caller_invoke)
+    });
     let mut grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
     let optional_gui = if kind == LaunchKind::Gui {
         authorize_optional_gui_needs(
             &app, gui_entry.as_deref(), &delegation, &ceiling, &mut grant_caps, desktop_shell,
-            owner_settings, apply_saved, &policy,
+            owner_settings, os_defaults, apply_saved, &policy,
         )
     } else {
         OptionalGuiAuthorization::default()
@@ -528,7 +529,8 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     #[cfg(target_os = "linux")]
     if let Some(draft) = gui_draft {
         let reserved = draft
-            .finish(session_id.clone(), caps.clone(), optional_gui.ungranted.clone(), optional_gui.approval_expiry)
+            .finish(session_id.clone(), caps.clone(), optional_gui.ungranted.clone(),
+                optional_gui.approval_expiry, os_defaults)
             .and_then(|registration| super::gui::Manager::get()?.reserve(registration));
         if let Err(error) = reserved {
             authority::authority().revoke_session(&session_id);
@@ -538,8 +540,9 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         }
     }
     #[cfg(target_os = "linux")]
-    if desktop_shell {
-        crate::provenance::audit("desktop.shell_startup", json!({
+    if desktop_shell || os_defaults {
+        let event = if desktop_shell { "desktop.shell_startup" } else { "app.preinstalled_launch" };
+        crate::provenance::audit(event, json!({
             "owner_uid": uid,
             "app_id": app_id,
             "content_digest": package.content_digest(),
@@ -894,12 +897,12 @@ pub(crate) async fn prepare_app_service_call(
         .collect();
     finalize_prepared_app_service_call(
         &app,
-        &app_id,
         &tool,
         &supplied,
         &delegation,
         audit.context,
         uid,
+        false,
     )
 }
 
@@ -916,13 +919,14 @@ pub(crate) async fn prepare_app_service_call(
 /// stays with the caller and never reaches App code.
 fn finalize_prepared_app_service_call(
     app: &App,
-    app_id: &str,
     tool: &str,
     supplied: &BTreeMap<String, Value>,
     delegation: &Delegation,
     context: crate::agent::tools::app_gateway::McpCallContext,
     uid: u32,
+    local_defaults: bool,
 ) -> Result<super::app_services::PreparedAppServiceCall, BrokerError> {
+    let app_id = app.manifest.id.as_str();
     super::trust_withdrawal::check_package(uid, app.require_verified()?)
         .map_err(BrokerError::authorization)?;
     crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &context.caller)?;
@@ -975,6 +979,9 @@ fn finalize_prepared_app_service_call(
     super::system_review::require_app_review(uid, app, &delegation.requester)?;
     crate::approvals::app_policy::InstalledPolicy::from_app(uid, app, &delegation.paths.home)
         .and_then(|policy| policy.require(&plan.caps)).map_err(BrokerError::authorization)?;
+    if local_defaults && super::preinstalled::approved(app.require_verified()?) {
+        plan.missing.retain(|cap| cap != &invoke && !super::preinstalled::allows(cap, &delegation.paths.home));
+    }
     let authorized = authorize_plan(delegation, plan, &ceiling, app_id)?;
     let activity = delegation
         .activity
@@ -1095,7 +1102,10 @@ pub(crate) async fn prepare_cli_app_service_call(
             ));
         }
     }
-    finalize_prepared_app_service_call(&app, &app_id, &tool, &supplied, &delegation, context, uid)
+    finalize_prepared_app_service_call(
+        &app, &tool, &supplied, &delegation, context, uid,
+        launcher.parent.is_none() && client.attended_local,
+    )
 }
 
 pub async fn set_transient(
@@ -2352,6 +2362,7 @@ fn authorize_optional_gui_needs(
     desktop_shell: bool,
     #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     owner_settings: bool,
+    os_defaults: bool,
     apply_saved: bool,
     policy: &crate::approvals::app_policy::InstalledPolicy,
 ) -> OptionalGuiAuthorization {
@@ -2424,7 +2435,9 @@ fn authorize_optional_gui_needs(
             let system_default = desktop_shell || (owner_settings && gui::owner_settings_cap(&cap));
             #[cfg(not(target_os = "linux"))]
             let system_default = false;
-            if system_default || (apply_saved && policy.allows(&cap)) || delegation.ceiling.covers(&cap) {
+            if system_default || (os_defaults && super::preinstalled::allows(&cap, &delegation.paths.home))
+                || (apply_saved && policy.allows(&cap)) || delegation.ceiling.covers(&cap)
+            {
                 granted.insert(cap);
                 continue;
             }

@@ -64,13 +64,20 @@ fn view(record: &ReviewRecord) -> Result<Value, String> {
         .map_err(|error| format!("encode system review: {error}"))
 }
 
+pub(super) fn app_activation_confirmed(owner: u32, package: &VerifiedPackage) -> Result<bool, String> {
+    if super::preinstalled::approved(package) {
+        return Ok(true);
+    }
+    store::has_accepted(owner, package)
+}
+
 pub(crate) fn require_app_review(
     owner: u32,
     app: &crate::apps::App,
     requester: &str,
 ) -> Result<(), BrokerError> {
     let package = app.require_verified().map_err(BrokerError::authorization)?;
-    if store::has_accepted(owner, package).map_err(BrokerError::unavailable)? {
+    if app_activation_confirmed(owner, package).map_err(BrokerError::unavailable)? {
         return Ok(());
     }
     let record = store::submit(

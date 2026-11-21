@@ -74,6 +74,7 @@ and agent tasks.
 | `agent_hooks.rs` | Owner-scoped built-in runtime-hook settings for future Agent tasks; no arbitrary commands or renderer-side persistence |
 | `agent_account.rs` | Fixed owner-scoped Copilot sign-in status/logout; no caller-selected credential and no mutation while tasks are active |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
+| `preinstalled.rs` | Exact OS-selected signed App builds and local default permission bounds; neither an approval store nor a trust root |
 | `app_execution.rs`, `app_mutation.rs` | Retained ordinary App process/cgroup/provider custody and global-per-App Root admission fences, independent of registry rows or owner permission policy |
 | `app_store.rs`, `app_store/apt.rs` | Official APT product/dependency plans, per-App protected delivery confirmation, checked cross-owner retirement and retained indeterminate-admission state |
 | `app_install.rs` | Direct Root-peer-only signed directory publication, shared retirement/fencing, in-fence review consumption and durable pending admission; no unsigned trust or Store fallback |

@@ -123,7 +123,7 @@ if [ "$component" != base ]; then
         python3 scripts/desktop_shell.py check --architecture "$arch" --stage "$extract/payload" >/dev/null
     fi
     python3 scripts/app_packages.py check --variant "$component" \
-        --architecture "$arch" --stage "$extract/payload" >/dev/null
+        --architecture "$arch" --stage "$extract/payload" --preinstall-policy verify >/dev/null
 fi
 
 bash packaging/release-security/verify-package-manifest.sh "$deb" \

@@ -39,6 +39,13 @@ obsolete `claw-apps-desktop` metapackage if present. Configure both signed
 channels for the normal transaction. Desktop releases check the approved
 Shell input and the complete App APT closure before package assembly.
 
+The matching Agent and Desktop packages carry the OS release's
+[preapproved App selection](../packaging/README.md#preinstalled-app-defaults).
+Eligible signed builds use their declared local permissions without a first-use
+prompt. Updates that do not match the OS selection use the ordinary review;
+publisher trust alone does not carry these defaults forward. Existing owner
+denials and independent confirmation for protected actions are unchanged.
+
 Shell App UI/private-library source links are removed without deleting native
 UX: matching App packages retain the three panel binaries/resources and
 common-Host launchers, and the OS notification renderer uses the public SDK

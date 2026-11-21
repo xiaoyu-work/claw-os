@@ -28,7 +28,7 @@ pub(crate) struct Draft {
     control: GuiControl,
     delegation: BoundDelegation,
     pub(super) desktop_shell: bool,
-    pub(super) system_menu_app: bool,
+    system_menu_app: bool,
     pub(super) owner_settings: bool,
     pub(super) owner_launch: bool,
 }
@@ -50,6 +50,7 @@ pub(crate) struct Registration {
     pub caps: CapSet,
     pub optional_needs_ungranted: Vec<usize>,
     optional_approval_expiry: Option<u64>,
+    os_defaults: bool,
     pub registered_at: Instant,
     pub authority_alias: Epoch,
     delegation: BoundDelegation,
@@ -102,10 +103,8 @@ impl Draft {
             }
             verify_system_gui(&launch)?;
         }
-        let system_menu_app = system_launcher && !desktop_shell
-            && matches!(launch.app_id(), "cosmic-edit" | "cosmic-files" | "claw-launcher"
-                | "cosmic-notifications" | "cosmic-player" | "cosmic-screenshot"
-                | "cosmic-settings" | "cosmic-store" | "cosmic-term")
+        let system_menu_app = system_launcher
+            && matches!(launch.app_id(), "claw-launcher" | "cosmic-settings")
             && verify_system_gui(&launch).is_ok();
         let owner_settings = system_menu_app && launch.app_id() == "cosmic-settings"
             && entry == "bin/cosmic-settings" && selector == "--gui";
@@ -156,6 +155,7 @@ impl Draft {
         caps: CapSet,
         optional_needs_ungranted: Vec<usize>,
         optional_approval_expiry: Option<u64>,
+        os_defaults: bool,
     ) -> Result<Registration, String> {
         let desktop_launcher = self.system_menu_app
             && self.launch.app_id() == "claw-launcher"
@@ -175,6 +175,7 @@ impl Draft {
             desktop_launcher,
             owner_settings: self.owner_settings,
             owner_launch: self.owner_launch,
+            os_defaults,
             session_id,
             caps,
             optional_needs_ungranted,
@@ -260,6 +261,12 @@ pub(super) fn desktop_shell_optional_cap(cap: &Cap) -> bool {
 impl Registration {
     pub fn owner(&self) -> u32 {
         self.control.owner_uid
+    }
+
+    pub(crate) fn default_permission(&self, cap: &Cap) -> bool {
+        self.os_defaults && self.caps.covers(cap)
+            && crate::clawd::preinstalled::allows(cap, &self.home)
+            && crate::clawd::preinstalled::listed(self.launch.package())
     }
 
     pub fn belongs_to_session(&self, session: &str) -> bool {
@@ -428,6 +435,9 @@ impl Registration {
         self.require_client(client)?;
         self.require_delegation()?;
         crate::clawd::trust_withdrawal::check_package(self.owner(), self.launch.package())?;
+        if self.os_defaults && !crate::clawd::preinstalled::approved(self.launch.package()) {
+            return Err("OS App defaults changed; fresh registration is required".into());
+        }
         let selected = self.launch.manifest().gui_entry(self.gui_entry.as_deref())?;
         if selected.entry != self.entry || selected.exec != self.selector {
             return Err("GUI target differs from the Root-held registration".into());
@@ -498,6 +508,9 @@ impl Registration {
             .assert_current()
             .map_err(|error| error.to_string())?;
         self.require_delegation()?;
+        if self.os_defaults && !crate::clawd::preinstalled::listed(self.launch.package()) {
+            return Err("OS App defaults changed; fresh registration is required".into());
+        }
         crate::clawd::trust_withdrawal::check_session(self.owner(), &self.session_id)?;
         let trust = crate::provenance::trust_store();
         self.launch

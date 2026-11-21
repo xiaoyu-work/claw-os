@@ -499,10 +499,17 @@ impl SelectedReads {
             access, id: id.clone(), candidate, capability, digest, approval_session,
             approval_request: None, display, stage: Stage::Pending, authority: None,
         };
-        if let Some(picker) = picker {
-            self.select(&mut proposal, SelectionDecision::Picker(picker))
+        let selection = if let Some(picker) = picker {
+            Some((SelectionDecision::Picker(picker), "gui.file.picker.used"))
+        } else if self.registration.default_permission(&proposal.capability) {
+            Some((SelectionDecision::Preinstalled, "gui.file.preinstalled"))
+        } else {
+            None
+        };
+        if let Some((decision, audit_event)) = selection {
+            self.select(&mut proposal, decision)
                 .map_err(BrokerError::authorization)?;
-            crate::provenance::audit("gui.file.picker.used", serde_json::json!({
+            crate::provenance::audit(audit_event, serde_json::json!({
                 "owner_uid":self.registration.owner(), "app_id":self.registration.launch.app_id(),
                 "session_id":self.registration.session_id, "access":access.name(),
                 "selection_id":proposal.id, "operation_digest":proposal.digest,
@@ -656,7 +663,7 @@ impl SelectedReads {
         {
             return Err("selected read declaration changed".into());
         }
-        let lifetime = decision.expires_in()
+        let lifetime = decision.expires_in(gui.expires_in)
             .min(gui.expires_in)
             .min(self.metadata_ceiling.saturating_duration_since(started));
         let deadline = started + lifetime;
@@ -681,6 +688,8 @@ impl SelectedReads {
             },
             SelectionDecision::Picker(consent) =>
                 authority::authorize_picker_file(binding, consent, proposal.access.route())?,
+            SelectionDecision::Preinstalled =>
+                authority::authorize_preinstalled_gui_file(binding, &self.registration, proposal.access.route())?,
         };
         let deadline = deadline.min(authority_started + grant.expires_in);
         let read = Arc::new(SelectionAuthority {
@@ -1072,13 +1081,15 @@ impl SelectedReads {
 enum SelectionDecision<'a> {
     Review(&'a crate::approvals::ConsumedGrant),
     Picker(PickerConsent),
+    Preinstalled,
 }
 
 impl SelectionDecision<'_> {
-    fn expires_in(&self) -> Duration {
+    fn expires_in(&self, gui_lifetime: Duration) -> Duration {
         match self {
             Self::Review(approval) => approval.expires_in(),
             Self::Picker(consent) => consent.expires_in(),
+            Self::Preinstalled => gui_lifetime,
         }
     }
 }

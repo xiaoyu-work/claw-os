@@ -106,6 +106,23 @@ overwritten. This is runtime availability only, not catalog/history sharing,
 launch permission, service activation or GUI acceptance. App sandboxes and
 ordinary owner reviews still control those resources.
 
+#### Preinstalled App defaults
+
+Agent and Desktop each ship a Root-owned list of the exact signed App
+envelopes selected from their authenticated APT inputs. Agent owns the
+headless selection; Desktop owns the additional GUI Apps. Claw's system Shell
+retains its fixed startup policy. The broker still verifies the installed App
+and binds the selected entry. An App ID, publisher, installation path or
+manifest flag alone cannot opt an App into this policy.
+
+For these exact builds, direct local launches use supported declared
+permissions by default. Filesystem defaults are limited to the caller's Home
+and still use the existing protected file and window providers. Owner denials
+win. Agent and scheduled calls, credentials, protected system changes and
+other decisions such as App Store transactions keep their own authorization.
+An independent App update that changes the signed envelope needs a matching
+new OS selection to keep these defaults.
+
 **Desktop source links are cut over:** Calendar, Clipboard and Widget Rail
 binaries, desktop entries, translations/icons and common-Host launchers are
 App-owned; the OS retains their panel layout IDs without linking product UI

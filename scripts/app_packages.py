@@ -21,6 +21,8 @@ APP_NAME = re.compile(r"claw-(?:app-|apps-|cap-)[a-z0-9][a-z0-9+.-]*\Z")
 APP_INTERFACE = re.compile(r"claw-app-(?:support|python-[a-z0-9][a-z0-9-]*)-v1\Z")
 RETIRED_DESKTOP = {"claw-apps-desktop", "claw-app-desktop-shell"}
 DESKTOP_SHELL_ROOT = "usr/lib/cos/apps/desktop-shell"
+PREINSTALLED_DIR = "usr/lib/cos/preinstalled-apps"
+APP_ENVELOPE = ".provenance.json"
 
 
 def run(arguments, **kwargs):
@@ -315,7 +317,7 @@ def selection(records, variant, configuration):
     return sorted(selected.values(), key=lambda record: record["Package"])
 
 
-def package_files(path):
+def package_files(path, envelopes=None):
     inventory = set()
     data = run(["dpkg-deb", "--fsys-tarfile", path]).stdout
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
@@ -330,10 +332,24 @@ def package_files(path):
                 if name in inventory:
                     raise ValueError("Duplicate App package payload path")
                 inventory.add(name)
+            if envelopes is not None and relative.is_relative_to("usr/lib/cos/apps") \
+                    and relative.name == APP_ENVELOPE:
+                if not member.isfile() or not 0 < member.size <= 8 * 1024 * 1024:
+                    raise ValueError("Preinstalled App requires a bounded provenance envelope")
+                raw = archive.extractfile(member).read()
+                body = json.loads(raw)["package"]
+                app_path = relative.parent.relative_to("usr/lib/cos/apps").as_posix()
+                if body["kind"] != "app" or body["manifest_path"] != "app.json" or app_path == "." \
+                        or any(not re.fullmatch(r"[a-zA-Z0-9._-]+", part) for part in app_path.split("/")):
+                    raise ValueError("Invalid preinstalled App provenance path")
+                app = body["id"]
+                if app in envelopes:
+                    raise ValueError(f"Duplicate preinstalled App identity: {app}")
+                envelopes[app] = (app_path, hashlib.sha256(raw).hexdigest())
     return inventory
 
 
-def verify_packages(directory, selected):
+def verify_packages(directory, selected, preinstalled=None):
     owners = {}
     for record in selected:
         path = directory / "archives" / (record["Package"] + ".deb")
@@ -344,11 +360,21 @@ def verify_packages(directory, selected):
         for field in ("Package", "Version", "Architecture", "Depends", "Provides", "X-Claw-App-Ids"):
             if control.get(field, "").replace("\n", " ") != record.get(field, "").replace("\n", " "):
                 raise ValueError(f"App artifact differs from its signed package metadata: {field}")
-        for name in package_files(path):
+        envelopes = {} if preinstalled is not None and app_ids(record) else None
+        inventory = package_files(path, envelopes)
+        if envelopes is not None:
+            if set(envelopes) != set(app_ids(record)) or any(
+                f"usr/lib/cos/apps/{app_path}/app.json" not in inventory
+                for app_path, _ in envelopes.values()
+            ):
+                raise ValueError("Preinstalled App provenance differs from the selected Debian identities")
+            preinstalled.update(envelopes)
+        for name in inventory:
             if name in owners:
                 raise ValueError(f"Multiple dpkg owners for {name}")
             if any(name == root or name.startswith(root + "/") for root in (
-                "usr/lib/cos/python/claw_os_sdk", "usr/lib/cos/python/cos_runtime", DESKTOP_SHELL_ROOT,
+                "usr/lib/cos/python/claw_os_sdk", "usr/lib/cos/python/cos_runtime",
+                DESKTOP_SHELL_ROOT, PREINSTALLED_DIR,
             )):
                 raise ValueError("App package contains OS-owned SDK/runtime or Desktop Shell")
             owners[name] = record["Package"]
@@ -386,16 +412,28 @@ def prepare(variant, architecture, directory):
     return directory
 
 
-def check(variant, architecture, directory, stage=None):
+def check(variant, architecture, directory, stage=None, preinstall_policy=None):
     configuration = settings()
     if not (directory / "selection.json").is_file():
         raise ValueError("Official App artifacts are required; run scripts/app_packages.py prepare first")
     selected = selection(authenticated_records(directory, architecture, configuration), variant, configuration)
     if selected != json.loads((directory / "selection.json").read_text()):
         raise ValueError("App package inputs differ from the authenticated release selection")
-    owners = verify_packages(directory, selected)
+    preinstalled = {} if preinstall_policy else None
+    owners = verify_packages(directory, selected, preinstalled)
     if stage is not None:
         check_stage(stage, owners, desktop=variant == "desktop")
+    if preinstalled is not None:
+        # Desktop includes the headless closure for installation, but Agent owns that policy.
+        ids = desktop_app_ids() if variant == "desktop" else preinstalled
+        contents = "".join(f"{digest} {path}\n" for path, digest in sorted(preinstalled[app] for app in ids))
+        target = stage / PREINSTALLED_DIR / f"{variant}.list"
+        if preinstall_policy == "stage":
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(contents.encode("ascii"))
+            target.chmod(0o644)
+        elif target.read_bytes() != contents.encode("ascii"):
+            raise ValueError("OS preinstalled App policy differs from the authenticated package selection")
     return selected
 
 
@@ -422,6 +460,7 @@ def main():
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--version")
     parser.add_argument("--print-depends", action="store_true")
+    parser.add_argument("--preinstall-policy", choices=("stage", "verify"))
     options = parser.parse_args()
     if options.command == "runtime-version":
         print(platform()["version"])
@@ -435,11 +474,14 @@ def main():
         parser.error("--variant and --architecture are required")
     if options.print_depends and (options.command != "check" or options.variant != "desktop"):
         parser.error("--print-depends requires check --variant desktop")
+    if options.preinstall_policy and (options.command != "check" or options.stage is None):
+        parser.error("--preinstall-policy requires check --stage")
     directory = work_root() / f"{options.variant}-{options.architecture}"
     if options.command == "prepare":
         prepare(options.variant, options.architecture, directory)
     else:
-        selected = check(options.variant, options.architecture, directory, options.stage)
+        selected = check(options.variant, options.architecture, directory, options.stage,
+                         options.preinstall_policy)
         if options.print_depends:
             print(", ".join(roots(selected, "desktop", settings(), desktop_app_ids())))
             return

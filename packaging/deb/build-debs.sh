@@ -652,7 +652,8 @@ install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
 
 echo "  :: dpkg-deb --build claw-os-agent"
 python3 "$PROJECT_DIR/scripts/app_packages.py" check \
-    --variant agent --architecture "$DEB_ARCH" --stage "$AGENT_STAGE" >/dev/null
+    --variant agent --architecture "$DEB_ARCH" --stage "$AGENT_STAGE" \
+    --preinstall-policy stage >/dev/null
 write_release_manifest claw-os-agent "$AGENT_STAGE" "$DEB_ARCH"
 render_security_preinst claw-os-agent "$AGENT_STAGE"
 mv "$AGENT_STAGE/DEBIAN/preinst" "$AGENT_STAGE/DEBIAN/preinst.security"

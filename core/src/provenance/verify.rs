@@ -223,6 +223,7 @@ pub struct VerifiedPackage {
     version: String,
     dir: PathBuf,
     content_digest: String,
+    envelope_sha256: Option<String>,
     manifest_path: String,
     entrypoints: Vec<String>,
     resources: Vec<String>,
@@ -250,6 +251,10 @@ impl VerifiedPackage {
     }
     pub fn content_digest(&self) -> &str {
         &self.content_digest
+    }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn envelope_sha256(&self) -> Option<&str> {
+        self.envelope_sha256.as_deref()
     }
     pub fn manifest_path(&self) -> &str {
         &self.manifest_path
@@ -686,7 +691,10 @@ pub fn verify_package(
         .open_file(ENVELOPE_FILE)
         .and_then(|fd| fd.read_bounded(super::envelope::MAX_ENVELOPE_BYTES as u64))
     {
-        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        Ok(bytes) => Some(String::from_utf8(bytes).map_err(|error| ProvenanceError::Envelope {
+            path: dir.join(ENVELOPE_FILE),
+            source: EnvelopeError::Malformed(error.to_string()),
+        })?),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
             return Err(ProvenanceError::Io {
@@ -837,6 +845,7 @@ pub fn verify_package_with_receipt(
         version: body.version.clone(),
         dir: dir.to_path_buf(),
         content_digest: body.content_digest.clone(),
+        envelope_sha256: Some(crate::crypto::sha256_hex(&raw)),
         manifest_path: body.manifest_path.clone(),
         entrypoints: body.entrypoints.clone(),
         resources: body.resources.clone(),
@@ -945,6 +954,7 @@ fn verify_signed(
         version: body.version.clone(),
         dir: dir.to_path_buf(),
         content_digest: body.content_digest.clone(),
+        envelope_sha256: Some(crate::crypto::sha256_hex(raw.as_bytes())),
         manifest_path: body.manifest_path.clone(),
         entrypoints: body.entrypoints.clone(),
         resources: body.resources.clone(),
@@ -1018,6 +1028,7 @@ fn verify_unsigned(
             version,
             dir: dir.to_path_buf(),
             content_digest: digest,
+            envelope_sha256: None,
             manifest_path: manifest_rel,
             entrypoints,
             resources: Vec::new(),
@@ -1068,6 +1079,7 @@ fn verify_unsigned(
                 version,
                 dir: dir.to_path_buf(),
                 content_digest: digest,
+                envelope_sha256: None,
                 manifest_path: manifest_rel,
                 entrypoints,
                 resources: Vec::new(),

@@ -237,7 +237,7 @@ pub(super) fn admit(registration: &Registration, instance: InstanceId) -> Result
     else {
         return Ok(());
     };
-    if saved_metadata(registration, &declaration.cap).map_err(BrokerError::authorization)? {
+    if metadata_allowed(registration, &declaration.cap).map_err(BrokerError::authorization)? {
         return Ok(());
     }
     let owner = Some(registration.owner());
@@ -283,12 +283,14 @@ pub(super) struct Consent {
     ceiling: Instant,
 }
 
-fn saved_metadata(registration: &Registration, cap: &Cap) -> Result<bool, String> {
+fn metadata_allowed(registration: &Registration, cap: &Cap) -> Result<bool, String> {
     let policy = crate::approvals::app_policy::InstalledPolicy::from_package(
         registration.owner(), registration.launch.package(), registration.launch.manifest(), &registration.home,
     )?;
-    policy.require(&CapSet::from_caps([cap.clone()]))?;
-    Ok(registration.owner_launch && policy.allows(cap))
+    let caps = CapSet::from_caps([cap.clone()]);
+    policy.require(&caps)?;
+    crate::approvals::app_policy::require(registration.owner(), registration.launch.app_id(), &caps)?;
+    Ok(registration.default_permission(cap) || registration.owner_launch && policy.allows(cap))
 }
 
 pub(super) fn consume(
@@ -298,7 +300,7 @@ pub(super) fn consume(
     let Some(declaration) = declaration(registration, instance)? else {
         return Ok(None);
     };
-    if saved_metadata(registration, &declaration.cap)? {
+    if metadata_allowed(registration, &declaration.cap)? {
         return Ok(Some(Consent {
             declaration, approval: None,
             ceiling: registration.registered_at + crate::clawd::app_sessions::SESSION_GRANT_TTL,

@@ -179,8 +179,12 @@ post-publication presentation remain in the router. Signed directory publication
 uses the Root-only `app.directory_install` controller; it never becomes a Store
 directory fallback.
 
-Brokered App registrations and prepared MCP calls require owner review, while
-unreviewed background services remain inactive. The OS terminal and native
+Brokered App registrations and prepared MCP calls require owner review or an
+exact App build selected by the OS release. Those selections default-allow
+supported declared permissions for direct local launches, not for Agent
+tasks. Owner denials and separate protected decisions still apply, and a
+preinstalled selection alone does not start a background service.
+The OS terminal and native
 approval gate share the renderer-independent `clawd-client::system_review`
 contract, catalog labels and permission choices. Core projects both verified
 App requests and existing capability approvals. The target App's GUI metadata

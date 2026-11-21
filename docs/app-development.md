@@ -757,6 +757,10 @@ their own choice. Optional denied features stay unavailable, and a required
 denial prevents that launch. Argument-bound access, selected file contents,
 AI consent and Agent-run operations do not inherit standing GUI permission.
 
+Exact App builds selected by the OS release use its
+[preinstalled defaults](../packaging/README.md#preinstalled-app-defaults)
+on direct local launches. Apps cannot opt themselves in through a declaration.
+
 Signed global directory installation requires Root and creates a protected
 Root-owner OS request before publishing, including `--force`, `--yes`,
 `--no-consent` and in-place installs. `--review` remains nonmutating and does

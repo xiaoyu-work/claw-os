@@ -32,8 +32,10 @@ pub(super) async fn owner_settings(
         let ceiling = package.ceiling();
         let mut review = crate::apps::permission_review::PermissionReview::from_manifest(&app.manifest)?;
         review.resolve_owner_paths(&crate::caps::args::PathContext { home: home.to_path_buf(), cwd: None })?;
+        let preinstalled = super::preinstalled::approved(package);
         let revision = crate::crypto::sha256_hex(
-            &serde_json::to_vec(&(&binding, &decisions, &blocks)).map_err(|error| error.to_string())?,
+            &serde_json::to_vec(&(&binding, &decisions, &blocks, preinstalled))
+                .map_err(|error| error.to_string())?,
         );
         if show {
             let permissions = review.permissions.into_iter().filter(|permission| {
@@ -46,6 +48,7 @@ pub(super) async fn owner_settings(
                     Some(false)
                 } else {
                     decisions.get(&id).copied()
+                        .or_else(|| (preinstalled && super::preinstalled::allows(&cap, &home)).then_some(true))
                 };
                 Ok::<_, String>(json!({
                     "permission_id":id, "label":permission.label, "description":permission.description,

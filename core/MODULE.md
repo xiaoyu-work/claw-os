@@ -95,6 +95,8 @@ The core review controllers depend on the renderer-independent
 desktop component. A displayed revision is comparison state only. Root
 controllers validate every decision and then delegate to the existing App
 confirmation or capability authority; installation never implies Allow All.
+The OS's exact preinstall selection is a separate, bounded default policy in
+[`src/clawd/preinstalled.rs`](src/clawd/preinstalled.rs).
 
 The App directory-install backend consumes provenance verification and the
 shared App lint provider, never router or broker orchestration. Its review

@@ -79,7 +79,8 @@ for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
 done
 
 APP_DEPS="$(python3 "$PROJECT_DIR/scripts/app_packages.py" check \
-    --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" --print-depends)"
+    --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" \
+    --preinstall-policy stage --print-depends)"
 SHELL_DEPS="$(python3 "$PROJECT_DIR/scripts/desktop_shell.py" check \
     --architecture "$DEB_ARCH" --stage "$STAGE_ROOT")"
 
