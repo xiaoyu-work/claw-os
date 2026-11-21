@@ -150,7 +150,7 @@ fn lifetime_policy_keeps_durable_knowledge_and_bounds_live_state() {
         "environment",
         "project",
         "test_command",
-        "cargo test -p cos",
+        "cargo test -p yu",
         None,
         None,
     )

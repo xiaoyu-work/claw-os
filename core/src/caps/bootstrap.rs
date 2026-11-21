@@ -101,7 +101,7 @@ fn bootstrap_user_cli_session_impl(
         || (!interactive_terminal && !is_app_launcher)
     {
         tracing::warn!(
-            target: "cos::caps::bootstrap",
+            target: "yu::caps::bootstrap",
             "refusing to auto-bootstrap an untrusted CLI session"
         );
         return None;
@@ -157,7 +157,7 @@ fn bootstrap_user_cli_session_impl(
             // wrong with the kernel state, rather than the silent
             // open-door we used to have.
             tracing::error!(
-                target: "cos::caps::bootstrap",
+                target: "yu::caps::bootstrap",
                 error = %e,
                 "failed to register CLI session in proc registry; \
                  gated calls will deny in strict mode"

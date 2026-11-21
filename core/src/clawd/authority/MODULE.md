@@ -145,7 +145,7 @@ Nothing here reads a request field for identity or authority.
 ## Tests
 
 ```bash
-cargo test -p cos clawd::authority -- --test-threads=1
+cargo test -p yu clawd::authority -- --test-threads=1
 ```
 
 Capability/provider-only fixtures use `Decision::for_test` or the explicit

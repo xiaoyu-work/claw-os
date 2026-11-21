@@ -14,11 +14,11 @@
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
-use cos::clawd::protocol::{encode_response, Request, RequestId, Response};
-use cos::clawd::routes::Command;
-use cos::clawd::transport::frame::PeerStream;
-use cos::clawd::transport::{peer, ReadOutcome};
-use cos::clawd::wire::{InboundRequest, MAX_REQUEST_BYTES, PROTOCOL_VERSION};
+use yu::clawd::protocol::{encode_response, Request, RequestId, Response};
+use yu::clawd::routes::Command;
+use yu::clawd::transport::frame::PeerStream;
+use yu::clawd::transport::{peer, ReadOutcome};
+use yu::clawd::wire::{InboundRequest, MAX_REQUEST_BYTES, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 use tokio::net::UnixListener;
 
@@ -86,7 +86,7 @@ async fn filesystem_business_text_roundtrips_the_typed_socket_without_app_dispat
         }),
     );
     let response =
-        tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request))
+        tokio::task::spawn_blocking(move || yu::clawd::client::request_blocking(&path, request))
             .await
             .expect("client task")
             .expect("filesystem response");
@@ -115,7 +115,7 @@ async fn nearby_upload_chunks_use_the_ordinary_authenticated_typed_socket() {
     let request=Request::build(Command::NearbyControl,json!({"request":NearbyAction::UploadChunk {
         upload_id:"11111111-1111-4111-8111-111111111111".into(),offset:0,data,
     }}));
-    let response=tokio::task::spawn_blocking(move||cos::clawd::client::request_blocking(&path,request))
+    let response=tokio::task::spawn_blocking(move||yu::clawd::client::request_blocking(&path,request))
         .await.expect("client task").expect("ordinary upload response");
     assert!(response.ok);
     let (_,envelope)=server.await.expect("server task");
@@ -134,7 +134,7 @@ async fn original_image_submission_crosses_the_authenticated_broker_socket() {
         let (stream, _) = bound.listener.accept().await.unwrap();
         let mut peer_stream = PeerStream::new(stream).unwrap();
         let ReadOutcome::Frame(frame) = peer_stream
-            .read_request(cos::clawd::wire::MAX_TASK_SUBMIT_BYTES).await.unwrap()
+            .read_request(yu::clawd::wire::MAX_TASK_SUBMIT_BYTES).await.unwrap()
         else { panic!("expected original image request"); };
         assert_eq!(frame.credentials.uid, unsafe { libc::getuid() });
         assert!(peer::verify(frame.credentials).is_some());
@@ -142,7 +142,7 @@ async fn original_image_submission_crosses_the_authenticated_broker_socket() {
         assert_eq!(request.command.as_str(), "task.submit");
         let params = (Command::TaskSubmit.route().decode)(request.params).unwrap();
         let inputs = serde_json::from_value(params["attachments"].clone()).unwrap();
-        let attachments = cos::agent::attachments::normalize(inputs).unwrap();
+        let attachments = yu::agent::attachments::normalize(inputs).unwrap();
         assert_eq!(
             base64::engine::general_purpose::STANDARD.decode(&attachments[0].data).unwrap(),
             expected,
@@ -157,7 +157,7 @@ async fn original_image_submission_crosses_the_authenticated_broker_socket() {
             "data":base64::engine::general_purpose::STANDARD.encode(&image),
         }],
     }));
-    let response = cos::clawd::client::request(path, request).await.unwrap();
+    let response = yu::clawd::client::request(path, request).await.unwrap();
     assert!(response.ok);
     let value = response.result.unwrap();
     assert_eq!(value["attachments"][0]["bytes"], image.len());
@@ -188,7 +188,7 @@ async fn notification_view_roundtrips_without_owner_or_authority_selectors() {
     let request = Request::build(Command::NotificationView, json!({
         "viewer": { "id": "browser-tab", "revision": 3, "visible": false },
     }));
-    let response = cos::clawd::client::request(path, request).await.unwrap();
+    let response = yu::clawd::client::request(path, request).await.unwrap();
     assert_eq!(response.result.unwrap()["revision"], 3);
     let (credentials, envelope) = server.await.unwrap();
     assert_eq!(credentials.uid, unsafe { libc::getuid() });
@@ -207,7 +207,7 @@ async fn notification_read_all_is_an_owner_bound_empty_request() {
         Response::ok(envelope.id, json!({ "updated": 600 }))
     }));
     let request = Request::build(Command::NotificationReadAll, json!({}));
-    let response = cos::clawd::client::request(path, request).await.unwrap();
+    let response = yu::clawd::client::request(path, request).await.unwrap();
     assert_eq!(response.result.unwrap()["updated"], 600);
     let (credentials, envelope) = server.await.unwrap();
     assert_eq!(credentials.uid, unsafe { libc::getuid() });
@@ -225,7 +225,7 @@ async fn a_connected_client_is_identified_by_kernel_credentials_on_its_message()
     let request = Request::build(Command::DaemonHealth, Value::Null);
     let expected_id = request.id.clone();
     let client =
-        tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request));
+        tokio::task::spawn_blocking(move || yu::clawd::client::request_blocking(&path, request));
 
     let (credentials, envelope) = server.await.expect("server task");
     let response = client.await.expect("client task").expect("response");
@@ -262,7 +262,7 @@ async fn media_player_request_preserves_action_deadline_and_kernel_peer() {
     }));
     let request = Request::build(Command::SystemMediaPlayerControl,
         json!({"session":"media-session","action":"status","deadline_unix_ms":123456}));
-    let reply = tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request))
+    let reply = tokio::task::spawn_blocking(move || yu::clawd::client::request_blocking(&path, request))
         .await.unwrap().unwrap();
     assert_eq!(reply.result.unwrap()["title"], "fixture");
     let (credentials, request) = server.await.unwrap();
@@ -281,7 +281,7 @@ async fn screenshot_request_roundtrips_only_typed_parameters() {
     }));
     let request = Request::build(Command::SystemScreenshotCapture,
         json!({"session":"capture-session","request":{"directory":"/work/shots","modal":false}}));
-    let reply = tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request))
+    let reply = tokio::task::spawn_blocking(move || yu::clawd::client::request_blocking(&path, request))
         .await.unwrap().unwrap();
     assert_eq!(reply.result.unwrap(), json!({"cancelled":true,"path":null}));
     let (credentials, request) = server.await.unwrap();
@@ -300,7 +300,7 @@ async fn a_response_for_another_request_is_refused_by_the_client() {
 
     let request = Request::build(Command::DaemonHealth, Value::Null);
     let client =
-        tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request));
+        tokio::task::spawn_blocking(move || yu::clawd::client::request_blocking(&path, request));
 
     let _ = server.await.expect("server task");
     let error = client
@@ -322,7 +322,7 @@ async fn a_response_from_another_protocol_version_is_refused_by_the_client() {
 
     let request = Request::build(Command::DaemonHealth, Value::Null);
     let client =
-        tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request));
+        tokio::task::spawn_blocking(move || yu::clawd::client::request_blocking(&path, request));
 
     let _ = server.await.expect("server task");
     let error = client
@@ -389,7 +389,7 @@ async fn descriptors_attached_to_a_real_connection_are_refused_and_closed() {
         .await
         .err()
         .expect("a request carrying descriptors must be refused");
-    assert_eq!(fault, cos::clawd::wire::Fault::DescriptorPassing);
+    assert_eq!(fault, yu::clawd::wire::Fault::DescriptorPassing);
 
     let probe = sender.join().expect("sender thread");
     let byte = [0u8; 1];
@@ -453,9 +453,9 @@ async fn bytes_written_before_the_daemon_accepts_still_carry_credentials() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend() {
-    use cos::clawd::client_identity::ClientIdentity;
-    use cos::clawd::routes::RouteCall;
-    use cos::clawd::state::DaemonState;
+    use yu::clawd::client_identity::ClientIdentity;
+    use yu::clawd::routes::RouteCall;
+    use yu::clawd::state::DaemonState;
 
     struct EnvGuard(&'static str, Option<std::ffi::OsString>);
     impl EnvGuard {
@@ -517,7 +517,7 @@ async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend
     });
 
     let created = tokio::task::spawn_blocking(|| {
-        cos::activity::run(
+        yu::activity::run(
             "create",
             &[
                 "Release v2".to_string(),
@@ -555,7 +555,7 @@ async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend
         }),
     );
     let refused = tokio::task::spawn_blocking(move || {
-        cos::clawd::client::request_blocking(&scheduler_socket, request)
+        yu::clawd::client::request_blocking(&scheduler_socket, request)
     })
     .await
     .unwrap()
@@ -564,10 +564,10 @@ async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend
     let error = refused.error.unwrap();
     assert!(error.message.contains("is paused; trigger work is blocked"));
     assert!(error.data.is_none(), "a paused Activity cannot queue consent");
-    assert!(cos::approvals::list_pending_for_owner(Some(unsafe { libc::getuid() })).is_empty());
+    assert!(yu::approvals::list_pending_for_owner(Some(unsafe { libc::getuid() })).is_empty());
     assert!(!data.path().join("triggers").exists());
 
-    let shown = tokio::task::spawn_blocking(move || cos::activity::run("show", &[id]))
+    let shown = tokio::task::spawn_blocking(move || yu::activity::run("show", &[id]))
         .await
         .unwrap()
         .unwrap();

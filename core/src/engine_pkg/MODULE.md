@@ -34,5 +34,5 @@ dependency instead of relying on ambient library search paths.
 ## Tests
 
 ```bash
-cargo test -p cos engine_pkg:: -- --test-threads=1
+cargo test -p yu engine_pkg:: -- --test-threads=1
 ```

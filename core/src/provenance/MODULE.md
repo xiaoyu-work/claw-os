@@ -80,8 +80,8 @@ and signed payload.
 ## Tests
 
 ```bash
-cargo test -p cos --lib provenance:: -- --test-threads=1
-cargo test -p cos --test extension_provenance_process -- --test-threads=1
+cargo test -p yu --lib provenance:: -- --test-threads=1
+cargo test -p yu --test extension_provenance_process -- --test-threads=1
 ```
 
 `test/unit/provenance/` covers format, trust policy, verification,

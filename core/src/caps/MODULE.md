@@ -88,7 +88,7 @@ own-source meanings. See the [GUI resource contract](../clawd/gui/MODULE.md#noti
 ## Tests
 
 ```bash
-cargo test -p cos caps:: -- --test-threads=1
+cargo test -p yu caps:: -- --test-threads=1
 ```
 
 Changes require containment/normalization tests plus an end-to-end consumer or

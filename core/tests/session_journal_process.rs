@@ -21,7 +21,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use cos::session::journal::{
+use yu::session::journal::{
     self, EventSource, JournalEvent, Label, MutationStart, Partition, RecoverySource, Resolution,
 };
 

@@ -108,5 +108,5 @@ presentation state, never an approval decision.
 ## Tests
 
 ```bash
-cargo test -p cos notifications:: -- --test-threads=1
+cargo test -p yu notifications:: -- --test-threads=1
 ```

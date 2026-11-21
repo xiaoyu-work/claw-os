@@ -21,6 +21,6 @@ applyTo: "core/**/*.rs,crates/claw-*/**/*.rs,crates/cos-*/**/*.rs,claw-os-sdk/ru
 Validation:
 
 ```bash
-cargo test -p cos <test-filter> -- --test-threads=1
+cargo test -p yu <test-filter> -- --test-threads=1
 (cd core && cargo clippy -- -D warnings)
 ```

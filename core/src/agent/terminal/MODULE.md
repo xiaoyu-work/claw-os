@@ -202,8 +202,8 @@ Plain chat uses `/workspace UUID|none` and `/directory PATH|home`; unsupported
 slash commands are local errors, not model prompts.
 
 ```bash
-cargo test -p cos --lib agent::terminal:: -- --test-threads=1
-cargo test -p cos --lib conversations:: -- --test-threads=1
+cargo test -p yu --lib agent::terminal:: -- --test-threads=1
+cargo test -p yu --lib conversations:: -- --test-threads=1
 ```
 
 The real PTY commands are documented in

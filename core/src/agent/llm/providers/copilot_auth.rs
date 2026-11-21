@@ -671,7 +671,7 @@ pub(crate) async fn wire_api_for_model_with_transport(
     let models = ensure_copilot_models_with_transport(token, transport).await?;
     let Some(model) = models.iter().find(|m| m.id == model_id) else {
         tracing::warn!(
-            target: "cos::agent::llm::copilot",
+            target: "yu::agent::llm::copilot",
             "Copilot model '{model_id}' was not present in the live catalogue; \
              falling back to chat completions"
         );
@@ -747,7 +747,7 @@ async fn fetch_copilot_models(
             Ok(_) => {}
             Err(error) => {
                 tracing::warn!(
-                    target: "cos::agent::llm::copilot",
+                    target: "yu::agent::llm::copilot",
                     "ignoring malformed Copilot model entry: {error}"
                 );
             }

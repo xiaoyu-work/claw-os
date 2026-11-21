@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use cos::update::debver;
+use yu::update::debver;
 
 const HELPER: &str = env!("CARGO_BIN_EXE_claw-security-floor");
 
@@ -172,7 +172,7 @@ fn install_component(root: &Path, bytes: &[u8]) -> String {
     let path = root.join("usr/local/bin/clawd");
     std::fs::create_dir_all(path.parent().expect("parent")).expect("create bin dir");
     std::fs::write(&path, bytes).expect("write component");
-    cos::crypto::sha256_hex(bytes)
+    yu::crypto::sha256_hex(bytes)
 }
 
 fn helper(root: &Path, args: &[&str]) -> std::process::Output {
@@ -385,16 +385,16 @@ fn the_policy_command_reports_the_compiled_epoch_and_protocols() {
         serde_json::from_slice(&output.stdout).expect("policy is JSON");
     assert_eq!(
         document["security_epoch"].as_u64(),
-        Some(cos::update::SECURITY_EPOCH)
+        Some(yu::update::SECURITY_EPOCH)
     );
-    assert_eq!(document["abi"].as_u64(), Some(u64::from(cos::update::ABI)));
+    assert_eq!(document["abi"].as_u64(), Some(u64::from(yu::update::ABI)));
     assert_eq!(
         document["protocols"]["agentd_worker"].as_u64(),
-        Some(u64::from(cos::agentd::protocol::PROTOCOL_VERSION))
+        Some(u64::from(yu::agentd::protocol::PROTOCOL_VERSION))
     );
     assert_eq!(
         document["protocols"]["broker_envelope"].as_u64(),
-        Some(u64::from(cos::clawd::wire::PROTOCOL_VERSION))
+        Some(u64::from(yu::clawd::wire::PROTOCOL_VERSION))
     );
 }
 

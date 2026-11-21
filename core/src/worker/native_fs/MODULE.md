@@ -371,7 +371,7 @@ probe); do not build native products on Windows/NTFS:
 bash scripts/ci/test-boundaries.sh native-fs
 
 # The underlying compiler commands:
-cargo test --locked -p cos --bin yu --no-run
+cargo test --locked -p yu --bin yu --no-run
 cargo build --locked --manifest-path desktop/comp/test/display-control/Cargo.toml --bin claw-gui-probe
 ```
 

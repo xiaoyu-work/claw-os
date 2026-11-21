@@ -469,13 +469,13 @@ install -d -m 755 "$AGENT_STAGE/usr/lib/cos/extensions"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
     "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
 
-COS_BIN="$(ensure_bin yu cos)" || { echo "error: yu binary not built" >&2; exit 1; }
-CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
+COS_BIN="$(ensure_bin yu yu)" || { echo "error: yu binary not built" >&2; exit 1; }
+CLAWD_BIN="$(ensure_bin clawd yu)" || { echo "error: clawd binary not built" >&2; exit 1; }
 # The unprivileged agent worker. clawd refuses to run agent tasks without
 # it, so it ships in lockstep with the broker it is spawned by.
-AGENTD_BIN="$(ensure_bin claw-agentd cos)" || {
+AGENTD_BIN="$(ensure_bin claw-agentd yu)" || {
     echo "error: claw-agentd binary not built" >&2; exit 1; }
-EXTENSION_HOST_BIN="$(ensure_bin claw-extension-host cos)" || {
+EXTENSION_HOST_BIN="$(ensure_bin claw-extension-host yu)" || {
     echo "error: claw-extension-host binary not built" >&2; exit 1; }
 CALENDAR_READER_BIN="$(ensure_calendar_reader)" || {
     echo "error: claw-calendar-reader binary not built" >&2; exit 1; }
@@ -483,32 +483,32 @@ NEARBY_WORKER_BIN="$(ensure_nearby_bin claw-nearby-worker)" || {
     echo "error: claw-nearby-worker binary not built" >&2; exit 1; }
 NEARBY_RADIO_BIN="$(ensure_nearby_bin claw-nearby-radio)" || {
     echo "error: claw-nearby-radio binary not built" >&2; exit 1; }
-APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
+APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper yu)" || {
     echo "error: claw-approval-helper binary not built" >&2; exit 1; }
-APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
+APP_RUNNER_BIN="$(ensure_bin claw-app-runner yu)" || {
     echo "error: claw-app-runner binary not built" >&2; exit 1; }
-GUI_RUNNER_BIN="$(ensure_bin claw-gui-runner cos)" || {
+GUI_RUNNER_BIN="$(ensure_bin claw-gui-runner yu)" || {
     echo "error: claw-gui-runner binary not built" >&2; exit 1; }
-DISPLAY_HOST_BIN="$(ensure_bin claw-display-host cos)" || {
+DISPLAY_HOST_BIN="$(ensure_bin claw-display-host yu)" || {
     echo "error: claw-display-host binary not built" >&2; exit 1; }
-DISPLAY_SESSION_BIN="$(ensure_bin claw-display-session cos)" || {
+DISPLAY_SESSION_BIN="$(ensure_bin claw-display-session yu)" || {
     echo "error: claw-display-session binary not built" >&2; exit 1; }
-FILE_MANAGER_BIN="$(ensure_bin claw-file-manager cos)" || {
+FILE_MANAGER_BIN="$(ensure_bin claw-file-manager yu)" || {
     echo "error: claw-file-manager binary not built" >&2; exit 1; }
-NOTIFICATION_PANEL_BIN="$(ensure_bin claw-notification-panel cos)" || {
+NOTIFICATION_PANEL_BIN="$(ensure_bin claw-notification-panel yu)" || {
     echo "error: claw-notification-panel binary not built" >&2; exit 1; }
 LAUNCHER_BACKEND_BIN="$(ensure_launcher_backend)" || {
     echo "error: OS Launcher backend binary not built" >&2; exit 1; }
-APP_APT_HOOK_BIN="$(ensure_bin claw-app-apt-hook cos)" || {
+APP_APT_HOOK_BIN="$(ensure_bin claw-app-apt-hook yu)" || {
     echo "error: claw-app-apt-hook binary not built" >&2; exit 1; }
 PAM_DISPLAY_MODULE="$(ensure_bin libpam_claw_display.so claw-display-login "${RUST_TARGET/-musl/-gnu}")" || {
     echo "error: native GNU PAM display module not built (libpam0g-dev is required)" >&2; exit 1; }
-MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
+MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host yu)" || {
     echo "error: claw-mail-ai-host binary not built" >&2; exit 1; }
 # The update downgrade-protection verifier. Maintainer scripts, the APT
 # pre-install hook and operators all call this one binary instead of
 # re-deriving Debian version ordering in shell.
-SECURITY_FLOOR_BIN="$(ensure_bin claw-security-floor cos)" || {
+SECURITY_FLOOR_BIN="$(ensure_bin claw-security-floor yu)" || {
     echo "error: claw-security-floor binary not built" >&2; exit 1; }
 
 echo "  :: yu                     <- $COS_BIN"

@@ -274,7 +274,7 @@ previews and 180 Unicode preview characters plus an ellipsis. Items are relocate
 by their packed identity, never a stale row. Missing services are unavailable;
 mutation deadline expiry is indeterminate and never automatically retried.
 
-`cargo test -p cos --lib clipboard -- --test-threads=1` covers real capability
+`cargo test -p yu --lib clipboard -- --test-threads=1` covers real capability
 authority and closed input/result contracts. The ignored typed-client/process
 relay fixture additionally requires root in a root-owned Linux source tree:
 run the same filter with `--include-ignored`.
@@ -340,7 +340,7 @@ See the [wire contract](../../../claw-os-sdk/wire/v1/regional-settings.md).
 Run the focused normal-user suite from the repository root:
 
 ```bash
-cargo test -p cos --lib -- regional_settings caps::catalog caps::role caps::verb --test-threads=1
+cargo test -p yu --lib -- regional_settings caps::catalog caps::role caps::verb --test-threads=1
 ```
 
 The ignored
@@ -971,11 +971,11 @@ Terminal and graphical Activity views retain their shared job/result projection.
 ## Tests
 
 ```bash
-cargo test -p cos clawd:: -- --test-threads=1
-cargo test -p cos clawd::authority -- --test-threads=1
-cargo test -p cos --test clawd_broker_socket -- --test-threads=1
-cargo test -p cos --lib -- clawd::app_services extension_host::identity --test-threads=1
-cargo test -p cos --lib clawd::capture:: -- --test-threads=1
+cargo test -p yu clawd:: -- --test-threads=1
+cargo test -p yu clawd::authority -- --test-threads=1
+cargo test -p yu --test clawd_broker_socket -- --test-threads=1
+cargo test -p yu --lib -- clawd::app_services extension_host::identity --test-threads=1
+cargo test -p yu --lib clawd::capture:: -- --test-threads=1
 ```
 
 `scripts/ci/test-boundaries.sh capture` additionally runs the actual `clawd`

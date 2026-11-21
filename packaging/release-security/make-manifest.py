@@ -15,7 +15,7 @@ binds, for exactly one package build:
 
 Output is canonical JSON — sorted keys, no insignificant whitespace,
 integers only, one trailing newline — because a detached signature
-covers bytes, not meaning. `cos::update::canonical` re-encodes the file
+covers bytes, not meaning. `yu::update::canonical` re-encodes the file
 before verifying it, so a second encoding of the same document is
 refused rather than accepted.
 
@@ -45,7 +45,7 @@ FORMAT = "claw.release-security/v1"
 
 
 def canonical_bytes(document: object) -> bytes:
-    """Exactly the encoding `cos::update::canonical` accepts."""
+    """Exactly the encoding `yu::update::canonical` accepts."""
     text = json.dumps(
         document,
         sort_keys=True,

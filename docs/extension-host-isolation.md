@@ -219,9 +219,9 @@ There is no supported mode that falls back to executing dynamic code inside
 
 ```bash
 cd core
-cargo test -p cos extension_host -- --test-threads=1
-cargo test -p cos --test extension_host_boundary -- --test-threads=1
-cargo test -p cos --test agentd_process_boundary -- --test-threads=1
+cargo test -p yu extension_host -- --test-threads=1
+cargo test -p yu --test extension_host_boundary -- --test-threads=1
+cargo test -p yu --test agentd_process_boundary -- --test-threads=1
 cargo clippy -- -D warnings
 
 cd ..

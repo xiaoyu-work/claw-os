@@ -413,10 +413,10 @@ the task as protocol faults.
 ## Tests
 
 ```bash
-cargo test -p cos agentd -- --test-threads=1
-cargo test -p cos caps::enforcement -- --test-threads=1
-cargo test -p cos --test agentd_process_boundary -- --test-threads=1
-cargo test -p cos --test extension_host_boundary -- --test-threads=1
+cargo test -p yu agentd -- --test-threads=1
+cargo test -p yu caps::enforcement -- --test-threads=1
+cargo test -p yu --test agentd_process_boundary -- --test-threads=1
+cargo test -p yu --test extension_host_boundary -- --test-threads=1
 bash packaging/deb/tests/test-agentd-packaging.sh
 ```
 

@@ -16,13 +16,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cos::provenance::envelope::{content_digest, PackageKind, ENVELOPE_FILE};
-use cos::provenance::install::{self, Limits};
-use cos::provenance::sign::{self, SigningKeyFile};
-use cos::provenance::trust::{
+use yu::provenance::envelope::{content_digest, PackageKind, ENVELOPE_FILE};
+use yu::provenance::install::{self, Limits};
+use yu::provenance::sign::{self, SigningKeyFile};
+use yu::provenance::trust::{
     TrustRootSpec, TrustStore, TrustTier, TRUST_SCHEMA_V1, USAGE_PACKAGE_SIGNING,
 };
-use cos::provenance::verify::{self, VerifyOptions};
+use yu::provenance::verify::{self, VerifyOptions};
 
 #[path = "../test/support/app_sources.rs"]
 mod app_sources;
@@ -57,8 +57,8 @@ impl Drop for PythonPathScope {
 fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     use std::collections::BTreeMap;
 
-    use cos::caps::{Cap, CapSet, Scope, Verb};
-    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+    use yu::caps::{Cap, CapSet, Scope, Verb};
+    use yu::worker::derive::{app_session, AppSessionInput, SessionLifetime};
 
     let fx = Fixture::new("published-doc");
     let source = app_sources::app_dir("doc");
@@ -87,7 +87,7 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     let options = VerifyOptions::new(PackageKind::App).expect_id("doc");
     let package = verify::verify_package(&directory, &options, &trust).unwrap();
     assert_eq!(package.manifest_text().unwrap(), original);
-    let launch = cos::bridge::AppLaunch::new(Arc::new(package)).unwrap();
+    let launch = yu::bridge::AppLaunch::new(Arc::new(package)).unwrap();
     let binding = launch
         .bind(&["main.py".into(), "server.py".into()])
         .unwrap();
@@ -97,7 +97,7 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
 
     let document = fx.root.join("synthetic.json");
     write(&document, r#"[{"text":"untrusted document"}]"#);
-    let paths = cos::caps::args::PathContext {
+    let paths = yu::caps::args::PathContext {
         home: fx.root.clone(),
         cwd: None,
     };
@@ -161,7 +161,7 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
         Verb::FS_READ,
         Scope::path(document.to_string_lossy()),
     )]);
-    let mounts = cos::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
+    let mounts = yu::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
     let data = fx.root.join("data");
     let derive = |lifetime| {
         app_session(AppSessionInput {
@@ -192,13 +192,13 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
         worker.env["COS_APP_MANIFEST"],
         directory.join("app.json").to_str().unwrap()
     );
-    assert!(matches!(worker.network, cos::worker::NetworkPolicy::Denied));
+    assert!(matches!(worker.network, yu::worker::NetworkPolicy::Denied));
     let resource = worker
         .mounts
         .iter()
         .find(|mount| mount.source == document)
         .unwrap();
-    assert_eq!(resource.mode, cos::worker::MountMode::ReadOnly);
+    assert_eq!(resource.mode, yu::worker::MountMode::ReadOnly);
     assert_eq!(
         resource.expect_identity,
         Some((mounts[0].device, mounts[0].inode))
@@ -206,8 +206,8 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     assert!(worker
         .mounts
         .iter()
-        .filter(|mount| mount.class == cos::worker::MountClass::Package)
-        .all(|mount| mount.mode == cos::worker::MountMode::ReadOnly));
+        .filter(|mount| mount.class == yu::worker::MountClass::Package)
+        .all(|mount| mount.mode == yu::worker::MountMode::ReadOnly));
     write(
         &directory.join("server.py"),
         "raise RuntimeError('modified fixture')\n",
@@ -219,7 +219,7 @@ fn signed_capability_client(
     fx: &Fixture,
     group: &str,
     app_id: &str,
-) -> (cos::bridge::AppLaunch, String) {
+) -> (yu::bridge::AppLaunch, String) {
     let directory = app_stage::app(
         &app_sources::app_dir(app_id),
         "capability",
@@ -228,7 +228,7 @@ fn signed_capability_client(
         &fx.root.join("stage"),
     );
     let original = fs::read_to_string(directory.join("app.json")).unwrap();
-    let declaration = cos::caps::manifest::Manifest::from_json(&original).unwrap();
+    let declaration = yu::caps::manifest::Manifest::from_json(&original).unwrap();
     let entry = declaration
         .mcp
         .as_ref()
@@ -259,7 +259,7 @@ fn signed_capability_client(
     )
     .unwrap();
     assert_eq!(package.manifest_text().unwrap(), original);
-    let launch = cos::bridge::AppLaunch::new(Arc::new(package)).unwrap();
+    let launch = yu::bridge::AppLaunch::new(Arc::new(package)).unwrap();
     (launch, entry)
 }
 
@@ -267,9 +267,9 @@ fn signed_capability_client(
 fn published_net_signed_fixture_preserves_scoped_egress_and_output_authority() {
     use std::collections::BTreeMap;
 
-    use cos::caps::{Cap, CapSet, Scope, Verb};
-    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
-    use cos::worker::{Endpoint, MountClass, MountMode, NetworkPolicy};
+    use yu::caps::{Cap, CapSet, Scope, Verb};
+    use yu::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+    use yu::worker::{Endpoint, MountClass, MountMode, NetworkPolicy};
 
     let fx = Fixture::new("published-net");
     let (launch, entry) = signed_capability_client(&fx, "http", "net");
@@ -284,7 +284,7 @@ fn published_net_signed_fixture_preserves_scoped_egress_and_output_authority() {
         Cap::new(Verb::NET_DIAL, Scope::host("example.test:8080")),
         Cap::new(Verb::FS_WRITE, Scope::path(output.to_string_lossy())),
     ]);
-    let mounts = cos::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
+    let mounts = yu::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
     let derive = |lifetime| {
         app_session(AppSessionInput {
             app_id: launch.app_id(),
@@ -354,8 +354,8 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
     use std::collections::BTreeMap;
     use std::os::unix::fs::MetadataExt;
 
-    use cos::caps::{Cap, CapSet, Scope, Verb};
-    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+    use yu::caps::{Cap, CapSet, Scope, Verb};
+    use yu::worker::derive::{app_session, AppSessionInput, SessionLifetime};
 
     let fx = Fixture::new("published-db");
     let (launch, entry) = signed_capability_client(&fx, "storage-sdk", "db");
@@ -363,7 +363,7 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
     let apps = directory.parent().unwrap().to_path_buf();
     let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
     assert_eq!(launch.app_id(), "db");
-    assert!(cos::apps::is_mcp_only_cli(launch.manifest()));
+    assert!(yu::apps::is_mcp_only_cli(launch.manifest()));
     assert_eq!(launch.manifest().mcp.as_ref().unwrap().tools.len(), 5);
 
     let data = fx.root.join("owner-data");
@@ -417,15 +417,15 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
                 fs::metadata(&partition).unwrap().permissions().mode() & 0o777,
                 0o700
             );
-            assert!(matches!(worker.network, cos::worker::NetworkPolicy::Denied));
+            assert!(matches!(worker.network, yu::worker::NetworkPolicy::Denied));
             let mounts = worker
                 .mounts
                 .iter()
-                .filter(|mount| mount.class == cos::worker::MountClass::AppData)
+                .filter(|mount| mount.class == yu::worker::MountClass::AppData)
                 .collect::<Vec<_>>();
             assert_eq!(mounts.len(), 1);
             assert_eq!(mounts[0].source, partition);
-            assert_eq!(mounts[0].mode, cos::worker::MountMode::ReadWrite);
+            assert_eq!(mounts[0].mode, yu::worker::MountMode::ReadWrite);
             assert!(worker
                 .mounts
                 .iter()
@@ -434,8 +434,8 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
             assert!(worker
                 .mounts
                 .iter()
-                .filter(|mount| mount.class == cos::worker::MountClass::Package)
-                .all(|mount| mount.mode == cos::worker::MountMode::ReadOnly));
+                .filter(|mount| mount.class == yu::worker::MountClass::Package)
+                .all(|mount| mount.mode == yu::worker::MountMode::ReadOnly));
         }
     }
     assert_eq!(fs::read(&database).unwrap(), bytes);
@@ -461,8 +461,8 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
     use std::collections::BTreeMap;
     use std::os::unix::fs::MetadataExt;
 
-    use cos::caps::{Cap, CapSet, Scope, Verb};
-    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+    use yu::caps::{Cap, CapSet, Scope, Verb};
+    use yu::worker::derive::{app_session, AppSessionInput, SessionLifetime};
 
     let fx = Fixture::new("published-kv");
     let (launch, entry) = signed_capability_client(&fx, "storage-sdk", "kv");
@@ -471,7 +471,7 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
     let python = PythonPathScope::stage(&app_sources::app_dir("kv"), &fx.root.join("stage"));
     let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
     assert_eq!(launch.app_id(), "kv");
-    assert!(cos::apps::is_mcp_only_cli(launch.manifest()));
+    assert!(yu::apps::is_mcp_only_cli(launch.manifest()));
     assert_eq!(launch.manifest().mcp.as_ref().unwrap().tools.len(), 5);
 
     let data = fx.root.join("owner-data");
@@ -526,15 +526,15 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
                 fs::metadata(&partition).unwrap().permissions().mode() & 0o777,
                 0o700
             );
-            assert!(matches!(worker.network, cos::worker::NetworkPolicy::Denied));
+            assert!(matches!(worker.network, yu::worker::NetworkPolicy::Denied));
             let mounts = worker
                 .mounts
                 .iter()
-                .filter(|mount| mount.class == cos::worker::MountClass::AppData)
+                .filter(|mount| mount.class == yu::worker::MountClass::AppData)
                 .collect::<Vec<_>>();
             assert_eq!(mounts.len(), 1);
             assert_eq!(mounts[0].source, partition);
-            assert_eq!(mounts[0].mode, cos::worker::MountMode::ReadWrite);
+            assert_eq!(mounts[0].mode, yu::worker::MountMode::ReadWrite);
             assert!(worker
                 .mounts
                 .iter()
@@ -543,15 +543,15 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
             assert!(worker
                 .mounts
                 .iter()
-                .filter(|mount| mount.class == cos::worker::MountClass::Package)
-                .all(|mount| mount.mode == cos::worker::MountMode::ReadOnly));
+                .filter(|mount| mount.class == yu::worker::MountClass::Package)
+                .all(|mount| mount.mode == yu::worker::MountMode::ReadOnly));
             let library = worker
                 .mounts
                 .iter()
                 .find(|mount| mount.source == python.directory)
                 .unwrap();
-            assert_eq!(library.mode, cos::worker::MountMode::ReadOnly);
-            assert_eq!(library.class, cos::worker::MountClass::Runtime);
+            assert_eq!(library.mode, yu::worker::MountMode::ReadOnly);
+            assert_eq!(library.class, yu::worker::MountClass::Runtime);
         }
     }
     assert_eq!(fs::read_to_string(&store).unwrap(), original);
@@ -573,9 +573,9 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
 fn published_summarize_signed_fixture_keeps_ai_and_memory_authority_outside_the_worker() {
     use std::collections::BTreeMap;
 
-    use cos::caps::{Cap, CapSet, Scope, Verb};
-    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
-    use cos::worker::{MountClass, MountMode, NetworkPolicy};
+    use yu::caps::{Cap, CapSet, Scope, Verb};
+    use yu::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+    use yu::worker::{MountClass, MountMode, NetworkPolicy};
 
     let fx = Fixture::new("published-summarize");
     let (launch, entry) = signed_capability_client(&fx, "ai-helpers", "summarize");
@@ -726,7 +726,7 @@ impl Fixture {
             path: self.trust_root.clone(),
             tier: TrustTier::User,
             allowed_uids: vec![me()],
-            domain: cos::provenance::state::TrustDomain::Owner(me()),
+            domain: yu::provenance::state::TrustDomain::Owner(me()),
         }]
     }
 
@@ -750,9 +750,9 @@ impl Fixture {
         // Every mutation re-records the domain's durable generation;
         // without it the loader fails the domain closed, which is the
         // behaviour a separate test asserts.
-        cos::provenance::state::bump(
+        yu::provenance::state::bump(
             &self.state_dir,
-            cos::provenance::state::TrustDomain::Owner(me()),
+            yu::provenance::state::TrustDomain::Owner(me()),
             &[self.trust_root.clone()],
         )
         .expect("record trust generation");
@@ -764,7 +764,7 @@ impl Fixture {
     /// is the behaviour a daemon relies on, so a test that drives the
     /// launch path has to publish its roots there.
     fn activate(&self) -> std::sync::Arc<TrustStore> {
-        cos::provenance::set_trust_store_for_roots(
+        yu::provenance::set_trust_store_for_roots(
             TrustStore::load_roots(&self.roots()),
             self.roots(),
         )
@@ -820,7 +820,7 @@ fn app_package(fx: &Fixture, id: &str, body: &str) -> PathBuf {
 }
 
 fn agent_extension_package(fx: &Fixture, id: &str) -> PathBuf {
-    use cos::provenance::envelope::{FileEntry, NodeKind};
+    use yu::provenance::envelope::{FileEntry, NodeKind};
 
     let dir = fx.root.join(id);
     fs::create_dir_all(dir.join("bin")).unwrap();
@@ -840,7 +840,7 @@ fn agent_extension_package(fx: &Fixture, id: &str) -> PathBuf {
             kind: NodeKind::File,
             mode: 0o755,
             size: entry.len() as u64,
-            digest: format!("sha256:{}", cos::crypto::sha256_hex(entry.as_bytes())),
+            digest: format!("sha256:{}", yu::crypto::sha256_hex(entry.as_bytes())),
         },
     ]);
     write(
@@ -888,7 +888,7 @@ fn signed_agent_extension_uses_the_shared_verified_snapshot() {
         &fx.store(),
     )
     .expect("verify Agent extension");
-    let manifest = cos::agent_extensions::manifest::ExtensionManifest::parse_verified(&package)
+    let manifest = yu::agent_extensions::manifest::ExtensionManifest::parse_verified(&package)
         .expect("parse verified Agent extension manifest");
     assert_eq!(manifest.identity.id, "observer");
     assert_eq!(manifest.entry, "bin/observer");
@@ -1300,7 +1300,7 @@ fn another_users_trust_root_is_never_loaded() {
         path: fx.trust_root.clone(),
         tier: TrustTier::User,
         allowed_uids: vec![me().wrapping_add(1)],
-        domain: cos::provenance::state::TrustDomain::Owner(me().wrapping_add(1)),
+        domain: yu::provenance::state::TrustDomain::Owner(me().wrapping_add(1)),
     }]);
     assert!(foreign.is_empty());
 
@@ -1311,7 +1311,7 @@ fn another_users_trust_root_is_never_loaded() {
         path: fx.trust_root.clone(),
         tier: TrustTier::User,
         allowed_uids: vec![me()],
-        domain: cos::provenance::state::TrustDomain::Owner(me()),
+        domain: yu::provenance::state::TrustDomain::Owner(me()),
     }]);
     assert!(loose.is_empty());
     fs::set_permissions(&fx.trust_root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -1446,13 +1446,13 @@ fn a_writable_interpreter_on_path_is_not_a_valid_program() {
     write(&fake, "#!/bin/sh\nexec /bin/sh\n");
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(
-        cos::provenance::fsec::require_secure_location(&fake, &[0]).is_err(),
+        yu::provenance::fsec::require_secure_location(&fake, &[0]).is_err(),
         "a user-owned interpreter must not pass the root-owned check"
     );
     if Path::new("/bin/sh").exists() {
         let real = Path::new("/bin/sh").canonicalize().unwrap();
         assert!(
-            cos::provenance::fsec::require_secure_location(&real, &[0]).is_ok(),
+            yu::provenance::fsec::require_secure_location(&real, &[0]).is_ok(),
             "the distribution shell must pass"
         );
     }
@@ -1578,7 +1578,7 @@ fn a_corrupt_state_file_fails_the_domain_closed() {
     let _dir = app_package(&fx, "notes", "print('v1')\n");
     assert!(!fx.store().is_empty());
 
-    let state = fx.state_dir.join(cos::provenance::state::TRUST_STATE_FILE);
+    let state = fx.state_dir.join(yu::provenance::state::TRUST_STATE_FILE);
     fs::write(&state, "{ truncated").unwrap();
     fs::set_permissions(&state, fs::Permissions::from_mode(0o600)).unwrap();
 
@@ -1593,7 +1593,7 @@ fn a_corrupt_state_file_fails_the_domain_closed() {
 #[test]
 fn the_durable_generation_moves_forward_on_every_change() {
     let fx = Fixture::new("generation");
-    let domain = cos::provenance::state::TrustDomain::Owner(me());
+    let domain = yu::provenance::state::TrustDomain::Owner(me());
     let first = fx.store().domain_generation(domain).unwrap();
     fx.write_trust(&[], &[]);
     let second = fx.store().domain_generation(domain).unwrap();
@@ -1610,7 +1610,7 @@ fn the_durable_generation_moves_forward_on_every_change() {
 
 #[test]
 fn capability_derivation_and_execution_share_one_snapshot() {
-    use cos::bridge::AppLaunch;
+    use yu::bridge::AppLaunch;
 
     let fx = Fixture::new("one-snapshot");
     let dir = fx.root.join("notes");
@@ -1660,7 +1660,7 @@ fn capability_derivation_and_execution_share_one_snapshot() {
 
 #[test]
 fn replacing_the_entrypoint_after_binding_cannot_change_what_runs() {
-    use cos::bridge::AppLaunch;
+    use yu::bridge::AppLaunch;
 
     let fx = Fixture::new("entry-swap");
     let dir = app_package(&fx, "notes", "print('verified')\n");
@@ -1750,7 +1750,7 @@ fn unsigned_developer_content_declares_only_its_manifest_entry() {
     fs::create_dir_all(&dev_root).unwrap();
     fs::set_permissions(&dev_root, fs::Permissions::from_mode(0o700)).unwrap();
     let grants = serde_json::json!({
-        "schema": cos::provenance::trust::DEV_TRUST_SCHEMA_V1,
+        "schema": yu::provenance::trust::DEV_TRUST_SCHEMA_V1,
         "grants": [{
             "kind": "app",
             "id": "scratch",
@@ -1765,9 +1765,9 @@ fn unsigned_developer_content_declares_only_its_manifest_entry() {
     // The generation is recorded in the directory the loader looks in —
     // the *parent* of the root — because a domain with trust files but
     // no recorded generation fails closed.
-    cos::provenance::state::bump(
+    yu::provenance::state::bump(
         &fx.root,
-        cos::provenance::state::TrustDomain::Owner(me()),
+        yu::provenance::state::TrustDomain::Owner(me()),
         &[dev_root.clone()],
     )
     .unwrap();
@@ -1776,7 +1776,7 @@ fn unsigned_developer_content_declares_only_its_manifest_entry() {
         path: dev_root.clone(),
         tier: TrustTier::Developer,
         allowed_uids: vec![me()],
-        domain: cos::provenance::state::TrustDomain::Owner(me()),
+        domain: yu::provenance::state::TrustDomain::Owner(me()),
     }]);
     let pkg = verify::verify_package(
         &dir,
@@ -1797,7 +1797,7 @@ fn unsigned_developer_content_declares_only_its_manifest_entry() {
     // And the ceiling is the restricted one.
     let ceiling = pkg.ceiling();
     assert!(ceiling.is_developer());
-    assert!(!ceiling.allows_verb(cos::caps::Verb::SYS_IDENTITY));
+    assert!(!ceiling.allows_verb(yu::caps::Verb::SYS_IDENTITY));
     assert!(!ceiling.allows_mcp_attach());
 }
 
@@ -1817,7 +1817,7 @@ fn unsigned_developer_content_declares_only_its_manifest_entry() {
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cos::provenance::runtime::{self, InstanceClass, PackageRef};
+use yu::provenance::runtime::{self, InstanceClass, PackageRef};
 
 /// Environment variable that turns a re-execution of this test binary
 /// into "the other process that revokes something".
@@ -1855,9 +1855,9 @@ fn revoker_helper() {
     let path = trust_root.join("publisher.json");
     fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    cos::provenance::state::bump(
+    yu::provenance::state::bump(
         &state_dir,
-        cos::provenance::state::TrustDomain::Owner(me()),
+        yu::provenance::state::TrustDomain::Owner(me()),
         &[trust_root],
     )
     .expect("record trust generation");
@@ -2046,18 +2046,18 @@ fn a_revocation_denies_the_next_broker_call_without_claiming_local_app_retiremen
     // to be refused, because the endpoint is also the thing that would
     // otherwise answer "deny, not-granted" instead of "this package is
     // no longer trusted" and leave the instance running.
-    let endpoint = cos::worker::BrokerAuthority::new(
+    let endpoint = yu::worker::BrokerAuthority::new(
         "app-doomed".to_string(),
         Some("doomed".to_string()),
-        cos::caps::CapSet::new(),
-        cos::worker::relay_slot(),
+        yu::caps::CapSet::new(),
+        yu::worker::relay_slot(),
     )
     .with_package(Some(doomed.clone()));
-    let sibling_endpoint = cos::worker::BrokerAuthority::new(
+    let sibling_endpoint = yu::worker::BrokerAuthority::new(
         "app-sibling".to_string(),
         Some("sibling".to_string()),
-        cos::caps::CapSet::new(),
-        cos::worker::relay_slot(),
+        yu::caps::CapSet::new(),
+        yu::worker::relay_slot(),
     )
     .with_package(Some(sibling.clone()));
 
@@ -2083,7 +2083,7 @@ fn a_revocation_denies_the_next_broker_call_without_claiming_local_app_retiremen
 
     let report = runtime::lifecycle_tick(
         me(),
-        &cos::provenance::trust_store(),
+        &yu::provenance::trust_store(),
         runtime::SHUTDOWN_GRACE,
     );
     assert!(report.terminated.is_empty());
@@ -2143,7 +2143,7 @@ fn an_idle_app_stays_marked_until_checked_root_retirement() {
 
     let report = runtime::lifecycle_tick(
         me(),
-        &cos::provenance::trust_store(),
+        &yu::provenance::trust_store(),
         runtime::SHUTDOWN_GRACE,
     );
     assert!(report.marked.contains(&"app-idle".to_string()));
@@ -2250,7 +2250,7 @@ fn an_operator_configured_mcp_server_is_classified_not_ignored() {
     fx.revoke_from_another_process(&[fx.key.key_id.clone()], &[]);
     let report = runtime::lifecycle_tick(
         me(),
-        &cos::provenance::trust_store(),
+        &yu::provenance::trust_store(),
         runtime::SHUTDOWN_GRACE,
     );
     assert!(report.is_empty(), "unexpected action taken: {report:?}");
@@ -2354,7 +2354,7 @@ fn concurrent_processes_do_not_clobber_the_running_record() {
     // is marked.
     let report = runtime::lifecycle_tick(
         me(),
-        &cos::provenance::trust_store(),
+        &yu::provenance::trust_store(),
         runtime::SHUTDOWN_GRACE,
     );
     assert!(report.is_empty(), "unexpected action: {report:?}");

@@ -21,13 +21,13 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use cos::agentd::grant::{GrantClaims, GrantSigner, SignedGrant, GRANT_AUDIENCE, GRANT_VERSION};
-use cos::agentd::protocol::{
+use yu::agentd::grant::{GrantClaims, GrantSigner, SignedGrant, GRANT_AUDIENCE, GRANT_VERSION};
+use yu::agentd::protocol::{
     self, Assignment, BrokerFrame, ExecutionCommit, FrameReader, JobSpec, WorkerFrame,
     WorkerOutcome,
 };
-use cos::agentd::spawn::{self, ExecutionIsolation, SpawnedWorker, WorkerIdentity};
-use cos::extension_host::protocol::HostPurpose;
+use yu::agentd::spawn::{self, ExecutionIsolation, SpawnedWorker, WorkerIdentity};
+use yu::extension_host::protocol::HostPurpose;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 const WORKER_BIN: &str = env!("CARGO_BIN_EXE_claw-agentd");
@@ -40,9 +40,9 @@ const CGROUP_PROBE_GATE: &str = "COS_TEST_CGROUP_PROBE_GATE";
 const CGROUP_PROBE_ROOT: &str = "COS_TEST_CGROUP_PROBE_ROOT";
 const TEST_CAPABILITY_GENERATION: &str = "aaaaaaaaaaaaaaaa";
 
-fn approved_paths(identity: &WorkerIdentity) -> Vec<cos::extension_host::protocol::ApprovedPath> {
+fn approved_paths(identity: &WorkerIdentity) -> Vec<yu::extension_host::protocol::ApprovedPath> {
     vec![
-        cos::extension_host::spawn::approve_runtime_path(&identity.home, identity.uid)
+        yu::extension_host::spawn::approve_runtime_path(&identity.home, identity.uid)
             .expect("approve worker home"),
     ]
 }
@@ -51,8 +51,8 @@ fn task_host_launch(
     identity: &WorkerIdentity,
     isolation: &ExecutionIsolation,
     lease_id: impl Into<String>,
-) -> cos::extension_host::spawn::HostLaunchSpec {
-    cos::extension_host::spawn::HostLaunchSpec {
+) -> yu::extension_host::spawn::HostLaunchSpec {
+    yu::extension_host::spawn::HostLaunchSpec {
         purpose: HostPurpose::Task,
         lease_id: lease_id.into(),
         authority_session_id: None,
@@ -75,10 +75,10 @@ struct Harness {
     leaked_path: PathBuf,
     leaked_fd: i32,
     identity: WorkerIdentity,
-    extension_identity: cos::extension_host::identity::ExtensionIdentity,
+    extension_identity: yu::extension_host::identity::ExtensionIdentity,
     isolation: ExecutionIsolation,
     cgroup_root: PathBuf,
-    containment: std::sync::Arc<cos::extension_host::spawn::ContainmentRoot>,
+    containment: std::sync::Arc<yu::extension_host::spawn::ContainmentRoot>,
 }
 
 impl Drop for Harness {
@@ -90,7 +90,7 @@ impl Drop for Harness {
         std::env::remove_var("COS_EXTENSION_HOST_BIN");
         std::env::remove_var("COS_RUNTIME_DIR");
         std::env::remove_var(spawn::ISOLATED_GROUP_ENV);
-        std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
+        std::env::remove_var(yu::extension_host::spawn::CGROUP_ROOT_ENV);
         std::env::remove_var("COS_AGENTD_TEST_ASSIGNMENT_FAILPOINT");
         std::env::remove_var("COS_AGENTD_TEST_COMMIT_MARKER");
         let _ = std::fs::remove_dir_all(&self.runtime_dir);
@@ -220,8 +220,8 @@ fn harness() -> Option<Harness> {
             return None;
         }
     };
-    let extension_identity = cos::extension_host::identity::ExtensionIdentity {
-        uid: cos::extension_host::identity::FIRST_UID,
+    let extension_identity = yu::extension_host::identity::ExtensionIdentity {
+        uid: yu::extension_host::identity::FIRST_UID,
         gid: execution_gid,
         username: "cos-ext-00".to_string(),
     };
@@ -238,12 +238,12 @@ fn harness() -> Option<Harness> {
         eprintln!("skipping: create delegated cgroup root: {error}");
         return None;
     }
-    std::env::set_var(cos::extension_host::spawn::CGROUP_ROOT_ENV, &cgroup_root);
-    let containment = match cos::extension_host::spawn::ContainmentRoot::establish() {
+    std::env::set_var(yu::extension_host::spawn::CGROUP_ROOT_ENV, &cgroup_root);
+    let containment = match yu::extension_host::spawn::ContainmentRoot::establish() {
         Ok(containment) => std::sync::Arc::new(containment),
         Err(error) => {
             eprintln!("skipping: establish extension containment: {error}");
-            std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
+            std::env::remove_var(yu::extension_host::spawn::CGROUP_ROOT_ENV);
             let _ = std::fs::remove_dir(&cgroup_root);
             return None;
         }
@@ -275,17 +275,17 @@ fn harness() -> Option<Harness> {
     })
 }
 
-fn test_broker_context(harness: &Harness) -> cos::agentd::supervisor::BrokerContext {
-    cos::agentd::supervisor::BrokerContext::new(
-        cos::clawd::state::DaemonState::try_new().expect("daemon state"),
-        cos::clawd::transport::limits::Admission::new(
-            cos::clawd::transport::limits::Limits::default(),
+fn test_broker_context(harness: &Harness) -> yu::agentd::supervisor::BrokerContext {
+    yu::agentd::supervisor::BrokerContext::new(
+        yu::clawd::state::DaemonState::try_new().expect("daemon state"),
+        yu::clawd::transport::limits::Admission::new(
+            yu::clawd::transport::limits::Limits::default(),
         ),
         harness.primary_path.clone(),
     )
     .expect("broker context")
     .with_test_identity_pool(
-        cos::extension_host::identity::ExtensionIdentityPool::for_test(
+        yu::extension_host::identity::ExtensionIdentityPool::for_test(
             harness.isolation.execution_gid(),
         ),
     )
@@ -322,7 +322,7 @@ fn assignment(
             workspace: home.to_string_lossy().into_owned(),
             workspace_id: None,
         },
-        consent_context: cos::caps::ConsentContext::Attended,
+        consent_context: yu::caps::ConsentContext::Attended,
         session: None,
         presence: None,
         extension: None,
@@ -337,7 +337,7 @@ fn grant_for(
     worker_pid: u32,
     start_time_ticks: Option<u64>,
 ) -> SignedGrant {
-    let issued_at_ms = cos::agentd::grant::now_ms();
+    let issued_at_ms = yu::agentd::grant::now_ms();
     signer.issue(GrantClaims {
         v: GRANT_VERSION,
         audience: GRANT_AUDIENCE.to_string(),
@@ -345,10 +345,10 @@ fn grant_for(
         task_id: task_id.to_string(),
         session_id: None,
         owner_uid: owner.uid,
-        client: cos::session::SessionClient::default(),
+        client: yu::session::SessionClient::default(),
         presence: None,
-        capability_generation: cos::agent::tools::exposure::capability_generation(
-            &cos::caps::CapSet::new(),
+        capability_generation: yu::agent::tools::exposure::capability_generation(
+            &yu::caps::CapSet::new(),
         ),
         prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
         commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
@@ -521,8 +521,8 @@ fn drop_command_identity(
     command
 }
 
-fn acl_probe_session(session_id: &str) -> cos::proc::SessionInfo {
-    cos::proc::SessionInfo {
+fn acl_probe_session(session_id: &str) -> yu::proc::SessionInfo {
+    yu::proc::SessionInfo {
         session_id: session_id.to_string(),
         pid: std::process::id(),
         command: vec!["acl-probe".to_string()],
@@ -537,13 +537,13 @@ fn acl_probe_session(session_id: &str) -> cos::proc::SessionInfo {
         tier: None,
         scope: None,
         priority: None,
-        caps: Some(cos::caps::CapSet::new()),
+        caps: Some(yu::caps::CapSet::new()),
         transient_caps: None,
         role: None,
         app_id: None,
         pending_bind: false,
         start_time_ticks: process_start(std::process::id()),
-        client: cos::session::SessionClient::default(),
+        client: yu::session::SessionClient::default(),
     }
 }
 
@@ -800,11 +800,11 @@ fn automatic_containment_root_child_probe() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(
-        std::env::var_os(cos::extension_host::spawn::CGROUP_ROOT_ENV).is_none(),
+        std::env::var_os(yu::extension_host::spawn::CGROUP_ROOT_ENV).is_none(),
         "automatic probe must not use the configured-root path"
     );
     let containment =
-        cos::extension_host::spawn::ContainmentRoot::establish().expect("automatic containment");
+        yu::extension_host::spawn::ContainmentRoot::establish().expect("automatic containment");
     assert_eq!(containment.path(), expected);
     let membership = std::fs::read_to_string("/proc/self/cgroup").expect("membership");
     assert!(
@@ -847,7 +847,7 @@ fn automatic_current_cgroup_setup_moves_broker_and_enables_controllers() {
         ])
         .env(CGROUP_PROBE_GATE, &gate)
         .env(CGROUP_PROBE_ROOT, &probe_root)
-        .env_remove(cos::extension_host::spawn::CGROUP_ROOT_ENV)
+        .env_remove(yu::extension_host::spawn::CGROUP_ROOT_ENV)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -888,7 +888,7 @@ fn automatic_current_cgroup_setup_moves_broker_and_enables_controllers() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stale_cleaned && !cos::proc::is_pid_alive(stale_pid),
+        stale_cleaned && !yu::proc::is_pid_alive(stale_pid),
         "automatic setup left a stale extension descendant alive"
     );
     assert!(
@@ -1145,15 +1145,15 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         return;
     };
     let paths =
-        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
-    let _private_listener = cos::extension_host::broker::bind_listener(
+        yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _private_listener = yu::extension_host::broker::bind_listener(
         &paths,
         harness.extension_identity.uid,
         harness.isolation.execution_gid(),
     )
     .expect("private broker listener");
-    let expires = cos::agentd::grant::now_ms() + 60_000;
-    let mut host = cos::extension_host::spawn::spawn_host(
+    let expires = yu::agentd::grant::now_ms() + 60_000;
+    let mut host = yu::extension_host::spawn::spawn_host(
         &harness.identity,
         &harness.extension_identity,
         &harness.isolation,
@@ -1198,7 +1198,7 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
     let environ = std::fs::read(format!("/proc/{}/environ", host.pid)).expect("host environment");
     let environ = String::from_utf8_lossy(&environ);
     assert!(
-        !environ.contains(cos::extension_host::spawn::CGROUP_ROOT_ENV),
+        !environ.contains(yu::extension_host::spawn::CGROUP_ROOT_ENV),
         "extension host inherited broker cgroup configuration"
     );
     assert!(
@@ -1262,8 +1262,8 @@ async fn service_owned_roots_are_hardened_before_an_extension_task() {
     }
     let previous_log = std::env::var_os("COS_LOG_DIR");
     std::env::set_var("COS_LOG_DIR", &logs);
-    cos::storage::harden_clawd_runtime().expect("harden runtime root");
-    cos::storage::harden_clawd_state().expect("harden state roots");
+    yu::storage::harden_clawd_runtime().expect("harden runtime root");
+    yu::storage::harden_clawd_state().expect("harden state roots");
     assert_eq!(std::fs::metadata(&harness.runtime_dir).unwrap().gid(), 0);
     assert_eq!(std::fs::metadata(harness._data.path()).unwrap().gid(), 0);
     assert_eq!(std::fs::metadata(&logs).unwrap().gid(), 0);
@@ -1274,21 +1274,21 @@ async fn service_owned_roots_are_hardened_before_an_extension_task() {
     );
 
     let paths =
-        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
-    let _listener = cos::extension_host::broker::bind_listener(
+        yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _listener = yu::extension_host::broker::bind_listener(
         &paths,
         harness.extension_identity.uid,
         harness.isolation.execution_gid(),
     )
     .expect("private broker listener");
-    let mut host = cos::extension_host::spawn::spawn_host(
+    let mut host = yu::extension_host::spawn::spawn_host(
         &harness.identity,
         &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
         &task_host_launch(&harness.identity, &harness.isolation, "service-root-task"),
         "0123456789abcdef0123456789abcdef",
-        cos::agentd::grant::now_ms() + 60_000,
+        yu::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
         Vec::new(),
@@ -1315,14 +1315,14 @@ async fn same_uid_hosts_receive_distinct_private_tmp_mounts() {
         return;
     };
     let probe = install_private_tmp_probe(&harness);
-    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &probe);
+    std::env::set_var(yu::extension_host::spawn::HOST_BINARY_ENV, &probe);
     let mut hosts = Vec::new();
     let mut listeners = Vec::new();
     for task in ["private-tmp-a", "private-tmp-b"] {
         let paths =
-            cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+            yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
         listeners.push(
-            cos::extension_host::broker::bind_listener(
+            yu::extension_host::broker::bind_listener(
                 &paths,
                 harness.extension_identity.uid,
                 harness.isolation.execution_gid(),
@@ -1330,14 +1330,14 @@ async fn same_uid_hosts_receive_distinct_private_tmp_mounts() {
             .expect("private broker listener"),
         );
         let report = PathBuf::from(format!("{}.tmp", paths.control_socket.to_string_lossy()));
-        let host = cos::extension_host::spawn::spawn_host(
+        let host = yu::extension_host::spawn::spawn_host(
             &harness.identity,
             &harness.extension_identity,
             &harness.isolation,
             &harness.containment,
             &task_host_launch(&harness.identity, &harness.isolation, task),
             "0123456789abcdef0123456789abcdef",
-            cos::agentd::grant::now_ms() + 60_000,
+            yu::agentd::grant::now_ms() + 60_000,
             TEST_CAPABILITY_GENERATION,
             approved_paths(&harness.identity),
             Vec::new(),
@@ -1387,7 +1387,7 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         eprintln!("skipping: no usable root isolation harness");
         return;
     };
-    let pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
+    let pool = yu::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
     );
     assert_eq!(pool.len(), 64);
@@ -1398,7 +1398,7 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         .acquire(harness.identity.uid, HostPurpose::Task)
         .expect("second uid lease");
     assert_ne!(first.identity().uid, second.identity().uid);
-    let independent_pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
+    let independent_pool = yu::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
     );
     let third = independent_pool
@@ -1436,10 +1436,10 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
     .expect("sibling extension process");
 
     let probe = install_process_isolation_probe(&harness, worker_pid, ordinary.id(), sibling.id());
-    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &probe);
+    std::env::set_var(yu::extension_host::spawn::HOST_BINARY_ENV, &probe);
     let paths =
-        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
-    let _private_listener = cos::extension_host::broker::bind_listener(
+        yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _private_listener = yu::extension_host::broker::bind_listener(
         &paths,
         harness.extension_identity.uid,
         harness.isolation.execution_gid(),
@@ -1449,14 +1449,14 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         "{}.isolation",
         paths.control_socket.to_string_lossy()
     ));
-    let mut host = cos::extension_host::spawn::spawn_host(
+    let mut host = yu::extension_host::spawn::spawn_host(
         &harness.identity,
         &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
         &task_host_launch(&harness.identity, &harness.isolation, "process-isolation"),
         "0123456789abcdef0123456789abcdef",
-        cos::agentd::grant::now_ms() + 60_000,
+        yu::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
         Vec::new(),
@@ -1587,7 +1587,7 @@ async fn root_path_setup_resists_legacy_symlinks_hardlinks_and_replacement_races
     std::thread::sleep(Duration::from_millis(25));
 
     let paths =
-        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("secure paths");
+        yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("secure paths");
     let _ = legacy_racer.kill();
     let _ = legacy_racer.wait();
 
@@ -1615,7 +1615,7 @@ async fn root_path_setup_resists_legacy_symlinks_hardlinks_and_replacement_races
     )
     .spawn()
     .expect("spawn broker socket racer");
-    let listener = cos::extension_host::broker::bind_listener(
+    let listener = yu::extension_host::broker::bind_listener(
         &paths,
         harness.extension_identity.uid,
         harness.isolation.execution_gid(),
@@ -1688,7 +1688,7 @@ fn symlinked_extension_owner_root_fails_without_mutating_its_target() {
     symlink(&target, &owner).expect("symlink owner root");
     let original = std::fs::metadata(&target).expect("sentinel identity");
 
-    let error = cos::extension_host::spawn::HostPaths::create(&harness.identity)
+    let error = yu::extension_host::spawn::HostPaths::create(&harness.identity)
         .expect_err("symlinked owner root must fail closed");
     assert!(
         error.contains("pin owner extension directory") || error.contains("Too many levels"),
@@ -1707,7 +1707,7 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
         return;
     };
     let quarantine = harness.runtime_dir.join("extension-quarantine");
-    let pool = cos::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
+    let pool = yu::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
         harness.isolation.execution_gid(),
         quarantine.clone(),
     )
@@ -1719,11 +1719,11 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
         .begin_task(harness.identity.uid)
         .expect("record active identity");
     let paths =
-        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+        yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
     lease
         .record_task(harness.identity.uid, paths.task_name())
         .expect("record task paths");
-    let listener = cos::extension_host::broker::bind_listener(
+    let listener = yu::extension_host::broker::bind_listener(
         &paths,
         lease.identity().uid,
         harness.isolation.execution_gid(),
@@ -1761,7 +1761,7 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
     drop(pool);
     assert!(quarantine.join(format!("{first_uid}.state")).exists());
 
-    let blocked = cos::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
+    let blocked = yu::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
         harness.isolation.execution_gid(),
         quarantine.clone(),
     )
@@ -1779,7 +1779,7 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
         "unmount recovery fixture: {}",
         std::io::Error::last_os_error()
     );
-    let recovered = cos::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
+    let recovered = yu::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
         harness.isolation.execution_gid(),
         quarantine,
     )
@@ -1797,11 +1797,11 @@ fn extension_identity_pool_exhausts_without_sharing_and_reuses_after_release() {
         eprintln!("skipping: no usable root isolation harness");
         return;
     };
-    let pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
+    let pool = yu::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
     );
     let mut leases = Vec::new();
-    for _ in 0..cos::extension_host::identity::TASK_IDENTITY_COUNT {
+    for _ in 0..yu::extension_host::identity::TASK_IDENTITY_COUNT {
         leases.push(
             pool.acquire(harness.identity.uid, HostPurpose::Task)
                 .expect("acquire unique extension identity"),
@@ -1815,7 +1815,7 @@ fn extension_identity_pool_exhausts_without_sharing_and_reuses_after_release() {
     uids.dedup();
     assert_eq!(
         uids.len(),
-        cos::extension_host::identity::TASK_IDENTITY_COUNT as usize
+        yu::extension_host::identity::TASK_IDENTITY_COUNT as usize
     );
     assert!(pool
         .acquire(harness.identity.uid, HostPurpose::Task)
@@ -1828,7 +1828,7 @@ fn extension_identity_pool_exhausts_without_sharing_and_reuses_after_release() {
         .expect("reuse identity for a different owner");
     assert_eq!(
         reused.identity().uid,
-        cos::extension_host::identity::FIRST_UID
+        yu::extension_host::identity::FIRST_UID
     );
     reused.release().expect("release reused identity");
 }
@@ -1840,10 +1840,10 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         return;
     };
     let malicious = install_daemonizing_host(&harness, true);
-    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
+    std::env::set_var(yu::extension_host::spawn::HOST_BINARY_ENV, &malicious);
     let paths =
-        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
-    let _private_listener = cos::extension_host::broker::bind_listener(
+        yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _private_listener = yu::extension_host::broker::bind_listener(
         &paths,
         harness.extension_identity.uid,
         harness.isolation.execution_gid(),
@@ -1853,8 +1853,8 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         "{}.escaped",
         paths.control_socket.to_string_lossy()
     ));
-    let expires = cos::agentd::grant::now_ms() + 60_000;
-    let mut host = cos::extension_host::spawn::spawn_host(
+    let expires = yu::agentd::grant::now_ms() + 60_000;
+    let mut host = yu::extension_host::spawn::spawn_host(
         &harness.identity,
         &harness.extension_identity,
         &harness.isolation,
@@ -1879,7 +1879,7 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         .expect("wait malicious host");
     assert_eq!(status.code(), Some(23));
     assert!(
-        cos::proc::is_pid_alive(escaped),
+        yu::proc::is_pid_alive(escaped),
         "daemonized descendant did not survive long enough to test host-first cleanup"
     );
     assert!(
@@ -1893,13 +1893,13 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         .await
         .expect("kill daemonized descendant cgroup");
     for _ in 0..100 {
-        if !cos::proc::is_pid_alive(escaped) {
+        if !yu::proc::is_pid_alive(escaped) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(
-        !cos::proc::is_pid_alive(escaped),
+        !yu::proc::is_pid_alive(escaped),
         "setsid/double-fork descendant survived cgroup.kill"
     );
     assert!(!cgroup_path.exists(), "empty cgroup was not removed");
@@ -1915,10 +1915,10 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         return;
     };
     let malicious = install_daemonizing_host(&harness, false);
-    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
+    std::env::set_var(yu::extension_host::spawn::HOST_BINARY_ENV, &malicious);
     let paths =
-        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
-    let _private_listener = cos::extension_host::broker::bind_listener(
+        yu::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _private_listener = yu::extension_host::broker::bind_listener(
         &paths,
         harness.extension_identity.uid,
         harness.isolation.execution_gid(),
@@ -1928,7 +1928,7 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         "{}.escaped",
         paths.control_socket.to_string_lossy()
     ));
-    let mut host = cos::extension_host::spawn::spawn_host(
+    let mut host = yu::extension_host::spawn::spawn_host(
         &harness.identity,
         &harness.extension_identity,
         &harness.isolation,
@@ -1939,7 +1939,7 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
             "cancel-daemonized-descendant",
         ),
         "0123456789abcdef0123456789abcdef",
-        cos::agentd::grant::now_ms() + 60_000,
+        yu::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
         Vec::new(),
@@ -1948,7 +1948,7 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
     .expect("spawn cancellation probe");
     let escaped = wait_for_pid(&escaped_marker).await;
     assert!(host.child.try_wait().expect("host status").is_none());
-    assert!(cos::proc::is_pid_alive(escaped));
+    assert!(yu::proc::is_pid_alive(escaped));
 
     host.cgroup.kill_all().expect("cancel extension cgroup");
     host.cgroup
@@ -1959,13 +1959,13 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         .await
         .expect("cancelled host did not exit");
     for _ in 0..100 {
-        if !cos::proc::is_pid_alive(escaped) {
+        if !yu::proc::is_pid_alive(escaped) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(
-        !cos::proc::is_pid_alive(escaped),
+        !yu::proc::is_pid_alive(escaped),
         "daemonized child survived active cancellation"
     );
     host.cleanup_private_mounts()
@@ -1981,9 +1981,9 @@ fn routed_registry_is_readable_but_not_writable_by_authorized_identities() {
     };
     const PROBE_UID: u32 = 424_242;
     let session_id = "acl-probe-session";
-    cos::proc::register_session_for_owner(acl_probe_session(session_id), PROBE_UID)
+    yu::proc::register_session_for_owner(acl_probe_session(session_id), PROBE_UID)
         .expect("register routed ACL probe");
-    cos::storage::install_routed_extension_reader(PROBE_UID, harness.extension_identity.uid)
+    yu::storage::install_routed_extension_reader(PROBE_UID, harness.extension_identity.uid)
         .expect("grant extension registry reader");
     let registry = format!("/run/cos/caps/{PROBE_UID}/proc/registry.json");
 
@@ -2055,7 +2055,7 @@ fn routed_registry_is_readable_but_not_writable_by_authorized_identities() {
             "unrelated uid {uid} gid {gid} read routed registry"
         );
     }
-    cos::storage::remove_routed_extension_reader(PROBE_UID, harness.extension_identity.uid)
+    yu::storage::remove_routed_extension_reader(PROBE_UID, harness.extension_identity.uid)
         .expect("revoke extension registry reader");
     let revoked = std::process::Command::new("setpriv")
         .args([
@@ -2073,7 +2073,7 @@ fn routed_registry_is_readable_but_not_writable_by_authorized_identities() {
         !revoked.success(),
         "revoked extension uid retained ACL access"
     );
-    cos::proc::deregister_session_for_owner(session_id, PROBE_UID);
+    yu::proc::deregister_session_for_owner(session_id, PROBE_UID);
     let _ = std::fs::remove_dir_all(format!("/run/cos/caps/{PROBE_UID}"));
 }
 
@@ -2180,8 +2180,8 @@ async fn a_cancelled_task_is_reported_as_cancelled_by_the_worker() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
-    use cos::agent::service::{JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
+    use yu::agent::service::{JobStatus, Store};
+    use yu::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -2282,7 +2282,7 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
         extension_cgroups(&harness.cgroup_root).is_empty(),
         "task completion left an extension cgroup behind"
     );
-    let released_pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
+    let released_pool = yu::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
     );
     let released = released_pool
@@ -2290,15 +2290,15 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
         .expect("completed task released its extension uid");
     assert_eq!(
         released.identity().uid,
-        cos::extension_host::identity::FIRST_UID
+        yu::extension_host::identity::FIRST_UID
     );
     released.release().expect("release reused identity");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn assignment_crash_boundaries_requeue_only_before_durable_commit() {
-    use cos::agent::service::{ExecutionPhase, JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
+    use yu::agent::service::{ExecutionPhase, JobStatus, Store};
+    use yu::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -2430,8 +2430,8 @@ async fn assignment_crash_boundaries_requeue_only_before_durable_commit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
-    use cos::agent::service::{ExecutionPhase, JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
+    use yu::agent::service::{ExecutionPhase, JobStatus, Store};
+    use yu::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -2475,7 +2475,7 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
     std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o620))
         .expect("chmod side-effect socket");
     let malicious = install_crashing_control_host(&harness, &marker);
-    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
+    std::env::set_var(yu::extension_host::spawn::HOST_BINARY_ENV, &malicious);
     let queue = tempfile::tempdir().expect("queue");
     let store = Store::with_root(queue.path().to_path_buf()).expect("store");
     let job = store
@@ -2556,8 +2556,8 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unavailable_cgroup_fails_before_worker_or_extension_execution() {
-    use cos::agent::service::{JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
+    use yu::agent::service::{JobStatus, Store};
+    use yu::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -2567,7 +2567,7 @@ async fn unavailable_cgroup_fails_before_worker_or_extension_execution() {
     };
     let invalid_root = harness.runtime_dir.join("not-a-cgroup");
     std::fs::create_dir(&invalid_root).expect("create invalid cgroup root");
-    std::env::set_var(cos::extension_host::spawn::CGROUP_ROOT_ENV, &invalid_root);
+    std::env::set_var(yu::extension_host::spawn::CGROUP_ROOT_ENV, &invalid_root);
     let queue = tempfile::tempdir().expect("queue");
     let store = Store::with_root(queue.path().to_path_buf()).expect("store");
     let job = store
@@ -2620,8 +2620,8 @@ async fn unavailable_cgroup_fails_before_worker_or_extension_execution() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_root_owned_task_never_spawns_a_worker_or_initialises_a_provider() {
-    use cos::agent::service::{JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
+    use yu::agent::service::{JobStatus, Store};
+    use yu::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -2726,7 +2726,7 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
         .into_iter()
         .filter(|route| route != protocol::ROUTE_APPROVAL)
         .collect();
-    let issued_at_ms = cos::agentd::grant::now_ms();
+    let issued_at_ms = yu::agentd::grant::now_ms();
     let grant = signer.issue(GrantClaims {
         v: GRANT_VERSION,
         audience: GRANT_AUDIENCE.to_string(),
@@ -2734,10 +2734,10 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
         task_id: "task-noapproval".to_string(),
         session_id: None,
         owner_uid: harness.identity.uid,
-        client: cos::session::SessionClient::default(),
+        client: yu::session::SessionClient::default(),
         presence: None,
-        capability_generation: cos::agent::tools::exposure::capability_generation(
-            &cos::caps::CapSet::new(),
+        capability_generation: yu::agent::tools::exposure::capability_generation(
+            &yu::caps::CapSet::new(),
         ),
         prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
         commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),

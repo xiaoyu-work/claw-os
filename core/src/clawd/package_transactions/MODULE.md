@@ -139,7 +139,7 @@ Unbounded work has no App-review/client-flag fallback.
 Focused existing Rust coverage is selected with:
 
 ```text
-cargo test -p cos --lib -- clawd::packages:: session::rollback::tests:: --test-threads=1
+cargo test -p yu --lib -- clawd::packages:: session::rollback::tests:: --test-threads=1
 ```
 
 Existing metadata and `pkg` Python tests use synthetic public fixtures.

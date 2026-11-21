@@ -128,15 +128,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let result = match request["action"].as_str() {
                     Some("claim") | Some("availability") => {
                         let (command, params) = if request["action"] == "claim" {
-                            (cos::clawd::routes::Command::NotificationDeliveryClaim,
+                            (yu::clawd::routes::Command::NotificationDeliveryClaim,
                                 json!({"channel":"desktop","limit":1}))
                         } else {
-                            (cos::clawd::routes::Command::parse("notification.presentation.control")
+                            (yu::clawd::routes::Command::parse("notification.presentation.control")
                                 .ok_or("Root notification panel route is unavailable")?,
                                 json!({"action":"snapshot","after":0}))
                         };
-                        let response = cos::clawd::client::request(cos::clawd::config::socket_path(),
-                            cos::clawd::protocol::Request::new(command, params)).await?;
+                        let response = yu::clawd::client::request(yu::clawd::config::socket_path(),
+                            yu::clawd::protocol::Request::new(command, params)).await?;
                         json!({"ok":response.ok,"result":response.result,"error":response.error})
                     }
                     Some("preferences") => json!({"preferences":Preferences::from_json(&proxy.preferences().await?)?}),

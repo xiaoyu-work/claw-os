@@ -64,8 +64,8 @@ does not have; this is not hardware anti-rollback.
 ## Tests
 
 ```bash
-cargo test -p cos --lib update:: -- --test-threads=1
-cargo test -p cos --test security_floor_process -- --test-threads=1
+cargo test -p yu --lib update:: -- --test-threads=1
+cargo test -p yu --test security_floor_process -- --test-threads=1
 bash packaging/deb/tests/test-security-floor-packaging.sh
 bash packaging/deb/tests/test-security-floor-install.sh
 bash packaging/apt-repo/tests/test-release-security-publication.sh

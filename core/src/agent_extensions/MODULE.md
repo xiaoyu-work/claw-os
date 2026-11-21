@@ -50,10 +50,10 @@ authorization-policy access.
 ## Tests
 
 ```bash
-cargo test -p cos agent_extensions -- --test-threads=1
-cargo test -p cos extension_host::abi::tests -- --test-threads=1
-cargo test -p cos --test extension_provenance_process -- --test-threads=1
-cargo test -p cos --test extension_host_boundary -- --test-threads=1
+cargo test -p yu agent_extensions -- --test-threads=1
+cargo test -p yu extension_host::abi::tests -- --test-threads=1
+cargo test -p yu --test extension_provenance_process -- --test-threads=1
+cargo test -p yu --test extension_host_boundary -- --test-threads=1
 ```
 
 See [`../../../docs/extension-abi.md`](../../../docs/extension-abi.md) and

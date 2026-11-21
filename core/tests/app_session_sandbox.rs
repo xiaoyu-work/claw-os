@@ -22,18 +22,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::time::{Duration, Instant};
 
-use cos::caps::{Cap, CapSet, Scope, Verb};
-use cos::worker::derive::{AppSessionInput, SessionLifetime};
-use cos::worker::{BrokerAuthority, LaunchResources, WorkerLaunch};
+use yu::caps::{Cap, CapSet, Scope, Verb};
+use yu::worker::derive::{AppSessionInput, SessionLifetime};
+use yu::worker::{BrokerAuthority, LaunchResources, WorkerLaunch};
 
 fn sandbox_available() -> bool {
-    cos::worker::availability().is_available()
+    yu::worker::availability().is_available()
 }
 
 macro_rules! require_sandbox {
     () => {
         if !sandbox_available() {
-            let availability = cos::worker::availability();
+            let availability = yu::worker::availability();
             if std::env::var_os("COS_WORKER_SANDBOX_REQUIRED").is_some() {
                 panic!(
                     "worker sandbox prerequisites are declared installed but missing: {}",
@@ -290,7 +290,7 @@ struct Session {
     resources: LaunchResources,
     pid: u32,
     policy_digest: String,
-    policy: cos::worker::LaunchPolicy,
+    policy: yu::worker::LaunchPolicy,
     next_id: u64,
 }
 
@@ -392,7 +392,7 @@ struct Spec<'a> {
     /// Capabilities the *policy* is derived from.
     policy_caps: CapSet,
     lifetime: SessionLifetime,
-    transports: &'a [cos::worker::trusted_desktop::Transport],
+    transports: &'a [yu::worker::trusted_desktop::Transport],
 }
 
 impl<'a> Spec<'a> {
@@ -409,14 +409,14 @@ impl<'a> Spec<'a> {
         }
     }
 
-    fn derive(&self) -> Result<cos::worker::LaunchPolicy, String> {
+    fn derive(&self) -> Result<yu::worker::LaunchPolicy, String> {
         let entry = self.package.join("server.py");
         let authorized_mounts = if self.lifetime == SessionLifetime::SingleCall {
-            cos::worker::derive::authorize_granted_path_mounts(&self.policy_caps)?
+            yu::worker::derive::authorize_granted_path_mounts(&self.policy_caps)?
         } else {
             Vec::new()
         };
-        cos::worker::derive::app_session(AppSessionInput {
+        yu::worker::derive::app_session(AppSessionInput {
             app_id: self.app_id,
             app_dir: self.package,
             program: PathBuf::from("/usr/bin/python3"),
@@ -443,10 +443,10 @@ fn start_session(spec: Spec<'_>) -> Result<Session, String> {
         spec.session_id,
         Some(spec.app_id.to_string()),
         spec.authority.clone(),
-        cos::worker::relay_slot(),
+        yu::worker::relay_slot(),
     ));
-    let prepared = cos::worker::prepare(&launch)?;
-    let cos::worker::PreparedLaunch {
+    let prepared = yu::worker::prepare(&launch)?;
+    let yu::worker::PreparedLaunch {
         mut command,
         resources,
         ..
@@ -706,7 +706,7 @@ struct SessionRow {
 impl SessionRow {
     fn install(id: &str, proc_dir: &Path) -> Self {
         std::env::set_var("COS_PROC_DATA_DIR", proc_dir);
-        cos::proc::register_session(cos::proc::SessionInfo {
+        yu::proc::register_session(yu::proc::SessionInfo {
             session_id: id.to_string(),
             pid: std::process::id(),
             command: vec!["yu app probe-fixture session".to_string()],
@@ -727,20 +727,20 @@ impl SessionRow {
             app_id: Some("probe-fixture".to_string()),
             pending_bind: false,
             start_time_ticks: None,
-            client: cos::session::SessionClient::new(cos::session::SessionSource::App, false, true),
+            client: yu::session::SessionClient::new(yu::session::SessionSource::App, false, true),
         })
         .expect("register session row");
         Self { id: id.to_string() }
     }
 
     fn grant(&self, caps: Option<CapSet>) {
-        cos::proc::set_app_session_transient_caps(&self.id, caps).expect("set transient caps");
+        yu::proc::set_app_session_transient_caps(&self.id, caps).expect("set transient caps");
     }
 }
 
 impl Drop for SessionRow {
     fn drop(&mut self) {
-        cos::proc::deregister_session(&self.id);
+        yu::proc::deregister_session(&self.id);
         std::env::remove_var("COS_PROC_DATA_DIR");
     }
 }
@@ -1089,7 +1089,7 @@ fn a_normal_signed_app_cannot_request_a_desktop_transport() {
             .policy
             .mounts
             .iter()
-            .any(|mount| mount.class == cos::worker::MountClass::Display),
+            .any(|mount| mount.class == yu::worker::MountClass::Display),
         "an unclassified App received a display transport"
     );
     session.close();
@@ -1097,7 +1097,7 @@ fn a_normal_signed_app_cannot_request_a_desktop_transport() {
     // And the policy validator refuses one even if a caller tried to
     // hand-build it: a display-class mount requires a display tier.
     let entry = package.path().join("server.py");
-    let mut policy = cos::worker::derive::app_session(AppSessionInput {
+    let mut policy = yu::worker::derive::app_session(AppSessionInput {
         app_id: "probe-fixture",
         app_dir: package.path(),
         program: PathBuf::from("/usr/bin/python3"),
@@ -1114,12 +1114,12 @@ fn a_normal_signed_app_cannot_request_a_desktop_transport() {
         transports: &[],
     })
     .expect("derive");
-    policy.mounts.push(cos::worker::Mount::read_write(
+    policy.mounts.push(yu::worker::Mount::read_write(
         "/run/user/0/bus",
         "/run/user/0/bus",
-        cos::worker::MountClass::Display,
+        yu::worker::MountClass::Display,
     ));
-    let refused = cos::worker::prepare(&WorkerLaunch::new(policy))
+    let refused = yu::worker::prepare(&WorkerLaunch::new(policy))
         .err()
         .expect("a display mount on a headless tier must be refused");
     assert!(
@@ -1144,7 +1144,7 @@ fn a_classified_transport_binds_one_socket_and_lifts_the_tier() {
 
     let mut spec = Spec::new(package.path(), data.path(), "app-desktop");
     spec.app_id = "cosmic-notifications";
-    spec.transports = &[cos::worker::trusted_desktop::Transport::SessionBus];
+    spec.transports = &[yu::worker::trusted_desktop::Transport::SessionBus];
     let mut session = start_session(spec).expect("start classified worker");
 
     assert_eq!(session.policy.tier.as_str(), "trusted-desktop-session");
@@ -1157,7 +1157,7 @@ fn a_classified_transport_binds_one_socket_and_lifts_the_tier() {
         .policy
         .mounts
         .iter()
-        .filter(|mount| mount.class == cos::worker::MountClass::Display)
+        .filter(|mount| mount.class == yu::worker::MountClass::Display)
         .collect();
     assert_eq!(display.len(), 1, "expected exactly one transport mount");
     assert_eq!(display[0].source, bus.path);
@@ -1176,7 +1176,7 @@ fn a_classified_transport_binds_one_socket_and_lifts_the_tier() {
     // nothing about the owner's uid or runtime directory crosses in.
     assert_eq!(
         display[0].target,
-        PathBuf::from(cos::worker::trusted_desktop::SANDBOX_SESSION_BUS)
+        PathBuf::from(yu::worker::trusted_desktop::SANDBOX_SESSION_BUS)
     );
     assert!(
         !session
@@ -1195,7 +1195,7 @@ fn a_classified_transport_binds_one_socket_and_lifts_the_tier() {
         Some(
             format!(
                 "unix:path={}",
-                cos::worker::trusted_desktop::SANDBOX_SESSION_BUS
+                yu::worker::trusted_desktop::SANDBOX_SESSION_BUS
             )
             .as_str()
         )
@@ -1206,7 +1206,7 @@ fn a_classified_transport_binds_one_socket_and_lifts_the_tier() {
     session.handshake();
     let facts = session.call(
         "probe.transport",
-        serde_json::json!({ "socket": cos::worker::trusted_desktop::SANDBOX_SESSION_BUS }),
+        serde_json::json!({ "socket": yu::worker::trusted_desktop::SANDBOX_SESSION_BUS }),
     );
     assert_eq!(facts["socket"], "connected", "{facts}");
     // The mount point sits beside the launch's own shadow broker and
@@ -1244,7 +1244,7 @@ fn a_socket_swapped_after_derivation_fails_the_launch() {
 
     let mut spec = Spec::new(package.path(), data.path(), "app-swap");
     spec.app_id = "cosmic-notifications";
-    spec.transports = &[cos::worker::trusted_desktop::Transport::SessionBus];
+    spec.transports = &[yu::worker::trusted_desktop::Transport::SessionBus];
     let policy = spec.derive().expect("derive with the fixture bus");
 
     // Replace the socket at the same path between derivation and
@@ -1253,12 +1253,12 @@ fn a_socket_swapped_after_derivation_fails_the_launch() {
     let _replacement =
         std::os::unix::net::UnixListener::bind(&bus.path).expect("rebind fixture bus");
 
-    let refused = cos::worker::prepare(&WorkerLaunch::new(policy).with_authority(
+    let refused = yu::worker::prepare(&WorkerLaunch::new(policy).with_authority(
         BrokerAuthority::new(
             "app-swap",
             Some("cosmic-notifications".to_string()),
             CapSet::new(),
-            cos::worker::relay_slot(),
+            yu::worker::relay_slot(),
         ),
     ))
     .err()

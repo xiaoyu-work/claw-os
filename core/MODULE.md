@@ -191,25 +191,25 @@ These pinned integration inputs are not production core build dependencies.
 
 ```bash
 # Narrow test or module
-cargo test -p cos <test-filter> -- --test-threads=1
+cargo test -p yu <test-filter> -- --test-threads=1
 
 # Shared App/capability review projection, controllers, terminal and bounded helper
-cargo test -p cos --lib --bin claw-approval-helper system_review -- --test-threads=1
+cargo test -p yu --lib --bin claw-approval-helper system_review -- --test-threads=1
 
 # App directory-install backend, shared lint and CLI presentation contracts
-cargo test -p cos --lib -- apps::installation:: apps::lint:: router::app_commands::tests:: --test-threads=1
+cargo test -p yu --lib -- apps::installation:: apps::lint:: router::app_commands::tests:: --test-threads=1
 
 # Immutable product/capability fixture resolution.
-cargo test -p cos --test app_source_fixtures -- --test-threads=1
+cargo test -p yu --test app_source_fixtures -- --test-threads=1
 
 # Full core suite
 (cd core && cargo test -- --test-threads=1)
 
 # Update downgrade protection, including the dpkg ordering cross-check
-cargo test -p cos --test security_floor_process -- --test-threads=1
+cargo test -p yu --test security_floor_process -- --test-threads=1
 
 # Same-owner FileManager1 methods and fake-cos/private-bus process fixtures
-cargo test -p cos --bin claw-file-manager -- --test-threads=1
+cargo test -p yu --bin claw-file-manager -- --test-threads=1
 
 # CI lint
 (cd core && cargo clippy -- -D warnings)

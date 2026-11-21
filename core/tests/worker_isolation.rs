@@ -19,15 +19,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cos::agent::tools::app_gateway::{McpCallContext, McpPrincipal, McpPrincipalKind};
-use cos::agent::tools::mcp::client::{ClientError, McpClient};
-use cos::agent::tools::mcp::protocol::{
+use yu::agent::tools::app_gateway::{McpCallContext, McpPrincipal, McpPrincipalKind};
+use yu::agent::tools::mcp::client::{ClientError, McpClient};
+use yu::agent::tools::mcp::protocol::{
     CallToolResult, ClientCapabilities, ContentItem, Implementation,
 };
-use cos::agent::tools::mcp::transport::StdioTransport;
-use cos::caps::{Cap, CapSet, Scope, Verb};
-use cos::worker::derive::{AgentExecInput, McpServerInput};
-use cos::worker::{Limits, WorkerLaunch, WorkerOutput};
+use yu::agent::tools::mcp::transport::StdioTransport;
+use yu::caps::{Cap, CapSet, Scope, Verb};
+use yu::worker::derive::{AgentExecInput, McpServerInput};
+use yu::worker::{Limits, WorkerLaunch, WorkerOutput};
 use serde_json::{json, Value};
 
 mod app_sources {
@@ -50,7 +50,7 @@ fn run_in_sandbox_with(
     script: &str,
     limits: Limits,
 ) -> WorkerOutput {
-    let policy = cos::worker::derive::agent_exec(AgentExecInput {
+    let policy = yu::worker::derive::agent_exec(AgentExecInput {
         workspace: workspace.to_path_buf(),
         writable,
         argv: vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()],
@@ -58,12 +58,12 @@ fn run_in_sandbox_with(
         limits,
     })
     .expect("derive policy");
-    let prepared = cos::worker::prepare(&WorkerLaunch::new(policy)).expect("prepare launch");
-    cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run worker")
+    let prepared = yu::worker::prepare(&WorkerLaunch::new(policy)).expect("prepare launch");
+    yu::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run worker")
 }
 
 fn sandbox_available() -> bool {
-    cos::worker::availability().is_available()
+    yu::worker::availability().is_available()
 }
 
 /// Skip only where the platform genuinely cannot enforce the policy.
@@ -75,7 +75,7 @@ fn sandbox_available() -> bool {
 macro_rules! require_sandbox {
     () => {
         if !sandbox_available() {
-            let availability = cos::worker::availability();
+            let availability = yu::worker::availability();
             if std::env::var_os("COS_WORKER_SANDBOX_REQUIRED").is_some() {
                 panic!(
                     "worker sandbox prerequisites are declared installed but missing: {}",
@@ -234,7 +234,7 @@ fn a_symlink_out_of_the_workspace_resolves_to_nothing() {
 #[test]
 fn a_granted_scope_that_names_a_kernel_root_refuses_the_launch() {
     let caps = CapSet::from_caps(vec![Cap::new(Verb::FS_READ, Scope::path("/run/cos/**"))]);
-    let error = cos::worker::derive::granted_path_mounts(&caps).unwrap_err();
+    let error = yu::worker::derive::granted_path_mounts(&caps).unwrap_err();
     assert!(error.contains("kernel-owned"), "{error}");
 }
 
@@ -250,7 +250,7 @@ fn a_capability_without_a_mount_grants_no_host_visibility() {
     // wildcard scope to no mount at all, so the check can pass and the
     // path still does not exist.
     let caps = CapSet::from_caps(vec![Cap::new(Verb::FS_READ, Scope::Wild)]);
-    let mounts = cos::worker::derive::granted_path_mounts(&caps).expect("mounts");
+    let mounts = yu::worker::derive::granted_path_mounts(&caps).expect("mounts");
     assert!(mounts.is_empty(), "a wildcard grant produced mounts");
 
     let inner = workspace();
@@ -528,7 +528,7 @@ fn brokered_egress_admits_only_the_granted_endpoint() {
         Cap::new(Verb::NET_DIAL, Scope::host("api.example.com:443")),
         Cap::new(Verb::NET_DIAL, Scope::host("*.wildcard.example")),
     ]);
-    let network = cos::worker::derive::egress_from_caps(&caps);
+    let network = yu::worker::derive::egress_from_caps(&caps);
     let endpoints = network.endpoints();
     assert_eq!(endpoints.len(), 1);
     assert_eq!(endpoints[0].authority(), "api.example.com:443");
@@ -629,7 +629,7 @@ fn output_is_bounded_and_reported_as_truncated() {
 #[test]
 fn an_mcp_server_gets_the_same_isolation_as_an_app_operation() {
     require_sandbox!();
-    let policy = cos::worker::derive::mcp_server(McpServerInput {
+    let policy = yu::worker::derive::mcp_server(McpServerInput {
         pinned_entries: Vec::new(),
         name: "parity",
         program: PathBuf::from("/bin/sh"),
@@ -648,8 +648,8 @@ fn an_mcp_server_gets_the_same_isolation_as_an_app_operation() {
     assert_eq!(policy.seccomp.as_str(), "strict");
 
     let limits = policy.limits;
-    let prepared = cos::worker::prepare(&WorkerLaunch::new(policy)).expect("prepare");
-    let output = cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
+    let prepared = yu::worker::prepare(&WorkerLaunch::new(policy)).expect("prepare");
+    let output = yu::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
     let seen = output.stdout_string() + &output.stderr_string();
     assert!(
         !seen.contains("root:"),
@@ -698,7 +698,7 @@ fn a_legitimate_app_operation_reads_and_writes_only_its_declared_resources() {
         output = output.join("result.txt").to_string_lossy(),
         forbidden = forbidden.to_string_lossy(),
     );
-    let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+    let policy = yu::worker::derive::app_operation(yu::worker::derive::AppOperationInput {
         package_identity: None,
         pinned_entries: Vec::new(),
         developer: false,
@@ -712,7 +712,7 @@ fn a_legitimate_app_operation_reads_and_writes_only_its_declared_resources() {
         data_dir: &data.path().to_string_lossy(),
         apps_dir: &package.path().to_string_lossy(),
         extra_env: Default::default(),
-        stdio: cos::worker::StdioPlan::Captured,
+        stdio: yu::worker::StdioPlan::Captured,
         desktop: false,
     })
     .expect("derive app policy");
@@ -730,11 +730,11 @@ fn a_legitimate_app_operation_reads_and_writes_only_its_declared_resources() {
     };
     assert_eq!(
         mounted(&input_canonical),
-        Some(cos::worker::MountMode::ReadOnly)
+        Some(yu::worker::MountMode::ReadOnly)
     );
     assert_eq!(
         mounted(&output_canonical),
-        Some(cos::worker::MountMode::ReadWrite)
+        Some(yu::worker::MountMode::ReadWrite)
     );
     assert!(
         mounted(&forbidden.canonicalize().expect("canonical")).is_none(),
@@ -742,14 +742,14 @@ fn a_legitimate_app_operation_reads_and_writes_only_its_declared_resources() {
     );
 
     let limits = policy.limits;
-    let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
+    let launch = WorkerLaunch::new(policy).with_authority(yu::worker::BrokerAuthority::new(
         "app-fixture",
         Some("fixture".to_string()),
         caps,
-        cos::worker::relay_slot(),
+        yu::worker::relay_slot(),
     ));
-    let prepared = cos::worker::prepare(&launch).expect("prepare");
-    let result = cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
+    let prepared = yu::worker::prepare(&launch).expect("prepare");
+    let result = yu::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
     let seen = result.stdout_string() + &result.stderr_string();
     assert!(result.status.success(), "fixture App failed: {seen}");
     assert!(seen.contains("ok declared input"), "{seen}");
@@ -783,7 +783,7 @@ fn source_python_path() -> std::ffi::OsString {
 }
 
 /// Run `script` with brokered egress for `endpoints`.
-fn run_with_egress(script: &str, endpoints: Vec<cos::worker::Endpoint>) -> WorkerOutput {
+fn run_with_egress(script: &str, endpoints: Vec<yu::worker::Endpoint>) -> WorkerOutput {
     let dir = workspace();
     std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
     let caps = CapSet::from_caps(
@@ -792,7 +792,7 @@ fn run_with_egress(script: &str, endpoints: Vec<cos::worker::Endpoint>) -> Worke
             .map(|endpoint| Cap::new(Verb::NET_DIAL, Scope::host(endpoint.authority())))
             .collect::<Vec<_>>(),
     );
-    let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+    let policy = yu::worker::derive::app_operation(yu::worker::derive::AppOperationInput {
         package_identity: None,
         pinned_entries: Vec::new(),
         developer: false,
@@ -806,21 +806,21 @@ fn run_with_egress(script: &str, endpoints: Vec<cos::worker::Endpoint>) -> Worke
         data_dir: &dir.path().to_string_lossy(),
         apps_dir: &dir.path().to_string_lossy(),
         extra_env: Default::default(),
-        stdio: cos::worker::StdioPlan::Captured,
+        stdio: yu::worker::StdioPlan::Captured,
         desktop: false,
     })
     .expect("derive policy");
     std::env::remove_var("COS_SDK_PYTHON_DIR");
     assert_eq!(policy.network.as_str(), "brokered");
     let limits = policy.limits;
-    let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
+    let launch = WorkerLaunch::new(policy).with_authority(yu::worker::BrokerAuthority::new(
         "app-egress",
         Some("egress-fixture".to_string()),
         caps,
-        cos::worker::relay_slot(),
+        yu::worker::relay_slot(),
     ));
-    let prepared = cos::worker::prepare(&launch).expect("prepare");
-    cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run")
+    let prepared = yu::worker::prepare(&launch).expect("prepare");
+    yu::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run")
 }
 
 /// Is a real HTTPS endpoint reachable from this host?
@@ -854,7 +854,7 @@ head = tls.recv(64)
 print('status', head.split(b' ')[1].decode())
 print('peer', tls.getpeercert()['subject'] is not None)
 "#,
-        vec![cos::worker::Endpoint::new("example.com", 443)],
+        vec![yu::worker::Endpoint::new("example.com", 443)],
     );
     let seen = output.stdout_string() + &output.stderr_string();
     assert!(
@@ -878,7 +878,7 @@ sock = egress.create_connection('example.com', 80, 20)
 sock.sendall(b'GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n')
 print('status', sock.recv(64).split(b' ')[1].decode())
 "#,
-        vec![cos::worker::Endpoint::new("example.com", 80)],
+        vec![yu::worker::Endpoint::new("example.com", 80)],
     );
     let seen = output.stdout_string() + &output.stderr_string();
     assert!(
@@ -908,7 +908,7 @@ for host, port in (
     except Exception as error:
         print('refused', host, port, type(error).__name__)
 "#,
-        vec![cos::worker::Endpoint::new("example.com", 443)],
+        vec![yu::worker::Endpoint::new("example.com", 443)],
     );
     let seen = output.stdout_string() + &output.stderr_string();
     assert!(!seen.contains("ADMITTED"), "{seen}");
@@ -930,7 +930,7 @@ for host in ('example.com.', 'EXAMPLE.COM', 'ex\u00e4mple.com'):
     except Exception as error:
         print('refused', host, type(error).__name__)
 "#,
-        vec![cos::worker::Endpoint::new("example.com", 443)],
+        vec![yu::worker::Endpoint::new("example.com", 443)],
     );
     let seen = output.stdout_string() + &output.stderr_string();
     // Port 8443 is outside the grant however the host is spelled.
@@ -990,7 +990,7 @@ fn a_segment_glob_exposes_the_matches_and_not_their_children() {
             .join("public/secret-nested/leak.txt")
             .to_string_lossy(),
     );
-    let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+    let policy = yu::worker::derive::app_operation(yu::worker::derive::AppOperationInput {
         package_identity: None,
         pinned_entries: Vec::new(),
         developer: false,
@@ -1004,19 +1004,19 @@ fn a_segment_glob_exposes_the_matches_and_not_their_children() {
         data_dir: &data.path().to_string_lossy(),
         apps_dir: &package.path().to_string_lossy(),
         extra_env: Default::default(),
-        stdio: cos::worker::StdioPlan::Captured,
+        stdio: yu::worker::StdioPlan::Captured,
         desktop: false,
     })
     .expect("derive policy");
     let limits = policy.limits;
-    let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
+    let launch = WorkerLaunch::new(policy).with_authority(yu::worker::BrokerAuthority::new(
         "app-glob",
         Some("glob-fixture".to_string()),
         caps,
-        cos::worker::relay_slot(),
+        yu::worker::relay_slot(),
     ));
-    let prepared = cos::worker::prepare(&launch).expect("prepare");
-    let output = cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
+    let prepared = yu::worker::prepare(&launch).expect("prepare");
+    let output = yu::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
     let seen = output.stdout_string() + &output.stderr_string();
     assert!(seen.contains("top visible"), "{seen}");
     // `public` is bound, but the grant named one segment: the directory
@@ -1032,7 +1032,7 @@ fn a_mount_source_swapped_after_validation_fails_the_launch() {
     let dir = workspace();
     let real = dir.path().join("real");
     std::fs::create_dir(&real).unwrap();
-    let policy = cos::worker::derive::agent_exec(AgentExecInput {
+    let policy = yu::worker::derive::agent_exec(AgentExecInput {
         workspace: real.clone(),
         writable: false,
         argv: vec!["/bin/sh".to_string(), "-c".to_string(), "true".to_string()],
@@ -1045,7 +1045,7 @@ fn a_mount_source_swapped_after_validation_fails_the_launch() {
     // derivation and preparation. The pinning check must refuse.
     std::fs::remove_dir(&real).unwrap();
     std::os::unix::fs::symlink("/etc", &real).unwrap();
-    let error = match cos::worker::prepare(&WorkerLaunch::new(policy)) {
+    let error = match yu::worker::prepare(&WorkerLaunch::new(policy)) {
         Ok(_) => panic!("a swapped mount source was accepted"),
         Err(error) => error,
     };
@@ -1114,7 +1114,7 @@ print('apps_root', sorted(os.listdir(os.path.join({owner_root:?}, 'apps'))))
         Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("memory-fixture")),
         Cap::new(Verb::MEMORY_READ, Scope::self_ref("memory-fixture")),
     ]);
-    let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+    let policy = yu::worker::derive::app_operation(yu::worker::derive::AppOperationInput {
         package_identity: None,
         pinned_entries: Vec::new(),
         developer: false,
@@ -1128,7 +1128,7 @@ print('apps_root', sorted(os.listdir(os.path.join({owner_root:?}, 'apps'))))
         data_dir: &owner_data.path().to_string_lossy(),
         apps_dir: &package.path().to_string_lossy(),
         extra_env: Default::default(),
-        stdio: cos::worker::StdioPlan::Captured,
+        stdio: yu::worker::StdioPlan::Captured,
         desktop: false,
     })
     .expect("derive policy");
@@ -1140,7 +1140,7 @@ print('apps_root', sorted(os.listdir(os.path.join({owner_root:?}, 'apps'))))
     let mounted: Vec<_> = policy
         .mounts
         .iter()
-        .filter(|mount| mount.class == cos::worker::MountClass::AppData)
+        .filter(|mount| mount.class == yu::worker::MountClass::AppData)
         .map(|mount| mount.source.clone())
         .collect();
     assert_eq!(mounted.len(), 1);
@@ -1154,14 +1154,14 @@ print('apps_root', sorted(os.listdir(os.path.join({owner_root:?}, 'apps'))))
     );
 
     let limits = policy.limits;
-    let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
+    let launch = WorkerLaunch::new(policy).with_authority(yu::worker::BrokerAuthority::new(
         "app-memory",
         Some("memory-fixture".to_string()),
         caps,
-        cos::worker::relay_slot(),
+        yu::worker::relay_slot(),
     ));
-    let prepared = cos::worker::prepare(&launch).expect("prepare");
-    let output = cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
+    let prepared = yu::worker::prepare(&launch).expect("prepare");
+    let output = yu::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
     std::env::remove_var("COS_DATA_DIR");
     let seen = output.stdout_string() + &output.stderr_string();
     assert!(seen.contains("data_dir memory-fixture apps"), "{seen}");
@@ -1229,7 +1229,7 @@ print('partition', sorted(p.name for p in data.iterdir()))
     .to_string();
 
     let caps = CapSet::new();
-    let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+    let policy = yu::worker::derive::app_operation(yu::worker::derive::AppOperationInput {
         package_identity: None,
         pinned_entries: Vec::new(),
         developer: false,
@@ -1243,7 +1243,7 @@ print('partition', sorted(p.name for p in data.iterdir()))
         data_dir: &owner_data.path().to_string_lossy(),
         apps_dir: &package.path().to_string_lossy(),
         extra_env: Default::default(),
-        stdio: cos::worker::StdioPlan::Captured,
+        stdio: yu::worker::StdioPlan::Captured,
         desktop: false,
     })
     .expect("derive policy");
@@ -1256,14 +1256,14 @@ print('partition', sorted(p.name for p in data.iterdir()))
     assert!(owner_data.path().join("db/store.sqlite").is_file());
 
     let limits = policy.limits;
-    let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
+    let launch = WorkerLaunch::new(policy).with_authority(yu::worker::BrokerAuthority::new(
         "app-legacy",
         Some("calendar".to_string()),
         caps,
-        cos::worker::relay_slot(),
+        yu::worker::relay_slot(),
     ));
-    let prepared = cos::worker::prepare(&launch).expect("prepare");
-    let output = cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
+    let prepared = yu::worker::prepare(&launch).expect("prepare");
+    let output = yu::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
     let seen = output.stdout_string() + &output.stderr_string();
     assert!(
         seen.contains("events two years of events"),
@@ -1583,7 +1583,7 @@ else:
 }
 
 struct WorkerCleanup {
-    resources: cos::worker::LaunchResources,
+    resources: yu::worker::LaunchResources,
     pid: u32,
 }
 
@@ -1615,7 +1615,7 @@ async fn run_shipped_app(
     fixture: Fixture,
     expected_caps: CapSet,
 ) -> ShippedCall {
-    use cos::worker::derive::{AppSessionInput, SessionLifetime};
+    use yu::worker::derive::{AppSessionInput, SessionLifetime};
     use std::os::unix::fs::MetadataExt;
     use std::process::Stdio;
     use tokio::io::AsyncReadExt;
@@ -1626,7 +1626,7 @@ async fn run_shipped_app(
     let apps_root = directory.parent().unwrap();
     let python = app_stage::python_runtime(&source, stage.path());
     let manifest_path = directory.join("app.json");
-    let manifest = cos::caps::manifest::Manifest::from_json(
+    let manifest = yu::caps::manifest::Manifest::from_json(
         &std::fs::read_to_string(&manifest_path).unwrap(),
     )
     .expect("published App manifest must pass normal admission validation");
@@ -1644,7 +1644,7 @@ async fn run_shipped_app(
         .resolve_mcp_tool_call(
             tool,
             &supplied,
-            &cos::caps::args::PathContext {
+            &yu::caps::args::PathContext {
                 home: owner_data.path().to_path_buf(),
                 cwd: None,
             },
@@ -1666,7 +1666,7 @@ async fn run_shipped_app(
     );
     assert_eq!(caps, expected_caps, "published operation needs changed");
     let arguments = serde_json::to_value(effective.values).unwrap();
-    let network = cos::worker::derive::egress_from_caps(&caps);
+    let network = yu::worker::derive::egress_from_caps(&caps);
     let endpoint = if matches!(fixture, Fixture::Mailbox) {
         assert!(network.endpoints().is_empty(), "native Mail must not inherit App egress");
         None
@@ -1700,7 +1700,7 @@ async fn run_shipped_app(
             (path.clone(), (metadata.dev(), metadata.ino()))
         })
         .collect();
-    let authorized = cos::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
+    let authorized = yu::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
     let extra_env = BTreeMap::from([
         (
             "COS_APP_MANIFEST".to_string(),
@@ -1719,7 +1719,7 @@ async fn run_shipped_app(
             python.join("fixture-ca.pem").to_string_lossy().into_owned(),
         ),
     ]);
-    let mut policy = cos::worker::derive::app_session(AppSessionInput {
+    let mut policy = yu::worker::derive::app_session(AppSessionInput {
         package_identity: Some((metadata.dev(), metadata.ino())),
         pinned_entries,
         app_id,
@@ -1740,8 +1740,8 @@ async fn run_shipped_app(
     std::env::remove_var("COS_BIN");
     assert!(policy.mounts.iter().any(|mount| {
         mount.source == python
-            && mount.class == cos::worker::MountClass::Runtime
-            && mount.mode == cos::worker::MountMode::ReadOnly
+            && mount.class == yu::worker::MountClass::Runtime
+            && mount.mode == yu::worker::MountMode::ReadOnly
     }));
     let pinned = app_sources::source_root();
     assert!(policy
@@ -1755,7 +1755,7 @@ async fn run_shipped_app(
     // data partition is mounted at the same path inside the sandbox,
     // so the worker sees this exact name.
     if let Some(endpoint) = endpoint.as_ref() {
-        assert!(matches!(policy.network, cos::worker::NetworkPolicy::Brokered { .. }));
+        assert!(matches!(policy.network, yu::worker::NetworkPolicy::Brokered { .. }));
         assert_eq!(
             policy.env.get("COS_EGRESS_ENDPOINTS").map(String::as_str),
             Some(endpoint.authority().as_str()),
@@ -1766,15 +1766,15 @@ async fn run_shipped_app(
         assert!(policy.env.get("COS_EGRESS_ENDPOINTS").is_none_or(|value| value.is_empty()));
     }
 
-    let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
+    let launch = WorkerLaunch::new(policy).with_authority(yu::worker::BrokerAuthority::new(
         "app-shipped",
         Some(app_id.to_string()),
         caps,
-        cos::worker::relay_slot(),
+        yu::worker::relay_slot(),
     ));
-    let cos::worker::PreparedLaunch {
+    let yu::worker::PreparedLaunch {
         command, resources, ..
-    } = cos::worker::prepare(&launch).expect("prepare actual App MCP worker");
+    } = yu::worker::prepare(&launch).expect("prepare actual App MCP worker");
     let mut command = tokio::process::Command::from(command);
     command
         .stdin(Stdio::piped())
@@ -1837,10 +1837,10 @@ async fn run_shipped_app(
                 tool,
                 Some(arguments),
                 McpCallContext {
-                    wire_version: cos::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
+                    wire_version: yu::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
                     call_id: "call-shipped-fixture".into(),
                     trace_id: "call-shipped-fixture".into(),
-                    deadline_unix_ms: Some(cos::agentd::grant::now_ms() + 15_000),
+                    deadline_unix_ms: Some(yu::agentd::grant::now_ms() + 15_000),
                     session_id: Some("app-shipped".into()),
                     task_id: Some("task-shipped-fixture".into()),
                     caller: McpPrincipal {
@@ -2078,7 +2078,7 @@ for family in (socket.AF_INET, socket.AF_INET6):
         raise AssertionError("direct socket bypassed broker-only transport")
 print("direct sockets refused with an egress grant")
 "#,
-        vec![cos::worker::Endpoint::new("api.search.brave.com", 443)],
+        vec![yu::worker::Endpoint::new("api.search.brave.com", 443)],
     );
     assert!(output.status.success(), "{}", output.stderr_string());
     assert!(output
@@ -2088,7 +2088,7 @@ print("direct sockets refused with an egress grant")
 
 #[test]
 fn missing_isolation_facilities_fail_closed() {
-    let availability = cos::worker::availability();
+    let availability = yu::worker::availability();
     if availability.is_available() {
         assert!(availability.missing.is_empty());
         assert!(availability.governor.is_some());
@@ -2096,7 +2096,7 @@ fn missing_isolation_facilities_fail_closed() {
     }
     // No provider means no launch, not a weaker launch.
     let dir = workspace();
-    let policy = cos::worker::derive::agent_exec(AgentExecInput {
+    let policy = yu::worker::derive::agent_exec(AgentExecInput {
         workspace: dir.path().to_path_buf(),
         writable: false,
         argv: vec!["/bin/sh".to_string(), "-c".to_string(), "true".to_string()],
@@ -2104,7 +2104,7 @@ fn missing_isolation_facilities_fail_closed() {
         limits: Limits::operation(),
     })
     .expect("derive");
-    let error = match cos::worker::prepare(&WorkerLaunch::new(policy)) {
+    let error = match yu::worker::prepare(&WorkerLaunch::new(policy)) {
         Ok(_) => panic!("the launch was prepared instead of refused"),
         Err(error) => error,
     };
@@ -2113,7 +2113,7 @@ fn missing_isolation_facilities_fail_closed() {
 
 #[test]
 fn no_worker_tier_can_request_an_unconfined_host_network() {
-    let mut policy = cos::worker::derive::mcp_server(McpServerInput {
+    let mut policy = yu::worker::derive::mcp_server(McpServerInput {
         pinned_entries: Vec::new(),
         name: "native",
         program: PathBuf::from("/bin/sh"),
@@ -2123,16 +2123,16 @@ fn no_worker_tier_can_request_an_unconfined_host_network() {
         session_id: None,
     })
     .expect("derive");
-    policy.network = cos::worker::NetworkPolicy::HostShared;
+    policy.network = yu::worker::NetworkPolicy::HostShared;
     for tier in [
-        cos::worker::TrustTier::AppOperation,
-        cos::worker::TrustTier::McpServer,
-        cos::worker::TrustTier::AgentExec,
-        cos::worker::TrustTier::DesktopSurface,
-        cos::worker::TrustTier::TrustedDesktopSession,
+        yu::worker::TrustTier::AppOperation,
+        yu::worker::TrustTier::McpServer,
+        yu::worker::TrustTier::AgentExec,
+        yu::worker::TrustTier::DesktopSurface,
+        yu::worker::TrustTier::TrustedDesktopSession,
     ] {
         policy.tier = tier;
-        let error = match cos::worker::prepare(&WorkerLaunch::new(policy.clone())) {
+        let error = match yu::worker::prepare(&WorkerLaunch::new(policy.clone())) {
             Ok(_) => panic!("the launch was prepared instead of refused"),
             Err(error) => error,
         };

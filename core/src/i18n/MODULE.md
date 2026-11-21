@@ -27,5 +27,5 @@ user-facing labels/messages pass through this module.
 ## Tests
 
 ```bash
-cargo test -p cos i18n:: -- --test-threads=1
+cargo test -p yu i18n:: -- --test-threads=1
 ```

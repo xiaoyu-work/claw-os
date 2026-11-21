@@ -3,7 +3,7 @@ fn main() {
     use std::os::unix::process::CommandExt;
 
     if let Err(refusal) =
-        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+        yu::update::runtime::enforce_startup(yu::update::runtime::Scope::CompiledEpoch)
     {
         fail(&refusal.message);
     }
@@ -24,7 +24,7 @@ fn main() {
     let runner = std::env::current_exe()
         .unwrap_or_else(|error| fail(&format!("resolve GUI runner installation: {error}")))
         .with_file_name("claw-app-runner");
-    if let Err(error) = cos::worker::gui_transport::initialize_runner() {
+    if let Err(error) = yu::worker::gui_transport::initialize_runner() {
         fail(&error);
     }
     let error = std::process::Command::new(runner).args(args).exec();

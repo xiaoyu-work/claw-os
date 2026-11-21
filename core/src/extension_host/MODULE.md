@@ -271,11 +271,11 @@ timeout after COMMIT is terminal indeterminate rather than a queue replay.
 ## Tests
 
 ```bash
-cargo test -p cos extension_host -- --test-threads=1
-cargo test -p cos agent_extensions -- --test-threads=1
-cargo test -p cos --test extension_provenance_process -- --test-threads=1
-cargo test -p cos --test extension_host_boundary -- --test-threads=1
-cargo test -p cos --test agentd_process_boundary -- --test-threads=1
+cargo test -p yu extension_host -- --test-threads=1
+cargo test -p yu agent_extensions -- --test-threads=1
+cargo test -p yu --test extension_provenance_process -- --test-threads=1
+cargo test -p yu --test extension_host_boundary -- --test-threads=1
+cargo test -p yu --test agentd_process_boundary -- --test-threads=1
 bash packaging/deb/tests/test-agentd-packaging.sh
 ```
 

@@ -37,7 +37,7 @@ remove this property when updating the upstream dependency.
 Run from the repository root:
 
 ```sh
-cargo test -p cos --lib nearby -- --test-threads=1
+cargo test -p yu --lib nearby -- --test-threads=1
 cargo test -p clawd-client --lib --locked
 ```
 

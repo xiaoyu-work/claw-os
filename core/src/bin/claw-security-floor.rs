@@ -10,7 +10,7 @@
 fn main() {
     // This helper is invoked from maintainer scripts as root. Nothing
     // it writes should ever be readable by other accounts by default.
-    cos::storage::set_private_umask();
+    yu::storage::set_private_umask();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    std::process::exit(cos::update::cli::main(&args));
+    std::process::exit(yu::update::cli::main(&args));
 }

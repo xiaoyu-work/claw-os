@@ -6,7 +6,7 @@ cd "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
 
 cos_test_binary() {
-    python3 - "$1" "${2:-cos}" "${3:-lib}" "$GITHUB_WORKSPACE/core/Cargo.toml" <<'PY'
+    python3 - "$1" "${2:-yu}" "${3:-lib}" "$GITHUB_WORKSPACE/core/Cargo.toml" <<'PY'
 import json
 import sys
 
@@ -48,7 +48,7 @@ nearby() {
     cargo test --manifest-path crates/claw-nearby/Cargo.toml --locked
     cargo clippy --manifest-path crates/claw-nearby/Cargo.toml --all-targets --locked -- -D warnings
     cargo test --manifest-path crates/claw-nearby/vendor/owlyd/Cargo.toml --test service --locked
-    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+    cargo test -p yu --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/nearby-tests.jsonl"
     test_binary="$(cos_test_binary "$RUNNER_TEMP/nearby-tests.jsonl")"
     sudo timeout 60 unshare --mount --net --fork \
@@ -64,8 +64,8 @@ app_apt() {
     local node_binary
     node_binary="$(readlink -f -- "$(command -v node)")"
     python3 -I -c 'import apt_pkg'
-    cargo build -p cos --bin yu --bin claw-app-runner --bin claw-app-apt-hook --bin claw-extension-host --locked
-    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+    cargo build -p yu --bin yu --bin claw-app-runner --bin claw-app-apt-hook --bin claw-extension-host --locked
+    cargo test -p yu --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/app-apt-tests.jsonl"
     local test_binary listing fixture
     test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/app-apt-tests.jsonl")"
@@ -113,9 +113,9 @@ app_apt() {
 
 capture() {
     command -v dbus-daemon >/dev/null
-    cargo build -p cos --bin clawd --locked
+    cargo build -p yu --bin clawd --locked
     mkdir -p "$RUNNER_TEMP"
-    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+    cargo test -p yu --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/capture-tests.jsonl"
     local test_binary fixture listing
     test_binary="$(cos_test_binary "$RUNNER_TEMP/capture-tests.jsonl")"
@@ -140,9 +140,9 @@ capture() {
 }
 
 app_bind() {
-    cargo build -p cos --bin yu --bin claw-app-runner --locked
+    cargo build -p yu --bin yu --bin claw-app-runner --locked
     sudo apt-get install -y --no-install-recommends acl
-    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+    cargo test -p yu --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/ordinary-custody-tests.jsonl"
     local test_binary
     test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/ordinary-custody-tests.jsonl")"
@@ -182,10 +182,10 @@ app_bind() {
 }
 
 calendar() {
-    cargo build -p cos --bin yu --locked
+    cargo build -p yu --bin yu --locked
     cargo build --manifest-path desktop/services/claw-applet-services/Cargo.toml \
         --features provider --bins --locked --target-dir "$RUNNER_TEMP/calendar-target"
-    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+    cargo test -p yu --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/calendar-tests.jsonl"
     test_binary="$(cos_test_binary "$RUNNER_TEMP/calendar-tests.jsonl")"
     sudo timeout 120 unshare --mount --net --fork \
@@ -205,13 +205,13 @@ calendar() {
 
 extensions() {
     sudo apt-get install -y --no-install-recommends acl binutils
-    cargo build -p cos --bin claw-agentd --bin claw-extension-host --bin claw-app-runner
-    cargo test -p cos \
+    cargo build -p yu --bin claw-agentd --bin claw-extension-host --bin claw-app-runner
+    cargo test -p yu \
         --test agentd_process_boundary \
         --test extension_host_boundary \
         --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/extension-tests.jsonl"
-    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+    cargo test -p yu --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/service-retirement-tests.jsonl"
     service_test_binary="$(cos_test_binary "$RUNNER_TEMP/service-retirement-tests.jsonl")"
     private_extension_case 120 \
@@ -297,18 +297,18 @@ extensions() {
 display() {
     local selection="${1:-display}"
     if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets || "$selection" == native-clipboard || "$selection" == native-launcher || "$selection" == native-settings || "$selection" == native-capture || "$selection" == native-notifications || "$selection" == native-media-player ]]; then
-        cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
+        cargo test -p yu --lib --locked native_editor_readiness -- --test-threads=1
         if [[ "$selection" == native-calendar || "$selection" == native-desktop-widgets ]]; then
-            cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
-            cargo test -p cos --lib --locked native_calendar_popup -- --test-threads=1
+            cargo test -p yu --lib --locked native_calendar_readiness -- --test-threads=1
+            cargo test -p yu --lib --locked native_calendar_popup -- --test-threads=1
             cargo build --manifest-path desktop/services/claw-applet-services/Cargo.toml \
                 --bin claw-calendar-reader --locked --target-dir "$CARGO_TARGET_DIR/native-calendar-service"
         fi
         if [[ "$selection" == native-terminal ]]; then
-            cargo test -p cos --lib --locked native_terminal_session_selection -- --test-threads=1
+            cargo test -p yu --lib --locked native_terminal_session_selection -- --test-threads=1
         fi
         if [[ "$selection" == native-launcher ]]; then
-            cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
+            cargo test -p yu --lib --locked native_calendar_readiness -- --test-threads=1
             cargo build --manifest-path desktop/launcher-backend/Cargo.toml \
                 --release --locked -p pop-launcher-bin \
                 --target-dir "$CARGO_TARGET_DIR/native-launcher-service"
@@ -322,14 +322,14 @@ display() {
     fi
     cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
-    cargo build -p cos --locked --bin yu --bin claw-display-host \
+    cargo build -p yu --locked --bin yu --bin claw-display-host \
         --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner \
         --bin claw-file-manager --bin claw-notification-panel
     if [[ "$selection" == native-capture ]]; then
-        cargo build -p cos --locked --bin clawd
+        cargo build -p yu --locked --bin clawd
     fi
     if [[ "$selection" == native-notifications ]]; then
-        cargo build -p cos --locked --example notification-panel-fixture
+        cargo build -p yu --locked --example notification-panel-fixture
     fi
     if [[ "$selection" == native-package || "$selection" == native-store ]]; then
         local program
@@ -337,15 +337,15 @@ display() {
             command -v "$program" >/dev/null
         done
         python3 -I -c 'import apt_pkg'
-        cargo build -p cos --locked --bin claw-app-apt-hook --bin claw-extension-host
-        cargo test -p cos --lib --locked -- native_package_window \
+        cargo build -p yu --locked --bin claw-app-apt-hook --bin claw-extension-host
+        cargo test -p yu --lib --locked -- native_package_window \
             operation_bound_grant_sets_preserve_digest_bounds_and_atomicity \
             issuance_never_extends_a_fixed_operation_deadline \
             --test-threads=1
     fi
-    cargo test -p cos --bin claw-file-manager --locked -- --test-threads=1
+    cargo test -p yu --bin claw-file-manager --locked -- --test-threads=1
     cargo build -p claw-display-login --locked
-    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+    cargo test -p yu --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/gui-tests.jsonl"
     test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/gui-tests.jsonl")"
     cargo clippy --manifest-path crates/claw-display-login/test/headless/Cargo.toml \
@@ -479,7 +479,7 @@ applets() {
     cargo test --manifest-path "$manifest" --lib --locked -- --test-threads=1
     cargo test --manifest-path "$manifest" --features provider --locked -- --test-threads=1
     cargo clippy --manifest-path "$manifest" --features provider --all-targets --locked -- -D warnings
-    cargo build -p cos --bin yu --locked
+    cargo build -p yu --bin yu --locked
     cargo test --manifest-path "$manifest" --features provider --test kernel_policy \
         --no-run --locked --message-format=json-render-diagnostics > "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl"
     test_binary="$(python3 - "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl" <<'PY'

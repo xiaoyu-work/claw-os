@@ -321,7 +321,7 @@ fn version_one_product_only_locks_remain_supported() {
 fn published_doc_fixture_preserves_its_manifest_and_six_operations() {
     let directory = app_sources::app_dir("doc");
     assert!(directory.ends_with("capabilities/document-engine/apps/doc"));
-    let manifest = cos::caps::manifest::Manifest::from_json(
+    let manifest = yu::caps::manifest::Manifest::from_json(
         &std::fs::read_to_string(directory.join("app.json")).unwrap(),
     )
     .unwrap();
@@ -341,16 +341,16 @@ fn published_doc_fixture_preserves_its_manifest_and_six_operations() {
 fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() {
     use std::collections::BTreeMap;
 
-    use cos::caps::{Cap, Scope, Verb};
+    use yu::caps::{Cap, Scope, Verb};
 
     let directory = app_sources::app_dir("db");
     assert!(directory.ends_with("capabilities/storage-sdk/apps/db"));
-    let manifest = cos::caps::manifest::Manifest::from_json(
+    let manifest = yu::caps::manifest::Manifest::from_json(
         &std::fs::read_to_string(directory.join("app.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(manifest.id, "db");
-    assert!(cos::apps::is_mcp_only_cli(&manifest));
+    assert!(yu::apps::is_mcp_only_cli(&manifest));
     let service = manifest.mcp.as_ref().unwrap();
     let entry = service
         .entry
@@ -373,7 +373,7 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
             "db.databases"
         ]
     );
-    let paths = cos::caps::args::PathContext {
+    let paths = yu::caps::args::PathContext {
         home: directory.clone(),
         cwd: None,
     };
@@ -414,8 +414,8 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
             Scope::Wild,
         ),
     ] {
-        let tool = cos::apps::mcp_tool_for_command(&manifest, command).unwrap();
-        let schema = cos::apps::tool_schema(tool);
+        let tool = yu::apps::mcp_tool_for_command(&manifest, command).unwrap();
+        let schema = yu::apps::tool_schema(tool);
         assert_eq!(schema["stdin"], false);
         for argument in schema["parameters"].as_array().unwrap() {
             assert_eq!(argument["binding"], "positional");
@@ -424,7 +424,7 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
         }
 
         let argv = argv.into_iter().map(String::from).collect::<Vec<_>>();
-        let supplied = cos::caps::args::bind_supplied_cli_args(&tool.args, &argv).unwrap();
+        let supplied = yu::caps::args::bind_supplied_cli_args(&tool.args, &argv).unwrap();
         let expected: BTreeMap<String, Value> = serde_json::from_value(expected).unwrap();
         assert_eq!(supplied, expected);
         let call = manifest
@@ -446,20 +446,20 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
             .resolve_mcp_tool_call("db.query", &supplied, &paths)
             .is_err());
     }
-    assert!(cos::apps::mcp_tool_for_command(&manifest, "execute").is_err());
+    assert!(yu::apps::mcp_tool_for_command(&manifest, "execute").is_err());
 }
 
 #[test]
 fn published_net_fixture_preserves_mcp_bindings_and_exact_destination_scopes() {
-    use cos::caps::{Cap, Scope, Verb};
+    use yu::caps::{Cap, Scope, Verb};
 
     let directory = app_sources::app_dir("net");
     assert!(directory.ends_with("capabilities/http/apps/net"));
-    let manifest = cos::caps::manifest::Manifest::from_json(
+    let manifest = yu::caps::manifest::Manifest::from_json(
         &std::fs::read_to_string(directory.join("app.json")).unwrap(),
     )
     .unwrap();
-    assert!(cos::apps::is_mcp_only_cli(&manifest));
+    assert!(yu::apps::is_mcp_only_cli(&manifest));
     let service = manifest.mcp.as_ref().unwrap();
     assert!(service.access.system_agent);
     assert!(!service.access.external_agents);
@@ -476,12 +476,12 @@ fn published_net_fixture_preserves_mcp_bindings_and_exact_destination_scopes() {
         .as_deref()
         .unwrap_or_else(|| manifest.runtime.default_mcp_entry());
     assert!(directory.join(entry).is_file());
-    let paths = cos::caps::args::PathContext {
+    let paths = yu::caps::args::PathContext {
         home: directory.clone(),
         cwd: None,
     };
-    let fetch = cos::apps::mcp_tool_for_command(&manifest, "fetch").unwrap();
-    let supplied = cos::caps::args::bind_supplied_cli_args(
+    let fetch = yu::apps::mcp_tool_for_command(&manifest, "fetch").unwrap();
+    let supplied = yu::caps::args::bind_supplied_cli_args(
         &fetch.args,
         &[
             "https://exam\u{ad}ple.test:/resource".into(),
@@ -507,8 +507,8 @@ fn published_net_fixture_preserves_mcp_bindings_and_exact_destination_scopes() {
     );
     let output = tempfile::tempdir().unwrap();
     let destination = output.path().join("download.bin");
-    let download = cos::apps::mcp_tool_for_command(&manifest, "download").unwrap();
-    let schema = cos::apps::tool_schema(download);
+    let download = yu::apps::mcp_tool_for_command(&manifest, "download").unwrap();
+    let schema = yu::apps::tool_schema(download);
     assert_eq!(schema["parameters"][1]["required"], true);
     assert_eq!(schema["parameters"][1]["binding"], "positional");
     assert_eq!(schema["stdin"], false);
@@ -553,17 +553,17 @@ fn published_net_fixture_preserves_mcp_bindings_and_exact_destination_scopes() {
 
 #[test]
 fn published_kv_fixture_preserves_cli_defaults_and_separate_key_and_store_scopes() {
-    use cos::caps::manifest::ScopeBinding;
-    use cos::caps::{Cap, Scope, Verb};
+    use yu::caps::manifest::ScopeBinding;
+    use yu::caps::{Cap, Scope, Verb};
 
     let directory = app_sources::app_dir("kv");
     assert!(directory.ends_with("capabilities/storage-sdk/apps/kv"));
-    let manifest = cos::caps::manifest::Manifest::from_json(
+    let manifest = yu::caps::manifest::Manifest::from_json(
         &std::fs::read_to_string(directory.join("app.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(manifest.id, "kv");
-    assert!(cos::apps::is_mcp_only_cli(&manifest));
+    assert!(yu::apps::is_mcp_only_cli(&manifest));
     let service = manifest.mcp.as_ref().unwrap();
     let entry = service
         .entry
@@ -580,7 +580,7 @@ fn published_kv_fixture_preserves_cli_defaults_and_separate_key_and_store_scopes
             .collect::<Vec<_>>(),
         ["kv.get", "kv.set", "kv.del", "kv.list", "kv.dump"]
     );
-    let paths = cos::caps::args::PathContext {
+    let paths = yu::caps::args::PathContext {
         home: directory.clone(),
         cwd: None,
     };
@@ -622,9 +622,9 @@ fn published_kv_fixture_preserves_cli_defaults_and_separate_key_and_store_scopes
             Cap::new(Verb::DATA_KV_READ, Scope::Wild),
         ),
     ] {
-        let tool = cos::apps::mcp_tool_for_command(&manifest, command).unwrap();
+        let tool = yu::apps::mcp_tool_for_command(&manifest, command).unwrap();
         let argv = argv.into_iter().map(String::from).collect::<Vec<_>>();
-        let supplied = cos::caps::args::bind_supplied_cli_args(&tool.args, &argv).unwrap();
+        let supplied = yu::caps::args::bind_supplied_cli_args(&tool.args, &argv).unwrap();
         let effective = manifest
             .resolve_mcp_tool_call(&tool.name, &supplied, &paths)
             .unwrap();
@@ -653,20 +653,20 @@ fn published_kv_fixture_preserves_cli_defaults_and_separate_key_and_store_scopes
             .resolve_mcp_tool_call(tool, &supplied, &paths)
             .is_err());
     }
-    assert!(cos::apps::mcp_tool_for_command(&manifest, "delete").is_err());
+    assert!(yu::apps::mcp_tool_for_command(&manifest, "delete").is_err());
 }
 
 #[test]
 fn published_summarize_preserves_cli_ai_consent_and_independent_memory_contract() {
-    use cos::caps::manifest::{AiPolicy, Manifest};
-    use cos::caps::{Cap, Scope, Verb};
+    use yu::caps::manifest::{AiPolicy, Manifest};
+    use yu::caps::{Cap, Scope, Verb};
 
     let directory = app_sources::app_dir("summarize");
     assert!(directory.ends_with("capabilities/ai-helpers/apps/summarize"));
     let manifest =
         Manifest::from_json(&std::fs::read_to_string(directory.join("app.json")).unwrap()).unwrap();
     assert_eq!(manifest.id, "summarize");
-    assert!(cos::apps::is_mcp_only_cli(&manifest));
+    assert!(yu::apps::is_mcp_only_cli(&manifest));
     let service = manifest.mcp.as_ref().unwrap();
     let entry = service
         .entry
@@ -676,15 +676,15 @@ fn published_summarize_preserves_cli_ai_consent_and_independent_memory_contract(
     assert!(service.access.system_agent);
     assert!(!service.access.external_agents);
     assert_eq!(service.tools.len(), 1);
-    let tool = cos::apps::mcp_tool_for_command(&manifest, "run").unwrap();
+    let tool = yu::apps::mcp_tool_for_command(&manifest, "run").unwrap();
     assert_eq!(tool.name, "summarize.run");
-    assert_eq!(cos::apps::tool_schema(tool)["stdin"], false);
-    let supplied = cos::caps::args::bind_supplied_cli_args(
+    assert_eq!(yu::apps::tool_schema(tool)["stdin"], false);
+    let supplied = yu::caps::args::bind_supplied_cli_args(
         &tool.args,
         &["explicit external text".to_string()],
     )
     .unwrap();
-    let paths = cos::caps::args::PathContext {
+    let paths = yu::caps::args::PathContext {
         home: directory,
         cwd: None,
     };
@@ -704,11 +704,11 @@ fn published_summarize_preserves_cli_ai_consent_and_independent_memory_contract(
         "safety": "strict", "origins": ["external-content"],
     }))
     .unwrap();
-    let consent = cos::ai::consent::Consent::approve(original.clone());
+    let consent = yu::ai::consent::Consent::approve(original.clone());
     assert_eq!(manifest.ai.as_ref().unwrap(), &original);
     assert_eq!(
-        cos::ai::consent::freshness(manifest.ai.as_ref().unwrap(), &consent),
-        cos::ai::consent::Freshness::Fresh
+        yu::ai::consent::freshness(manifest.ai.as_ref().unwrap(), &consent),
+        yu::ai::consent::Freshness::Fresh
     );
     for value in [
         json!({}),

@@ -150,7 +150,7 @@ jobs:
       - name: Build shared Agent binaries
         run: |
           source scripts/lib/arch.sh
-          cargo build --release --locked -p cos --target "$RUST_TARGET"
+          cargo build --release --locked -p yu --target "$RUST_TARGET"
           cargo build --release --locked \
             --manifest-path desktop/services/claw-applet-services/Cargo.toml \
             --bin claw-calendar-reader --target "$RUST_TARGET" \

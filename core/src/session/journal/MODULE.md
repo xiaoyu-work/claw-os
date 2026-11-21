@@ -168,6 +168,6 @@ setter — and they fail if a later change re-introduces any of them.
 ## Tests
 
 ```bash
-cargo test -p cos journal -- --test-threads=1
-cargo test -p cos --test session_journal_process -- --test-threads=1
+cargo test -p yu journal -- --test-threads=1
+cargo test -p yu --test session_journal_process -- --test-threads=1
 ```

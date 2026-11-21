@@ -2,7 +2,7 @@
 
 fn main() {
     if let Err(refusal) =
-        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+        yu::update::runtime::enforce_startup(yu::update::runtime::Scope::CompiledEpoch)
     {
         eprintln!("claw-file-manager: {}", refusal.message);
         std::process::exit(1);

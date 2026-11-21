@@ -31,7 +31,7 @@ cd core/src/agent/web/ui
 ~/.local/bin/bun run build
 ```
 
-Then cargo build -p cos --bin yu will pick up the new dist files
+Then cargo build -p yu --bin yu will pick up the new dist files
 via include_dir!. Commit the regenerated dist/.
 Install dependencies with `bun install` only when setting up a checkout or when
 the chosen validation reports missing dependencies. If `dist/` already has

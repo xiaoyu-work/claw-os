@@ -784,12 +784,12 @@ They never contain key material, bundle bytes or model-visible text.
 
 ```bash
 # Format, trust, verification, install and CLI unit tests
-cargo test -p cos --lib provenance:: -- --test-threads=1
+cargo test -p yu --lib provenance:: -- --test-threads=1
 
 # Real signing, real archives, real renames, TOCTOU and concurrency
-cargo test -p cos --test extension_provenance_process -- --test-threads=1
+cargo test -p yu --test extension_provenance_process -- --test-threads=1
 
 # Consumers
-cargo test -p cos --lib agent::skills:: agent::tools::mcp:: apps:: router:: \
+cargo test -p yu --lib agent::skills:: agent::tools::mcp:: apps:: router:: \
     -- --test-threads=1
 ```

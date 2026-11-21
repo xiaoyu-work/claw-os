@@ -1,9 +1,9 @@
 use std::io::Read;
 
 use clawd_client::system_review::{ReviewSubmission, SystemReview, MAX_DECISION_BYTES};
-use cos::clawd::protocol::Request;
-use cos::clawd::routes::Command;
-use cos::clawd::{client, config};
+use yu::clawd::protocol::Request;
+use yu::clawd::routes::Command;
+use yu::clawd::{client, config};
 use serde_json::json;
 
 fn main() {
@@ -13,7 +13,7 @@ fn main() {
     // A privileged helper reached through polkit: refuse to act when
     // this build is behind the security floor this system accepted.
     if let Err(refusal) =
-        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+        yu::update::runtime::enforce_startup(yu::update::runtime::Scope::CompiledEpoch)
     {
         fail(&refusal.message);
     }

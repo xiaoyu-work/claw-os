@@ -65,7 +65,7 @@ Unassociated rules never open the Activity database.
 From the repository root, with isolated test state and serial environment tests:
 
 ```bash
-cargo test -p cos --lib triggers:: -- --test-threads=1
+cargo test -p yu --lib triggers:: -- --test-threads=1
 ```
 
 Unit bodies mirror these sources under

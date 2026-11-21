@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use cos::agent::llm::construction::{
+use yu::agent::llm::construction::{
     resolve_aws_value, CredentialSource, HttpTransport, ProviderBuildContext,
 };
-use cos::agent::llm::credential_pool::{Pool, SelectionStrategy};
-use cos::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
-use cos::agent::llm::providers::{anthropic, bedrock, gemini, openai_compat};
-use cos::agent::llm::{Provider, Result};
-use cos::config::AgentConfig;
+use yu::agent::llm::credential_pool::{Pool, SelectionStrategy};
+use yu::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
+use yu::agent::llm::providers::{anthropic, bedrock, gemini, openai_compat};
+use yu::agent::llm::{Provider, Result};
+use yu::config::AgentConfig;
 
 struct ExternalCredentialSource;
 

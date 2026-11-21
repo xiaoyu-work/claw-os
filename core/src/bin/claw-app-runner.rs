@@ -3,7 +3,7 @@ fn main() {
     use std::io::Read;
 
     if let Err(refusal) =
-        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+        yu::update::runtime::enforce_startup(yu::update::runtime::Scope::CompiledEpoch)
     {
         fail(&refusal.message);
     }
@@ -85,9 +85,9 @@ fn main() {
     for _ in 0..500 {
         let bound = match isolated_session.as_deref() {
             Some(session_id) => {
-                cos::proc::session_id_is_bound_for_app(session_id, app_id.as_deref())
+                yu::proc::session_id_is_bound_for_app(session_id, app_id.as_deref())
             }
-            None => cos::proc::current_session_is_bound(app_id.as_deref()),
+            None => yu::proc::current_session_is_bound(app_id.as_deref()),
         };
         if bound {
             disable_dumpability();

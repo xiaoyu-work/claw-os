@@ -211,7 +211,7 @@ fn json_stdin_marker_is_preserved_and_input_is_bounded() {
     assert!(requested);
     assert_eq!(args, original);
     assert!(!extract_stdin_request(original, false).1);
-    let limit = cos::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES;
+    let limit = yu::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES;
     assert_eq!(
         read_requested_stdin(std::io::repeat(b' '), limit).unwrap_err(),
         format!("App stdin exceeds configured {limit}-byte limit")

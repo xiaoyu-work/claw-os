@@ -146,9 +146,9 @@ RFC 3339. Corrupt timestamps are errors, not invented recency values.
 From the repository root:
 
 ```bash
-cargo test -p cos --lib conversations:: -- --test-threads=1
+cargo test -p yu --lib conversations:: -- --test-threads=1
 
 # Recording and execution plumbing, including mock-provider lifecycle parity.
-cargo test -p cos --lib -- agent::runtime::loop_:: agent::service:: \
+cargo test -p yu --lib -- agent::runtime::loop_:: agent::service:: \
   --test-threads=1 --quiet
 ```

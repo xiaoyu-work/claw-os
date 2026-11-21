@@ -732,7 +732,7 @@ impl Fixture {
         let _ = tracing_subscriber::fmt()
             .with_ansi(false)
             .with_test_writer()
-            .with_env_filter("warn,cos::extension_host::client=debug")
+            .with_env_filter("warn,yu::extension_host::client=debug")
             .try_init();
         assert_eq!(unsafe { libc::getuid() }, 0);
         assert_eq!(unsafe { libc::geteuid() }, 0);

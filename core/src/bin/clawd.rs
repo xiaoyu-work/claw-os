@@ -1,17 +1,17 @@
 use std::path::PathBuf;
 
-use cos::clawd::{config, server};
+use yu::clawd::{config, server};
 
 fn main() {
     // Declare this the privileged broker before anything else can pull
     // a provider client, MCP session, App launch or model-visible tool
     // registry into the root address space. `agentd::guard` turns each
     // of those surfaces into a hard error from here on.
-    cos::agentd::guard::mark_broker_process();
-    cos::storage::set_private_umask();
+    yu::agentd::guard::mark_broker_process();
+    yu::storage::set_private_umask();
     let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
     if raw_args.first().is_some_and(|arg| arg == "--file-picker-helper") {
-        match cos::clawd::gui::file_picker_helper(&raw_args[1..]) {
+        match yu::clawd::gui::file_picker_helper(&raw_args[1..]) {
             Ok(()) => return,
             Err(error) => {
                 eprintln!("{error}");
@@ -20,7 +20,7 @@ fn main() {
         }
     }
     if raw_args.first().is_some_and(|arg| arg == "--capture-image-helper") {
-        match cos::clawd::capture::image_helper(&raw_args[1..]) {
+        match yu::clawd::capture::image_helper(&raw_args[1..]) {
             Ok(()) => return,
             Err(error) => {
                 eprintln!("{error}");
@@ -32,7 +32,7 @@ fn main() {
         .first()
         .is_some_and(|arg| arg == "--capture-gui-helper")
     {
-        match cos::clawd::capture::interactive_helper(&raw_args[1..]) {
+        match yu::clawd::capture::interactive_helper(&raw_args[1..]) {
             Ok(()) => return,
             Err(error) => {
                 eprintln!("{error}");
@@ -44,7 +44,7 @@ fn main() {
         .first()
         .is_some_and(|arg| arg == "--capture-helper")
     {
-        match cos::clawd::capture::helper(&raw_args[1..]) {
+        match yu::clawd::capture::helper(&raw_args[1..]) {
             Ok(()) => return,
             Err(error) => {
                 eprintln!("{error}");
@@ -56,7 +56,7 @@ fn main() {
         .first()
         .is_some_and(|arg| arg == "--media-player-helper")
     {
-        match cos::clawd::media_player::helper(&raw_args[1..]) {
+        match yu::clawd::media_player::helper(&raw_args[1..]) {
             Ok(value) => {
                 println!("{value}");
                 return;
@@ -71,7 +71,7 @@ fn main() {
         .first()
         .is_some_and(|arg| arg == "--location-helper")
     {
-        match cos::clawd::location::helper(&raw_args[1..]) {
+        match yu::clawd::location::helper(&raw_args[1..]) {
             Ok(value) => {
                 println!("{value}");
                 return;
@@ -126,11 +126,11 @@ fn main() {
         socket_group: config::socket_group(),
     };
 
-    if let Err(err) = cos::storage::harden_clawd_runtime() {
+    if let Err(err) = yu::storage::harden_clawd_runtime() {
         eprintln!("clawd: failed to harden runtime root: {err}");
         std::process::exit(1);
     }
-    if let Err(err) = cos::storage::harden_clawd_state() {
+    if let Err(err) = yu::storage::harden_clawd_state() {
         eprintln!("clawd: failed to secure persistent state: {err}");
         std::process::exit(1);
     }
@@ -143,7 +143,7 @@ fn main() {
     // when that has drifted, because every other Claw OS binary
     // enforces against it. Maintainer scripts are bypassable by copying
     // files into place; this is not.
-    if let Err(refusal) = cos::update::runtime::enforce_broker_startup() {
+    if let Err(refusal) = yu::update::runtime::enforce_broker_startup() {
         eprintln!("clawd: {refusal}");
         std::process::exit(1);
     }

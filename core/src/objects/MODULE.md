@@ -43,5 +43,5 @@ See [the App object contract](../../../docs/app-objects.md).
 ## Tests
 
 ```bash
-cargo test -p cos --lib object -- --test-threads=1
+cargo test -p yu --lib object -- --test-threads=1
 ```

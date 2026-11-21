@@ -21,12 +21,12 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if let Err(error) = cos::bridge::run_native_app_host_with_stdio(
+    if let Err(error) = yu::bridge::run_native_app_host_with_stdio(
         "mail-ai",
         std::path::Path::new("/usr/lib/cos/apps/mail-ai"),
         std::ffi::OsStr::new("/usr/bin/python3"),
         &args,
-        cos::mail_native::run,
+        yu::mail_native::run,
     ) {
         eprintln!("claw-mail-ai-host: {error}");
         std::process::exit(1);

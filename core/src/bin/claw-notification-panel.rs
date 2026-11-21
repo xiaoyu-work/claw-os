@@ -2,7 +2,7 @@
 
 fn main() {
     if let Err(refusal) =
-        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+        yu::update::runtime::enforce_startup(yu::update::runtime::Scope::CompiledEpoch)
     {
         eprintln!("claw-notification-panel: {}", refusal.message);
         std::process::exit(1);
@@ -55,14 +55,14 @@ mod panel {
     }
 
     async fn broker(params: Value) -> Result<Value, String> {
-        let request = cos::clawd::protocol::Request::new(
-            cos::clawd::routes::Command::parse("notification.presentation.control")
+        let request = yu::clawd::protocol::Request::new(
+            yu::clawd::routes::Command::parse("notification.presentation.control")
                 .ok_or("Root notification panel route is unavailable")?,
             params,
         );
         let response = tokio::time::timeout(
             CALL_TIMEOUT,
-            cos::clawd::client::request(cos::clawd::config::socket_path(), request),
+            yu::clawd::client::request(yu::clawd::config::socket_path(), request),
         )
         .await
         .map_err(|_| "notification panel broker timed out")?

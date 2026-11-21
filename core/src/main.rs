@@ -1,4 +1,4 @@
-use cos::{caps, router};
+use yu::{caps, router};
 use std::env;
 use std::io::{IsTerminal, Read};
 use std::process;
@@ -244,7 +244,7 @@ fn main() {
     // older than the release this system has already accepted. Decoding
     // the protocol first keeps this fail-closed refusal machine-readable.
     if let Err(refusal) =
-        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+        yu::update::runtime::enforce_startup(yu::update::runtime::Scope::CompiledEpoch)
     {
         if wire_v1 && !opaque_stdio {
             println!(
@@ -290,7 +290,7 @@ fn main() {
             eprintln!("local embedding pipe does not support the public wire envelope");
             process::exit(1);
         }
-        if let Err(error) = cos::model::local_embedding::serve() {
+        if let Err(error) = yu::model::local_embedding::serve() {
             eprintln!("yu local embedding: {error}");
             process::exit(1);
         }
@@ -322,7 +322,7 @@ fn main() {
     let result = if stdin_requested {
         match app_stdin_max_bytes().and_then(|limit| {
             let limit = if args.get(3..).is_some_and(|args| args == ["--args-stdin"]) {
-                limit.min(cos::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES)
+                limit.min(yu::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES)
             } else {
                 limit
             };

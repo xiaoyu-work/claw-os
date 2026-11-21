@@ -116,7 +116,7 @@ resource admission. Legacy native registration is retired and cannot mint
 a session; Native Messaging's App child uses the ordinary stdio route.
 
 ```bash
-cargo test -p cos --lib -- bridge::local::tests clawd::client::tests --test-threads=1
+cargo test -p yu --lib -- bridge::local::tests clawd::client::tests --test-threads=1
 ```
 
 The ignored `root_local_registration_requires_protected_owner_review` fixture
@@ -175,9 +175,9 @@ completion blocks Store replacement explicitly.
 The explicit real-runner check is:
 
 ```bash
-cargo build -p cos --bin claw-app-runner --locked
+cargo build -p yu --bin claw-app-runner --locked
 COS_CAPTURED_TEST_RUNNER="$PWD/target/debug/claw-app-runner" \
-  cargo test -p cos --lib bridge::captured::tests::process \
+  cargo test -p yu --lib bridge::captured::tests::process \
   -- --ignored --nocapture --test-threads=1
 ```
 
@@ -534,10 +534,10 @@ on a consumer.
 
 ```bash
 # Policy, derivation, argv, seccomp, brokers
-cargo test -p cos worker:: -- --test-threads=1
+cargo test -p yu worker:: -- --test-threads=1
 
 # Adversarial tests against real processes, namespaces and mounts
-cargo test -p cos --test worker_isolation -- --test-threads=1
+cargo test -p yu --test worker_isolation -- --test-threads=1
 ```
 
 The adversarial suite skips itself, loudly, on a host that cannot

@@ -6,7 +6,7 @@
 //! can say:
 //!
 //! ```ignore
-//! use cos::session;
+//! use yu::session;
 //! let s = session::promote_to_durable("整理发票", "cos-agent")?;
 //! // …agent loop, calls into apps that update s.sid()…
 //! s.finish(session::Status::Done)?;

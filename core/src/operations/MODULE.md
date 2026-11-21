@@ -54,5 +54,5 @@ to OS-confirmed effects. See [file change plans](../../../docs/file-change-plans
 ## Tests
 
 ```bash
-cargo test -p cos --lib -- operations:: operation_previews:: manifest::effects:: --test-threads=1
+cargo test -p yu --lib -- operations:: operation_previews:: manifest::effects:: --test-threads=1
 ```

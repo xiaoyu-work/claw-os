@@ -61,5 +61,5 @@ Unit test bodies mirror source paths under `core/test/unit/`. Source modules
 include them only when `cfg(test)` is active:
 
 ```bash
-cargo test -p cos <module-or-test-filter> -- --test-threads=1
+cargo test -p yu <module-or-test-filter> -- --test-threads=1
 ```

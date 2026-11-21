@@ -758,7 +758,7 @@ permission acquisition are not silently made available by this Host.
 From the OS repository root on Linux:
 
 ```bash
-cargo test -p cos --lib -- --test-threads=1 \
+cargo test -p yu --lib -- --test-threads=1 \
   caps::manifest apps::permission_review clawd::app_sessions \
   clawd::capture \
   clawd::system_review::presentation clawd::wire::requests \
@@ -766,7 +766,7 @@ cargo test -p cos --lib -- --test-threads=1 \
   clawd::gui::retirement clawd::app_permissions clawd::authority::store::tests::approval \
   worker::gui_transport \
   worker::seccomp::gui worker::net_broker display_session::registry::tests::spontaneous
-cargo clippy -p cos --lib --bin claw-gui-runner \
+cargo clippy -p yu --lib --bin claw-gui-runner \
   --bin claw-display-host --bin claw-display-session -- -D warnings
 ```
 

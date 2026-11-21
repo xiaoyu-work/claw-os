@@ -45,7 +45,7 @@
 //! ## Example
 //!
 //! ```ignore
-//! use cos::session;
+//! use yu::session;
 //! let sid = session::create("invoice agent").unwrap();
 //! let guard = session::try_acquire(&sid).expect("nobody else holds it");
 //! session::append_turn(&sid, turn).unwrap(); // safe — we hold the lease

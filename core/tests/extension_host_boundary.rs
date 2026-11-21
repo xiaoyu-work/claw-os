@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cos::caps::{Cap, CapSet, Scope, Verb};
-use cos::extension_host::{broker, client, spawn};
+use yu::caps::{Cap, CapSet, Scope, Verb};
+use yu::extension_host::{broker, client, spawn};
 
 const HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 const APP_RUNNER_BIN: &str = env!("CARGO_BIN_EXE_claw-app-runner");
@@ -171,7 +171,7 @@ fn install_agent_extension(
     id: &str,
     mode: &str,
     timeout_ms: u64,
-) -> cos::extension_host::protocol::AgentExtensionRegistration {
+) -> yu::extension_host::protocol::AgentExtensionRegistration {
     let package_dir = root.join(id);
     std::fs::create_dir_all(package_dir.join("bin")).unwrap();
     std::fs::set_permissions(&package_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -184,17 +184,17 @@ fn install_agent_extension(
     let entry_path = package_dir.join("bin/observer.py");
     std::fs::write(&entry_path, &entry).unwrap();
     std::fs::set_permissions(&entry_path, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let content_file = cos::provenance::envelope::FileEntry {
+    let content_file = yu::provenance::envelope::FileEntry {
         path: "bin/observer.py".to_string(),
-        kind: cos::provenance::envelope::NodeKind::File,
+        kind: yu::provenance::envelope::NodeKind::File,
         mode: 0o555,
         size: entry.len() as u64,
-        digest: format!("sha256:{}", cos::crypto::sha256_hex(&entry)),
+        digest: format!("sha256:{}", yu::crypto::sha256_hex(&entry)),
     };
-    let content_digest = cos::provenance::envelope::content_digest(&[
-        cos::provenance::envelope::FileEntry {
+    let content_digest = yu::provenance::envelope::content_digest(&[
+        yu::provenance::envelope::FileEntry {
             path: "bin".to_string(),
-            kind: cos::provenance::envelope::NodeKind::Dir,
+            kind: yu::provenance::envelope::NodeKind::Dir,
             mode: 0o755,
             size: 0,
             digest: String::new(),
@@ -237,17 +237,17 @@ fn install_agent_extension(
     std::fs::write(&manifest_path, &manifest_bytes).unwrap();
     std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o444)).unwrap();
     let mut options =
-        cos::provenance::VerifyOptions::new(cos::provenance::PackageKind::AgentExtension)
+        yu::provenance::VerifyOptions::new(yu::provenance::PackageKind::AgentExtension)
             .expect_id(id);
     options.allow_developer = false;
-    let package = cos::provenance::verify::verify_package(
+    let package = yu::provenance::verify::verify_package(
         &package_dir,
         &options,
-        &cos::provenance::trust_store(),
+        &yu::provenance::trust_store(),
     )
     .unwrap();
-    let manifest_digest = cos::crypto::sha256_hex(&manifest_bytes);
-    cos::extension_host::protocol::AgentExtensionRegistration {
+    let manifest_digest = yu::crypto::sha256_hex(&manifest_bytes);
+    yu::extension_host::protocol::AgentExtensionRegistration {
         extension_id: id.to_string(),
         extension_version: "1.0.0".to_string(),
         package_digest: package.content_digest().to_string(),
@@ -256,9 +256,9 @@ fn install_agent_extension(
     }
 }
 
-fn installed_registration(id: &str) -> cos::extension_host::protocol::AgentExtensionRegistration {
+fn installed_registration(id: &str) -> yu::extension_host::protocol::AgentExtensionRegistration {
     let path = std::env::var("COS_EXTENSION_BOUNDARY_REGISTRATIONS").unwrap();
-    let registrations: HashMap<String, cos::extension_host::protocol::AgentExtensionRegistration> =
+    let registrations: HashMap<String, yu::extension_host::protocol::AgentExtensionRegistration> =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     registrations.get(id).cloned().unwrap()
 }
@@ -290,14 +290,14 @@ impl CgroupRootGuard {
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir(&path).expect("create delegated cgroup root");
-        std::env::set_var(cos::extension_host::spawn::CGROUP_ROOT_ENV, &path);
+        std::env::set_var(yu::extension_host::spawn::CGROUP_ROOT_ENV, &path);
         Self(path)
     }
 }
 
 impl Drop for CgroupRootGuard {
     fn drop(&mut self) {
-        std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
+        std::env::remove_var(yu::extension_host::spawn::CGROUP_ROOT_ENV);
         let _ = std::fs::remove_dir(&self.0);
     }
 }
@@ -318,7 +318,7 @@ impl TestEnvironment {
             .prefix("co-")
             .tempdir_in("/run")
             .ok()?;
-        let owner = cos::agentd::spawn::resolve_identity(owner_uid).ok()?;
+        let owner = yu::agentd::spawn::resolve_identity(owner_uid).ok()?;
         make_owner_writable(owner_data.path(), owner_uid, owner.gid).ok()?;
         std::fs::set_permissions(owner_data.path(), std::fs::Permissions::from_mode(0o700)).ok()?;
         std::fs::create_dir_all("/usr/lib/cos").ok()?;
@@ -460,7 +460,7 @@ impl Drop for TestEnvironment {
             "COS_APPS_DIR",
             "COS_AGENT_EXTENSIONS_DIR",
             "COS_EXTENSION_BOUNDARY_REGISTRATIONS",
-            cos::agentd::spawn::ISOLATED_GROUP_ENV,
+            yu::agentd::spawn::ISOLATED_GROUP_ENV,
             LEAK_MARKER,
         ] {
             std::env::remove_var(key);
@@ -554,22 +554,22 @@ fn process_start(pid: u32) -> Option<u64> {
 async fn send_agent_extension_probe(
     host: &client::ExtensionHostClient,
     id: &str,
-    binding: cos::extension_host::abi::AbiBinding,
+    binding: yu::extension_host::abi::AbiBinding,
     handle: String,
     timeout: Duration,
-) -> Result<cos::extension_host::protocol::AgentExtensionResult, String> {
-    let deadline = cos::extension_host::abi::MonotonicDeadlineNs::after(timeout)?;
+) -> Result<yu::extension_host::protocol::AgentExtensionResult, String> {
+    let deadline = yu::extension_host::abi::MonotonicDeadlineNs::after(timeout)?;
     host.send_agent_extension_event(
         id.to_string(),
         binding,
         uuid::Uuid::new_v4().simple().to_string(),
         deadline,
-        cos::extension_host::abi::EventPayload::SessionStart {
+        yu::extension_host::abi::EventPayload::SessionStart {
             source: "boundary-test".to_string(),
             attended: false,
             delegated: false,
         },
-        vec![cos::agent_extensions::capability_ref::CapabilityReference {
+        vec![yu::agent_extensions::capability_ref::CapabilityReference {
             requested_index: 0,
             handle,
         }],
@@ -611,8 +611,8 @@ async fn worker_child() {
     assert_eq!(output["command"], "echo");
     assert!(output["env_leak"].is_null(), "{output}");
 
-    let call_context = cos::agent::tools::app_gateway::McpCallContext {
-        wire_version: cos::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
+    let call_context = yu::agent::tools::app_gateway::McpCallContext {
+        wire_version: yu::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
         call_id: "call-boundary".to_string(),
         trace_id: "call-boundary".to_string(),
         deadline_unix_ms: Some(
@@ -625,8 +625,8 @@ async fn worker_child() {
         ),
         session_id: binding.session_id.clone(),
         task_id: Some(binding.task_id.clone()),
-        caller: cos::agent::tools::app_gateway::McpPrincipal {
-            kind: cos::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
+        caller: yu::agent::tools::app_gateway::McpPrincipal {
+            kind: yu::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
             id: binding.session_id.clone().expect("bound session"),
             owner_uid: binding.owner_uid,
         },
@@ -642,10 +642,10 @@ async fn worker_child() {
         .await
         .expect_err("a task Host must not execute an App call locally");
     assert!(error.contains("manager is unavailable"), "{error}");
-    let spoof = cos::clawd::client::request(
+    let spoof = yu::clawd::client::request(
         &binding.broker_socket,
-        cos::clawd::wire::Request::build(
-            cos::clawd::routes::Command::TaskCancel,
+        yu::clawd::wire::Request::build(
+            yu::clawd::routes::Command::TaskCancel,
             serde_json::json!({"id":"other-task"}),
         ),
     )
@@ -661,7 +661,7 @@ async fn worker_child() {
     let mcp_name = "hosted-echo";
     let mcp_server = std::env::var("COS_EXTENSION_BOUNDARY_MCP").unwrap();
     let tools = client
-        .attach_mcp(cos::agent::tools::mcp::integration::McpServerSpec {
+        .attach_mcp(yu::agent::tools::mcp::integration::McpServerSpec {
             name: mcp_name.to_string(),
             command: "python3".to_string(),
             args: vec![mcp_server.clone()],
@@ -678,15 +678,15 @@ async fn worker_child() {
         .await
         .expect("attach hosted MCP");
     let descriptor_digest =
-        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(mcp_name, tools)
+        yu::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(mcp_name, tools)
             .expect("descriptor digest");
-    let audit = cos::extension_host::protocol::McpInvocationAudit {
+    let audit = yu::extension_host::protocol::McpInvocationAudit {
         policy_identity: "mcp_hosted_echo_ping".to_string(),
         server_identity: mcp_name.to_string(),
-        handle_digest: cos::crypto::sha256_hex(b"extension-boundary-handle"),
+        handle_digest: yu::crypto::sha256_hex(b"extension-boundary-handle"),
         descriptor_digest: descriptor_digest.clone(),
         capability_generation: binding.capability_generation.clone(),
-        untrusted_remote_name: cos::audit_policy::text_digest("ping"),
+        untrusted_remote_name: yu::audit_policy::text_digest("ping"),
     };
     let value = client
         .call_mcp(
@@ -702,7 +702,7 @@ async fn worker_child() {
     assert!(value.content.iter().any(|item| {
         matches!(
             item,
-            cos::agent::tools::mcp::protocol::ContentItem::Text { text } if text == "pong"
+            yu::agent::tools::mcp::protocol::ContentItem::Text { text } if text == "pong"
         )
     }));
     assert!(client
@@ -723,10 +723,10 @@ async fn worker_child() {
         .attach_agent_extension(registration.clone())
         .await
         .expect("attach generic Agent extension");
-    let refs = Arc::new(cos::agent_extensions::capability_ref::CapabilityReferenceStore::new(1));
+    let refs = Arc::new(yu::agent_extensions::capability_ref::CapabilityReferenceStore::new(1));
     let deadline =
-        cos::extension_host::abi::MonotonicDeadlineNs::after(Duration::from_secs(1)).unwrap();
-    let reference_context = cos::agent_extensions::capability_ref::ReferenceContext {
+        yu::extension_host::abi::MonotonicDeadlineNs::after(Duration::from_secs(1)).unwrap();
+    let reference_context = yu::agent_extensions::capability_ref::ReferenceContext {
         owner_uid: binding.owner_uid,
         session_id: &binding.session_id,
         task_id: &binding.task_id,
@@ -741,7 +741,7 @@ async fn worker_child() {
         .issue_event(
             &reference_context,
             std::slice::from_ref(&capability),
-            &[cos::agent_extensions::manifest::ExtensionActionPolicy {
+            &[yu::agent_extensions::manifest::ExtensionActionPolicy {
                 requested_index: 0,
                 tool: "now".to_string(),
                 policy_id: "builtin.now/v1".to_string(),
@@ -755,7 +755,7 @@ async fn worker_child() {
             binding.clone(),
             "normal-event".to_string(),
             deadline,
-            cos::extension_host::abi::EventPayload::SessionStart {
+            yu::extension_host::abi::EventPayload::SessionStart {
                 source: "boundary-test".to_string(),
                 attended: false,
                 delegated: false,
@@ -777,14 +777,14 @@ async fn worker_child() {
         .expect("explicit proposed action");
     lease
         .consume_all(&[
-            cos::agent_extensions::capability_ref::ActionReferenceBinding {
+            yu::agent_extensions::capability_ref::ActionReferenceBinding {
                 reference: action.capability_ref.clone(),
                 action_id: action.action_id.clone(),
                 tool: action.tool.clone(),
                 policy_id: "builtin.now/v1".to_string(),
-                input_digest: cos::crypto::sha256_hex(b"{}"),
+                input_digest: yu::crypto::sha256_hex(b"{}"),
                 capability,
-                operation_digest: cos::crypto::sha256_hex(b"boundary-operation"),
+                operation_digest: yu::crypto::sha256_hex(b"boundary-operation"),
             },
         ])
         .expect("resolve exact reference");
@@ -872,7 +872,7 @@ async fn worker_child() {
         .detach_agent_extension(
             "forged".to_string(),
             forged_binding,
-            cos::extension_host::abi::ShutdownReason::Disabled,
+            yu::extension_host::abi::ShutdownReason::Disabled,
         )
         .await
         .expect("detach forged probe");
@@ -895,7 +895,7 @@ async fn worker_child() {
         .detach_agent_extension(
             "descendant".to_string(),
             descendant_binding,
-            cos::extension_host::abi::ShutdownReason::TaskComplete,
+            yu::extension_host::abi::ShutdownReason::TaskComplete,
         )
         .await
         .expect("detach descendant probe");
@@ -903,14 +903,14 @@ async fn worker_child() {
         .detach_agent_extension(
             "steady".to_string(),
             steady,
-            cos::extension_host::abi::ShutdownReason::TaskComplete,
+            yu::extension_host::abi::ShutdownReason::TaskComplete,
         )
         .await
         .expect("detach steady extension");
 }
 
 fn worker_command(
-    identity: &cos::agentd::spawn::WorkerIdentity,
+    identity: &yu::agentd::spawn::WorkerIdentity,
     execution_gid: u32,
     binding_path: &std::path::Path,
     env: &TestEnvironment,
@@ -969,30 +969,30 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1000);
-    let identity = cos::agentd::spawn::resolve_identity(uid).expect("resolve task identity");
-    std::env::set_var(cos::agentd::spawn::ISOLATED_GROUP_ENV, "nogroup");
+    let identity = yu::agentd::spawn::resolve_identity(uid).expect("resolve task identity");
+    std::env::set_var(yu::agentd::spawn::ISOLATED_GROUP_ENV, "nogroup");
     let execution_gid =
-        cos::agentd::spawn::resolve_isolated_execution_gid().expect("isolated execution gid");
+        yu::agentd::spawn::resolve_isolated_execution_gid().expect("isolated execution gid");
     let env = TestEnvironment::new(uid, execution_gid).expect("test environment");
-    let app = cos::apps::find(env._apps.path(), "echo-app")
+    let app = yu::apps::find(env._apps.path(), "echo-app")
         .expect("echo App fixture is discoverable");
     let package = app.require_verified().expect("verified echo App fixture");
-    let review = cos::approvals::system_review::submit(
+    let review = yu::approvals::system_review::submit(
         uid,
-        cos::approvals::system_review::ReviewKind::AppActivation,
+        yu::approvals::system_review::ReviewKind::AppActivation,
         package,
         "private extension boundary fixture".to_string(),
     )
     .expect("fixture activation review");
-    cos::approvals::system_review::decide(uid, &review.id, true, Some(package))
+    yu::approvals::system_review::decide(uid, &review.id, true, Some(package))
         .expect("fixture owner decision");
-    cos::approvals::system_review::consume(uid, &review.id, package)
+    yu::approvals::system_review::consume(uid, &review.id, package)
         .expect("fixture activation confirmation");
     let registration_path = std::env::var("COS_EXTENSION_BOUNDARY_REGISTRATIONS").unwrap();
-    let registrations: HashMap<String, cos::extension_host::protocol::AgentExtensionRegistration> =
+    let registrations: HashMap<String, yu::extension_host::protocol::AgentExtensionRegistration> =
         serde_json::from_slice(&std::fs::read(registration_path).unwrap()).unwrap();
     let selected = registrations.keys().cloned().collect::<Vec<_>>();
-    let installed = cos::agent_extensions::registry::ExtensionRegistry::load_selected(
+    let installed = yu::agent_extensions::registry::ExtensionRegistry::load_selected(
         &env.extensions,
         &selected,
     );
@@ -1013,8 +1013,8 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let worker_pid = worker.id().expect("worker pid");
     let worker_start = process_start(worker_pid).expect("worker start time");
 
-    let extension_identity = cos::extension_host::identity::ExtensionIdentity {
-        uid: cos::extension_host::identity::FIRST_UID,
+    let extension_identity = yu::extension_host::identity::ExtensionIdentity {
+        uid: yu::extension_host::identity::FIRST_UID,
         gid: execution_gid,
         username: "cos-ext-00".to_string(),
     };
@@ -1029,17 +1029,17 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         0
     );
     let isolation =
-        cos::agentd::spawn::ExecutionIsolation::capture(&primary_path, identity.uid, execution_gid)
+        yu::agentd::spawn::ExecutionIsolation::capture(&primary_path, identity.uid, execution_gid)
             .expect("capture execution isolation");
     let paths = spawn::HostPaths::create(&identity).expect("host paths");
     let listener =
         broker::bind_listener(&paths, extension_identity.uid, execution_gid).expect("listener");
     let cgroup_root = CgroupRootGuard::create();
-    let state = cos::clawd::state::DaemonState::try_new().expect("daemon state");
-    let admission = cos::clawd::transport::limits::Admission::new(
-        cos::clawd::transport::limits::Limits::default(),
+    let state = yu::clawd::state::DaemonState::try_new().expect("daemon state");
+    let admission = yu::clawd::transport::limits::Admission::new(
+        yu::clawd::transport::limits::Limits::default(),
     );
-    let context = cos::agentd::supervisor::BrokerContext::new(
+    let context = yu::agentd::supervisor::BrokerContext::new(
         state.clone(),
         admission.clone(),
         primary_path,
@@ -1049,13 +1049,13 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let task_id = "extension-host-integration";
     let task_session = "task-session";
     let host_session = "extension-session";
-    let expires = cos::agentd::grant::now_ms() + 120_000;
+    let expires = yu::agentd::grant::now_ms() + 120_000;
     let caps = CapSet::from_caps([
         Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app")),
         Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app/ping")),
     ]);
-    let capability_generation = cos::agent::tools::exposure::capability_generation(&caps);
-    cos::storage::install_routed_extension_reader(identity.uid, extension_identity.uid)
+    let capability_generation = yu::agent::tools::exposure::capability_generation(&caps);
+    yu::storage::install_routed_extension_reader(identity.uid, extension_identity.uid)
         .expect("install routed registry reader");
     let mut approved_paths = vec![
         spawn::approve_runtime_path(&identity.home, identity.uid).expect("approve owner home"),
@@ -1075,7 +1075,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
             .expect("approve installed extension root"),
     );
     let launch = spawn::HostLaunchSpec {
-        purpose: cos::extension_host::protocol::HostPurpose::Task,
+        purpose: yu::extension_host::protocol::HostPurpose::Task,
         lease_id: task_id.to_string(),
         authority_session_id: Some(task_session.to_string()),
         app_id: None,
@@ -1101,7 +1101,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     )
     .expect("spawn host");
 
-    let task_session_info = cos::proc::SessionInfo {
+    let task_session_info = yu::proc::SessionInfo {
         session_id: task_session.to_string(),
         pid: worker_pid,
         command: vec!["claw-agentd-worker".to_string()],
@@ -1122,23 +1122,23 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         app_id: None,
         pending_bind: false,
         start_time_ticks: Some(worker_start),
-        client: cos::session::SessionClient::new(
-            cos::session::SessionSource::BrokerTask,
+        client: yu::session::SessionClient::new(
+            yu::session::SessionSource::BrokerTask,
             false,
             true,
         ),
     };
-    cos::proc::register_session_for_owner(task_session_info.clone(), uid)
+    yu::proc::register_session_for_owner(task_session_info.clone(), uid)
         .expect("register task session");
-    cos::proc::register_session_for_owner(
-        cos::proc::SessionInfo {
+    yu::proc::register_session_for_owner(
+        yu::proc::SessionInfo {
             session_id: host_session.to_string(),
             pid: host.pid,
             command: vec!["claw-extension-host".to_string(), task_id.to_string()],
             started_at: chrono::Utc::now().to_rfc3339(),
             stdout_path: String::new(),
             stderr_path: String::new(),
-            group: Some(cos::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
+            group: Some(yu::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
             parent: Some(task_session.to_string()),
             workdir: Some(identity.home.to_string_lossy().into_owned()),
             exit_code: None,
@@ -1152,8 +1152,8 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
             app_id: None,
             pending_bind: false,
             start_time_ticks: host.start_time_ticks,
-            client: cos::session::SessionClient::new(
-                cos::session::SessionSource::BrokerTask,
+            client: yu::session::SessionClient::new(
+                yu::session::SessionSource::BrokerTask,
                 false,
                 true,
             ),
@@ -1163,7 +1163,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     .expect("register host session");
     let lease = Arc::new(
         broker::ExtensionLease::new(
-            cos::extension_host::protocol::HostPurpose::Task,
+            yu::extension_host::protocol::HostPurpose::Task,
             task_id.to_string(),
             Some(task_session.to_string()),
             Some(host_session.to_string()),
@@ -1229,9 +1229,9 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
 
     lease.close();
     broker_task.abort();
-    cos::proc::deregister_session_for_owner(host_session, uid);
-    cos::proc::deregister_session_for_owner(task_session, uid);
-    cos::storage::remove_routed_extension_reader(identity.uid, extension_identity.uid)
+    yu::proc::deregister_session_for_owner(host_session, uid);
+    yu::proc::deregister_session_for_owner(task_session, uid);
+    yu::storage::remove_routed_extension_reader(identity.uid, extension_identity.uid)
         .expect("remove routed registry reader");
     host.cgroup.cleanup().await.expect("clean host containment");
     let _ = host.child.wait().await;

@@ -81,6 +81,6 @@ pagination preserves the link, target and displayed content revision.
 ## Validation
 
 ```bash
-cargo test -p cos activities::sqlite::workspaces:: -- --test-threads=1
+cargo test -p yu activities::sqlite::workspaces:: -- --test-threads=1
 cargo test -p clawd-client --lib --locked
 ```

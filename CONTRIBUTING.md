@@ -31,7 +31,7 @@ The unpublished OS display runtime has separate native build inputs. From the
 repository root, with the PAM development library installed:
 
 ```bash
-cargo build -p cos --bin claw-display-host --bin claw-display-session --bin claw-gui-runner --locked
+cargo build -p yu --bin claw-display-host --bin claw-display-session --bin claw-gui-runner --locked
 cargo build -p claw-display-login --locked
 cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
 ```
@@ -230,7 +230,7 @@ compatibility delivery, not the independent App APT ownership cutover.
 python3 scripts/app_sources.py
 
 # Validate explicit source kinds and the published Doc/DB/KV/Net/Summarize fixtures.
-cargo test -p cos --test app_source_fixtures -- --test-threads=1
+cargo test -p yu --test app_source_fixtures -- --test-threads=1
 
 # Core tests share process-global environment variables.
 (cd core && cargo test -- --test-threads=1)
@@ -248,7 +248,7 @@ PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
     packaging/deb/tests/test_app_sources.py
 
 # Browser broker.
-cargo test -p cos --lib clawd::browser -- --test-threads=1
+cargo test -p yu --lib clawd::browser -- --test-threads=1
 
 # OS Applet providers build independently, without App sources or GUI inputs.
 cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
@@ -363,7 +363,7 @@ From the repository root on Linux/WSL:
 
 ```sh
 cargo test -p clawd-client --lib --locked
-cargo test -p cos --lib nearby -- --test-threads=1
+cargo test -p yu --lib nearby -- --test-threads=1
 cargo test --manifest-path crates/claw-nearby/Cargo.toml --locked
 cargo test --manifest-path crates/claw-nearby/vendor/owlyd/Cargo.toml --test service --locked
 python3 -B packaging/deb/tests/test_nearby.py

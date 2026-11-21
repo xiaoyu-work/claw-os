@@ -410,9 +410,9 @@ capabilities or another task's configuration.
 From the repository root in Linux/WSL:
 
 ```bash
-cargo test -p cos --lib agent::terminal:: -- --test-threads=1
+cargo test -p yu --lib agent::terminal:: -- --test-threads=1
 
-cargo build -p cos --bin yu
+cargo build -p yu --bin yu
 original_namespace="$(readlink /proc/self/ns/mnt)"
 for scenario in complete slow-progress slow-submit slow-review slow-panel cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice approval-external approval-resumed approval-failure approval-narrow attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
@@ -427,7 +427,7 @@ The real authorization fixture needs `pkexec`, `polkitd`, D-Bus, OpenSSL and
 PAM. From the repository root, after building the binaries:
 
 ```bash
-cargo build -p cos --bin yu --bin clawd --bin claw-approval-helper
+cargo build -p yu --bin yu --bin clawd --bin claw-approval-helper
 original_mount="$(readlink /proc/self/ns/mnt)"
 original_pid="$(readlink /proc/self/ns/pid)"
 sudo unshare --mount --pid --fork --mount-proc --net \

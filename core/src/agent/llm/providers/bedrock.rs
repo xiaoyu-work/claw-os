@@ -702,7 +702,7 @@ pub(crate) mod stream_wire {
                     // policy, ignore quietly — AWS may add new
                     // categories. Still log to stderr at debug.
                     tracing::debug!(
-                        target: "cos::bedrock_stream",
+                        target: "yu::bedrock_stream",
                         "ignoring unknown :message-type {other:?}"
                     );
                 }

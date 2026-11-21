@@ -386,7 +386,7 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
         // garbage-collected on the next `gc` pass.
         if let Err(e) = registry::EnginesIndex::cleanup_uninstalled_dir(&engine, &version) {
             tracing::warn!(
-                target: "cos::engine_pkg",
+                target: "yu::engine_pkg",
                 engine = %engine, version = %version,
                 error = %e,
                 "registry uninstall committed, but install dir cleanup failed"
@@ -406,7 +406,7 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
     for v in &removed {
         if let Err(e) = registry::EnginesIndex::cleanup_uninstalled_dir(&engine, v) {
             tracing::warn!(
-                target: "cos::engine_pkg",
+                target: "yu::engine_pkg",
                 engine = %engine, version = %v,
                 error = %e,
                 "registry gc committed, but install dir cleanup failed"
@@ -762,7 +762,7 @@ async fn run_online_install(
         )?;
         if expected_sha.is_none() {
             tracing::warn!(
-                target: "cos::engine_pkg",
+                target: "yu::engine_pkg",
                 engine = %engine,
                 version = %release.tag_name,
                 asset = %asset.name,

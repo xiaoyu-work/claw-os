@@ -466,7 +466,7 @@ their own bus and an explicit test-only fake executable, never installed
 `cos`, a live GUI, real PAM, accounts or clipboard. Run on Linux:
 
 ```bash
-cargo test -p cos --bin claw-file-manager -- --test-threads=1
+cargo test -p yu --bin claw-file-manager -- --test-threads=1
 ```
 
 Real authenticated GUI acceptance with the installed Files App is a separate
@@ -569,7 +569,7 @@ to avoid reusing a stale commit-derived package filename.
 
 ```bash
 # Build binaries for the host architecture (amd64 shown here).
-cargo build --release -p cos --target x86_64-unknown-linux-musl
+cargo build --release -p yu --target x86_64-unknown-linux-musl
 
 # Build only the reusable Agent
 python3 scripts/app_packages.py prepare --variant agent --architecture amd64

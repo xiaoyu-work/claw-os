@@ -476,7 +476,7 @@ boundaries.
 From the repository root on Linux or WSL:
 
 ```bash
-cargo test -p cos --lib activities:: -- --test-threads=1
+cargo test -p yu --lib activities:: -- --test-threads=1
 ```
 
 Receipt unit coverage includes schema-1 preservation, failed migration

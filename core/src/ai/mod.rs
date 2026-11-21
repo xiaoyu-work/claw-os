@@ -1,4 +1,4 @@
-//! `cos::ai` — the App–AI Gate (internal kernel module).
+//! `yu::ai` — the App–AI Gate (internal kernel module).
 //!
 //! Every App-driven LLM / image / TTS / STT / vision call passes
 //! through this subsystem. The gate enforces, in order:

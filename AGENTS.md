@@ -103,7 +103,7 @@ needed by the build.
 Core development:
 
 ```bash
-cargo check -p cos --lib
+cargo check -p yu --lib
 cd core && cargo build
 ```
 
@@ -166,11 +166,11 @@ behavior, adding a regression, or diagnosing a failure.
 
 ```bash
 # Extension provenance (format, trust, verify, install, CLI)
-cargo test -p cos --lib provenance:: -- --test-threads=1
-cargo test -p cos --test extension_provenance_process -- --test-threads=1
+cargo test -p yu --lib provenance:: -- --test-threads=1
+cargo test -p yu --test extension_provenance_process -- --test-threads=1
 
 # One Rust test or module
-cargo test -p cos <test-filter> -- --test-threads=1
+cargo test -p yu <test-filter> -- --test-threads=1
 
 # Complete core suite
 (cd core && cargo test -- --test-threads=1)
@@ -183,7 +183,7 @@ GITHUB_WORKSPACE="$PWD" RUNNER_TEMP="$PWD/build" \
   bash scripts/ci/test-boundaries.sh capture
 
 # Browser broker and typed provider contract
-cargo test -p cos --lib clawd::browser -- --test-threads=1
+cargo test -p yu --lib clawd::browser -- --test-threads=1
 
 # OS Applet providers (independent workspace; no App source preparation)
 cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
