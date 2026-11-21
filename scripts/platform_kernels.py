@@ -7,11 +7,10 @@ import hashlib
 import json
 import lzma
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import shutil
 import subprocess
-import tarfile
 import tempfile
 import urllib.request
 
@@ -25,7 +24,7 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def fetch(url, cache, stage, expected=None):
+def fetch(url, cache, stage, expected):
     name = url.rsplit("/", 1)[-1]
     cached = cache / name
     result = stage / name
@@ -34,51 +33,18 @@ def fetch(url, cache, stage, expected=None):
     else:
         with urllib.request.urlopen(url, timeout=90) as response, result.open("wb") as target:
             shutil.copyfileobj(response, target)
-    if expected and digest(result) != expected:
+    if digest(result) != expected:
         raise ValueError(f"{name}: SHA-256 does not match the repository pin")
     return result
 
 
 def inputs(lock, names, cache, stage):
-    keyring = stage / "omarchy-keyring.gpg"
-    if any("file" in lock["inputs"][name] for name in names):
-        key = fetch(lock["key_url"], cache, stage, lock["key_sha256"])
-        subprocess.run(["gpg", "--batch", "--dearmor", "-o", keyring, key], check=True)
-        if not (cache / key.name).exists():
-            shutil.copyfile(key, cache / key.name)
     for name in names:
         spec = lock["inputs"][name]
-        archive = "file" in spec
-        url = spec.get("archive", lock["archive"]) + spec["file"] if archive else spec["url"]
-        path = fetch(url, cache, stage, spec["sha256"])
-        if archive:
-            signature = fetch(url + ".sig", cache, stage)
-            verified = subprocess.check_output(
-                ["gpgv", "--status-fd", "1", "--keyring", keyring, signature, path],
-                text=True,
-            )
-            signers = [line.split()[-1] for line in verified.splitlines() if line.startswith("[GNUPG:] VALIDSIG ")]
-            if signers != [lock["fingerprint"]]:
-                raise ValueError(f"{path.name}: unexpected archive signer")
-        for item in (path, signature) if archive else (path,):
-            if not (cache / item.name).exists():
-                shutil.copyfile(item, cache / item.name)
+        path = fetch(spec["url"], cache, stage, spec["sha256"])
+        if not (cache / path.name).exists():
+            shutil.copyfile(path, cache / path.name)
         yield name, path
-
-
-def unpack(archive, target, include):
-    with subprocess.Popen(["zstd", "-qdc", archive], stdout=subprocess.PIPE) as stream:
-        try:
-            with tarfile.open(fileobj=stream.stdout, mode="r|") as members:
-                for member in members:
-                    name = PurePosixPath(member.name).as_posix()
-                    if include(name):
-                        members.extract(member, target, filter="data")
-            stream.stdout.read()
-        finally:
-            stream.stdout.close()
-        if stream.wait() != 0:
-            raise ValueError(f"unable to decompress {archive.name}")
 
 
 def copy_required(source, target):
@@ -142,27 +108,34 @@ def prepare_arm_source(source, work):
     return tree
 
 
-def build_qualcomm_kernel(release, tree, source, work, stage):
+def build_arm_kernel(release, tree, source, work, stage, *, board_tools):
     from surface_laptop7 import patch
 
-    patch(tree, source["surface-snapdragon-posture-fix"])
-    patch(tree, ROOT / "packaging/surface-romulus-camss.patch")
+    if board_tools:
+        patch(tree, source["surface-snapdragon-posture-fix"])
+        patch(tree, ROOT / "packaging/surface-romulus-camss.patch")
     config = tree / ".config"
     copy_required(work / "pkgbuilds/linux-omarchy-aarch64/config.aarch64", config)
+    options = ["--enable", "HIBERNATION"] if board_tools else []
     subprocess.run([tree / "scripts/config", "--file", config, "--set-str", "LOCALVERSION",
-                    "-" + release.split("-", 1)[1], "--enable", "HIBERNATION",
-                    "--enable", "DEBUG_INFO_COMPRESSED_ZSTD"], check=True)
-    make = ["make", "-C", tree]
-    subprocess.run([*make, "olddefconfig"], check=True)
-    config = tree / ".config"
-    actual_release = subprocess.check_output([*make, "-s", "kernelrelease"], text=True).strip()
-    if actual_release != release or "CONFIG_HIBERNATION=y" not in config.read_text().splitlines():
-        raise ValueError("Qualcomm kernel release or hibernation config does not match the installer")
-    subprocess.run([*make, f"-j{len(os.sched_getaffinity(0))}", "Image", "modules"], check=True)
-    subprocess.run([*make, f"INSTALL_MOD_PATH={stage / 'usr'}", "INSTALL_MOD_STRIP=1", "modules_install"], check=True)
+                    "-" + release.split("-", 1)[1], "--disable", "LOCALVERSION_AUTO",
+                    "--enable", "DEBUG_INFO_COMPRESSED_ZSTD", *options], check=True)
+    env = dict(os.environ, KBUILD_BUILD_HOST="clawos", KBUILD_BUILD_USER="clawos")
+    make = ["make", "-C", tree, "ARCH=arm64"]
+    subprocess.run([*make, "olddefconfig"], env=env, check=True)
+    actual_release = subprocess.check_output([*make, "-s", "kernelrelease"], env=env, text=True).strip()
+    required = {"CONFIG_EFI_STUB=y", "CONFIG_MODULE_SIG=y", "CONFIG_MODULE_SIG_ALL=y", "CONFIG_MODULE_SIG_SHA512=y"}
+    if board_tools:
+        required.add("CONFIG_HIBERNATION=y")
+    if actual_release != release or not required.issubset(config.read_text().splitlines()):
+        raise ValueError(f"{release}: unexpected ARM kernel release or configuration")
+    subprocess.run([*make, "-j8", "Image", "modules"], env=env, check=True)
+    subprocess.run([*make, f"INSTALL_MOD_PATH={stage / 'usr'}", "INSTALL_MOD_STRIP=1", "modules_install"],
+                   env=env, check=True)
     (stage / f"usr/lib/modules/{release}/build").unlink(missing_ok=True)
     copy_required(tree / "arch/arm64/boot/Image", stage / f"boot/vmlinuz-{release}")
     copy_required(config, stage / f"boot/config-{release}")
+    copy_required(tree / "COPYING", stage / "usr/share/doc" / f"linux-image-{release}" / "copyright")
 
 
 def build_qualcomm_dtbs(tree, work, boards):
@@ -215,35 +188,22 @@ def kernel_package(profile, source, provenance, work, out, *, board_tools=False)
     name = f"linux-image-{release.lower()}"
     version = release.lower()
     stage = work / "kernel"
-    prefix = f"usr/lib/modules/{release}"
-    module_dir = stage / prefix
+    module_dir = stage / f"usr/lib/modules/{release}"
     tree = prepare_arm_source(source, work) if profile.get("dtbs") else None
     if "boot" in profile:
         from asahi_kernel import build_asahi_kernel
 
         build_asahi_kernel(release, source, work, stage)
-    elif board_tools:
-        build_qualcomm_kernel(release, tree, source, work, stage)
-        patch = ROOT / "packaging/surface-romulus-camss.patch"
-        provenance[patch.stem] = {
-            "sha256": digest(patch),
-            "source": f"https://github.com/xiaoyu-work/claw-os/blob/main/packaging/{patch.name}",
-        }
+    elif tree is not None:
+        build_arm_kernel(release, tree, source, work, stage, board_tools=board_tools)
+        if board_tools:
+            patch = ROOT / "packaging/surface-romulus-camss.patch"
+            provenance[patch.stem] = {
+                "sha256": digest(patch),
+                "source": f"https://github.com/xiaoyu-work/claw-os/blob/main/packaging/{patch.name}",
+            }
     else:
-        unpack(
-            source[profile["kernel"]],
-            stage,
-            lambda p: p.startswith((f"{prefix}/kernel/", f"{prefix}/dtbs/"))
-            or p in {f"{prefix}/{name}" for name in ("vmlinuz", "modules.builtin", "modules.builtin.modinfo", "modules.order")},
-        )
-        copy_required(module_dir / "vmlinuz", stage / f"boot/vmlinuz-{release}")
-        (module_dir / "vmlinuz").unlink()
-        image = (stage / f"boot/vmlinuz-{release}").read_bytes()
-        start = image.find(b"IKCFG_ST\x1f\x8b\x08")
-        if start >= 0:
-            end = image.find(b"IKCFG_ED", start)
-            if end > start:
-                (stage / f"boot/config-{release}").write_bytes(gzip.decompress(image[start + 8:end]))
+        raise ValueError(f"{release}: no platform kernel source configured")
     if not (module_dir / "modules.builtin").is_file() or not (module_dir / "kernel").is_dir():
         raise ValueError(f"incomplete modules for {release}")
     if tree is not None:
@@ -252,7 +212,7 @@ def kernel_package(profile, source, provenance, work, out, *, board_tools=False)
         if "romulus" in profile:
             romulus_trees(boards, work, provenance, board_tools)
             thinkpad_camera_trees(boards, work, provenance)
-            version += "+clawos5" if board_tools else "+clawos4"
+            version += "+clawos3"
         else:
             version += "+clawos1"
         write_qualcomm_boards(boards)
@@ -273,6 +233,7 @@ def kernel_package(profile, source, provenance, work, out, *, board_tools=False)
         f"""[ "$1" = configure ] || exit 0\ndepmod -a '{release}'\n""" + kernel_hooks(release, "postinst"),
         """case "$1" in remove|purge) ;; *) exit 0 ;; esac\n""" + kernel_hooks(release, "postrm"),
     )
+    return version
 
 
 def romulus_trees(boards, work, provenance, include_ir):
@@ -340,28 +301,20 @@ def write_qualcomm_boards(directory):
             boards.write(f"{tree}|{compatible}|{model}\n")
 
 
-def nvidia_package(profile, source, provenance, work, out):
-    from nvidia_platform import stage_nvidia_userspace
+def nvidia_package(profile, source, provenance, work, out, kernel_version):
+    from nvidia_platform import build_nvidia_modules, stage_nvidia_userspace
 
     release = profile["release"]
     version = "615.78.08"
     stage = work / "nvidia"
-    prefix = f"usr/lib/modules/{release}/extramodules/"
-    unpack(source["nvidia-modules"], stage, lambda p: p.startswith(prefix) and p.endswith(".ko.zst"))
-    module = stage / (prefix + "nvidia.ko.zst")
-    if not module.is_file():
-        raise ValueError(f"missing matching NVIDIA driver module: {module.name}")
-    driver = subprocess.check_output(["modinfo", "-F", "version", module], text=True).strip()
-    kernel = subprocess.check_output(["modinfo", "-F", "vermagic", module], text=True).split()[0]
-    if driver != version or kernel != release:
-        raise ValueError(f"NVIDIA {driver} for {kernel} does not match the pinned driver and kernel")
+    build_nvidia_modules(source["nvidia-modules"], version, release, work / "linux", work, stage)
     stage_nvidia_userspace(source["nvidia-userspace"], version, work, stage)
     options = stage / "usr/lib/modprobe.d/90-claw-nvidia.conf"
     options.parent.mkdir(parents=True)
     options.write_text("options nvidia_drm modeset=1 fbdev=1\nsoftdep nvidia post: nvidia_drm\n", encoding="utf-8")
     package(
-        stage, out, "claw-os-nvidia-platform", version + "+clawos1", profile["arch"],
-        f"linux-image-{release.lower()}, libglvnd0, libegl1, libgl1, libgbm1, libx11-6, libxext6, libvulkan1, "
+        stage, out, "claw-os-nvidia-platform", version + "+clawos2", profile["arch"],
+        f"linux-image-{release.lower()} (= {kernel_version}), libglvnd0, libegl1, libgl1, libgbm1, libx11-6, libxext6, libvulkan1, "
         "libnvidia-egl-gbm1, libnvidia-egl-wayland1",
         "Matched NVIDIA platform kernel modules and driver libraries", provenance,
         f"""[ "$1" = configure ] || exit 0\ndepmod -a '{release}'\nldconfig\nupdate-initramfs -u -k '{release}'\n""",
@@ -435,7 +388,9 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
         keys = [*profile["romulus"], "qualcomm-audioreach", "qualcomm-firmware-index", "qualcomm-firmware-wudrivers",
                 "qualcomm-firmware-update-ca", "denali-hexagonrpc", "denali-libssc", "denali-iio-sensor-proxy"]
     else:
-        keys = list(profile.get("native", [])) or [profile["kernel"]]
+        keys = list(profile.get("native", []))
+        if "kernel" in profile:
+            keys.append(profile["kernel"])
         keys += profile.get("surface", []) + profile.get("t2", [])
     if profile.get("dtbs"):
         keys += ["arm-kernel-source", "arm-kernel-recipes"]
@@ -486,7 +441,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
 
                 t2_package(profile["release"], source, provenance, work, out, package)
         else:
-            kernel_package(profile, source, provenance, work, out, board_tools=board_tools)
+            kernel_version = kernel_package(profile, source, provenance, work, out, board_tools=board_tools)
             if "romulus" in profile:
                 from surface_laptop7 import snapdragon_packages
 
@@ -502,7 +457,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
                 pro11_sensors_package(profile["release"], source, provenance, work, out, package)
                 package_firmware_index(source, provenance, work, out, package)
             if "gpu" in profile:
-                nvidia_package(profile, source, provenance, work, out)
+                nvidia_package(profile, source, provenance, work, out, kernel_version)
             if "speaker_firmware" in profile:
                 proart_p14_firmware(profile, source, provenance, work, out)
             if "boot" in profile:

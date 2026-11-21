@@ -108,7 +108,7 @@ def pro11_package(release, source, provenance, work, out, package):
         stem = f"surface-pro-11-{action}"
         stage_file(profile / stem, stage / "usr/bin" / stem, 0o755)
     pro11_audio(profile, work, stage, source, name)
-    package(stage, out, name, "1-2", "arm64",
+    package(stage, out, name, "1-3", "arm64",
             f"linux-image-{release}, claw-os-surface-snapdragon-iptsd, bash, bluez, libcamera-ipa, "
             "libspa-0.2-libcamera, python3, sudo, systemd, udev, util-linux, "
             "alsa-ucm-conf (>= 1.2.16.1-1~bpo13+1), pipewire (>= 1.4.2), wireplumber (>= 0.5.8), "
@@ -179,6 +179,6 @@ RestrictAddressFamilies=AF_QIPCRTR
                'SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", TEST=="/var/lib/surface-pro-11-sensors/root/sensors/sns_reg.conf", '
                'ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-light", TAG+="systemd", '
                'ENV{SYSTEMD_WANTS}+="surface-pro-11-sensors.service iio-sensor-proxy.service"\n')
-    package(stage, out, name, "1-1", "arm64", f"linux-image-{release}, iio-sensor-proxy, libc6, libglib2.0-0t64, "
+    package(stage, out, name, "1-2", "arm64", f"linux-image-{release}, iio-sensor-proxy, libc6, libglib2.0-0t64, "
             "libgudev-1.0-0, libpolkit-gobject-1-0, libqmi-glib5, libprotobuf-c1, systemd, udev",
             "Qualcomm ambient light sensor service for Snapdragon Surface Pro 11", pins, None)

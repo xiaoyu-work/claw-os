@@ -177,7 +177,7 @@ Calamares also installs matched ALSA configuration on Acer Aspire 16 AI A16-11M,
 
 ### Experimental vendor kernels
 
-The generic Debian kernel remains the default. Build an opt-in image on a native Debian host with `sudo env CLAW_PLATFORM=<profile> ./build.sh iso-installer` or `iso-live`. Install the ISO tools plus `python3`, `gnupg`, `gpgv`, `zstd`, `kmod` and `device-tree-compiler` on the build host. The Qualcomm, N1x and GB10 profiles use `gcc` and `patch` to build Qualcomm device trees from pinned kernel and board sources. The N1x profile also needs `7zip` to unpack the original ASUS speaker firmware without running the vendor installer. The profile uses the exact kernel and matching initramfs for the ISO and the installed system rather than choosing an unrelated kernel by version.
+The generic Debian kernel remains the default. Build an opt-in image on a native Debian host with `sudo env CLAW_PLATFORM=<profile> ./build.sh iso-installer` or `iso-live`. Install the ISO tools plus `python3`, `zstd`, `kmod` and `device-tree-compiler` on the build host. The Qualcomm, N1x and GB10 builds compile the same pinned upstream ARM kernel and board sources inside the Debian rootfs. N1x and GB10 build the open NVIDIA modules against that exact kernel, sign them with its build key, and take the matching proprietary libraries and GPU firmware from NVIDIA's original installer without running it. The profile uses the exact kernel and matching initramfs for the ISO and the installed system rather than choosing an unrelated kernel by version.
 
 | Profile | Native artifact and remaining limits |
 | --- | --- |
@@ -187,7 +187,7 @@ The generic Debian kernel remains the default. Build an opt-in image on a native
 | `aarch64-n1x` / `aarch64-gb10` | Matched NVIDIA open kernel modules, GPU firmware and driver libraries. GB10 disables unsupported system sleep and limits the CPU to shallow idle to avoid the firmware's excessive wake latency. This can increase idle power use. N1x restores CPPC frequency ranges and uses a larger USB4 resource window on ASUS ProArt P14 H7407BA. |
 | `aarch64-apple` | Source-built Aurora kernel and matched Apple device trees, m1n1 and U-Boot. Use `iso-live` for pre-provisioned Asahi UEFI or `sudo ./build.sh asahi-rootfs` for a desktop rootfs archive. Generic Calamares is disabled for this profile: it does not provision macOS recovery, an Apple boot policy or a dedicated Asahi ESP. |
 
-`python3 scripts/platform_kernels.py <profile>` prepares the corresponding Debian packages and boot assets without building the full OS. Kernel and driver inputs are pinned by SHA-256; Omarchy artifacts also require signatures from the pinned archive key. Neither the image nor the install adds an Arch package repository. Generated platform artifacts carry their upstream source references and are not published by the regular Claw OS APT workflow.
+`python3 scripts/platform_kernels.py <profile>` prepares the corresponding Debian packages and boot assets without building the full OS. Source and original vendor inputs in `packaging/platform-kernels.json` are pinned by SHA-256; Debian dependencies continue to use signed Debian APT indexes. No Omarchy archive key or binary package is used. Generated platform artifacts carry their upstream source references and are not published by the regular Claw OS APT workflow.
 
 Build `x86-t2` on Debian 13 amd64 with Cargo, Rust and a C linker. The T2 installer mounts the recognized internal macOS APFS volume read-only and imports only Broadcom wireless firmware. If the partition was erased, is encrypted, or is otherwise unreadable, use `sudo claw-import-t2-firmware /path/to/macos/usr/share/firmware` with a local copy and reboot. The fan service keeps the upstream firmware limits and returns fans to automatic control when it stops.
 
@@ -195,7 +195,7 @@ For an N1x laptop with pre-release `0.x` firmware, choose the **N1x firmware fra
 
 On an N1x with a known factory GPU memory reservation, `sudo /usr/lib/cos/hw/claw-n1x-setup gpu-memory` sets the firmware reservation to 4 GiB and requires a reboot. The installer does not change this system-wide EFI setting automatically; the command refuses unfamiliar firmware data.
 
-The N1x image includes the signed ASUS ProArt P14 H7407BA amplifier firmware and speaker tuning, preserving the original Cirrus payloads. The driver selects them only for the CS35L56 SoundWire subsystem `1043:33A1`; an uncompressed kernel firmware match takes precedence when available.
+The N1x image extracts ASUS ProArt P14 H7407BA amplifier firmware and speaker tuning from the pinned ASUS driver download, preserving the original Cirrus payloads. The driver selects them only for the CS35L56 SoundWire subsystem `1043:33A1`; an uncompressed kernel firmware match takes precedence when available.
 
 Apple provisioning must first create and enroll a dedicated Asahi boot chain without overwriting macOS or recovery. The rootfs archive is for that Linux root and ESP only. It carries the matched stage-two image built from pinned m1n1 and U-Boot source at `/usr/lib/cos/asahi/boot.bin` (`boot-j700.bin` for MacBook Neo); it does not activate either image or replace an enrolled Apple Stage 1.
 

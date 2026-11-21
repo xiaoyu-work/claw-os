@@ -179,7 +179,7 @@ if [[ ! -r $compatible ]] || ! grep -qzxE '{'|'.join(boards)}' "$compatible"; th
     recipes = fixes / "pkgbuilds/iptsd"
     iptsd = "claw-os-surface-snapdragon-iptsd"
     romulus = "claw-os-surface-snapdragon-touchpad"
-    version = "3.1.0-5+clawos5"
+    version = "3.1.0-5+clawos6"
     common = work / "snapdragon-iptsd"
     touchpad(source["surface-snapdragon-iptsd"], recipes, work, common, relaxed_probe=True)
     stage_file(work / "iptsd/LICENSE", common / "usr/share/doc" / iptsd / "copyright")

@@ -1,8 +1,4 @@
 {
-  "archive": "https://pkgs.omarchy.org/edge/aarch64/",
-  "key_url": "https://raw.githubusercontent.com/omacom/omarchy-pkgs/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/omarchy-keyring/omarchy.gpg",
-  "key_sha256": "15d6aac44df688165b2ea35fe0b23af239bbc66a6909c10a5c219e8d94b707de",
-  "fingerprint": "40DFB630FF42BCFFB047046CF0134EE680CAC571",
   "inputs": {
     "framework-qmk-hid": {
       "url": "https://codeload.github.com/FrameworkComputer/qmk_hid/tar.gz/8f02fe5e34e27dc60260ee564e86a11f2dc7ca87",
@@ -264,15 +260,10 @@
       "sha256": "54752a97e0b65dd06a37a6c6c949902211229847d9e66e77e0e838230c6feaab",
       "source": "https://gitlab.freedesktop.org/libfprint/libfprint/-/tree/6f9479c3d55f847c1b3769f28ceb99227f9858cf"
     },
-    "omarchy-kernel": {
-      "file": "linux-omarchy-7.3-72-aarch64.pkg.tar.zst",
-      "sha256": "02598130b6ef4cada1735ea4e4a51e26f0af2fac4208da302a43ba4e9560dd5d",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
-    },
     "nvidia-modules": {
-      "file": "linux-omarchy-nvidia-open-7.3-72-aarch64.pkg.tar.zst",
-      "sha256": "e41cb0eb347384bd80628d6235c2514b07dca5c23bc09879fd5d311e8f010f9f",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
+      "url": "https://download.nvidia.com/XFree86/NVIDIA-kernel-module-source/NVIDIA-kernel-module-source-615.78.08.tar.xz",
+      "sha256": "17b4f3d195a5ab1fad9aa1f195c9d3a4ad03aceda18bb9fb68a8bd33d7a000f6",
+      "source": "https://download.nvidia.com/XFree86/NVIDIA-kernel-module-source/"
     },
     "nvidia-userspace": {
       "url": "https://download.nvidia.com/XFree86/Linux-aarch64/615.78.08/NVIDIA-Linux-aarch64-615.78.08.run",
@@ -319,9 +310,8 @@
     },
     "aarch64-qualcomm": {
       "arch": "arm64",
-      "release": "7.3.0-72-omarchy",
-      "installer_release": "7.3.0-72-claw-omarchy",
-      "kernel": "omarchy-kernel",
+      "release": "7.3.0-72-claw",
+      "installer_release": "7.3.0-72-claw-qcom",
       "dtbs": true,
       "romulus": [
         "surface-snapdragon-iptsd", "surface-snapdragon-fixes",
@@ -330,17 +320,15 @@
     },
     "aarch64-n1x": {
       "arch": "arm64",
-      "release": "7.3.0-72-omarchy",
+      "release": "7.3.0-72-claw",
       "boot_args": "console=tty0 acpi=nospcr pci=hpbussize=0x20",
-      "kernel": "omarchy-kernel",
       "dtbs": true,
       "gpu": ["nvidia-modules", "nvidia-userspace"],
       "speaker_firmware": "n1x-proart-p14-audio"
     },
     "aarch64-gb10": {
       "arch": "arm64",
-      "release": "7.3.0-72-omarchy",
-      "kernel": "omarchy-kernel",
+      "release": "7.3.0-72-claw",
       "dtbs": true,
       "gpu": ["nvidia-modules", "nvidia-userspace"]
     }

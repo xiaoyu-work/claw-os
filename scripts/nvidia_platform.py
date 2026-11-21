@@ -1,9 +1,10 @@
-"""Stage the pinned NVIDIA ARM64 user-space driver without running its installer."""
+"""Build matching NVIDIA ARM64 modules and stage the original vendor runtime."""
 
+import os
 import re
 import subprocess
 
-from surface_laptop7 import stage_file
+from surface_laptop7 import extract, patch, stage_file
 
 
 LIBRARIES = (
@@ -13,6 +14,39 @@ LIBRARIES = (
     "nvidia-ngx", "nvidia-nvvm", "nvidia-opticalflow", "nvidia-present", "nvidia-ptxjitcompiler",
     "nvidia-rmapi-tegra", "nvidia-rtcore", "nvidia-sandboxutils", "nvidia-tileiras", "nvidia-tls",
 )
+
+
+def build_nvidia_modules(archive, version, release, tree, work, stage):
+    driver = work / "nvidia-source"
+    extract(archive, driver)
+    recipe = work / "pkgbuilds/linux-omarchy-aarch64"
+    fixes = sorted(recipe.glob("nvidia-*.patch"))
+    if not fixes:
+        raise ValueError("the pinned ARM recipe is missing its NVIDIA driver fixes")
+    for path in fixes:
+        patch(driver, path)
+
+    cross = os.environ.get("CROSS_COMPILE", "")
+    env = {key: value for key, value in os.environ.items() if key not in {"CFLAGS", "CXXFLAGS", "LDFLAGS"}}
+    subprocess.run(["make", "-C", driver, "-j8", f"SYSSRC={tree}", f"SYSOUT={tree}", "ARCH=arm64",
+                    "TARGET_ARCH=aarch64", f"CC={cross}gcc", f"CXX={cross}g++", f"LD={cross}ld", f"AR={cross}ar",
+                    f"OBJCOPY={cross}objcopy", "IGNORE_PREEMPT_RT_PRESENCE=1", "modules"], env=env, check=True)
+    destination = stage / f"usr/lib/modules/{release}/extramodules"
+    for name in ("nvidia", "nvidia-drm", "nvidia-modeset", "nvidia-uvm", "nvidia-peermem"):
+        module = destination / f"{name}.ko"
+        stage_file(driver / "kernel-open" / module.name, module)
+        kernel = subprocess.check_output(["modinfo", "-F", "vermagic", module], text=True).strip().partition(" ")[0]
+        if kernel != release:
+            raise ValueError(f"{name}: kernel ABI {kernel}, expected {release}")
+        if name == "nvidia":
+            driver_version = subprocess.check_output(["modinfo", "-F", "version", module], text=True).strip()
+            if driver_version != version:
+                raise ValueError(f"{name}: NVIDIA version {driver_version}, expected {version}")
+        subprocess.run([f"{cross}strip", "--strip-debug", module], check=True)
+        subprocess.run([tree / "scripts/sign-file", "sha512", tree / "certs/signing_key.pem",
+                        tree / "certs/signing_key.x509", module], check=True)
+        subprocess.run(["zstd", "-19", "--rm", "-q", module], check=True)
+    stage_file(driver / "COPYING", stage / "usr/share/doc/claw-os-nvidia-platform/copyright")
 
 
 def stage_nvidia_userspace(archive, version, work, stage):

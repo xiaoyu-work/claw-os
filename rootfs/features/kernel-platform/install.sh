@@ -22,22 +22,26 @@ fi
 
 stage=$(mktemp -d "$ROOTFS/tmp/claw-platform.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
-if [[ ${mode[0]:-} == --board-tools ]]; then
+if [[ $platform == aarch64-qualcomm || $platform == aarch64-n1x || $platform == aarch64-gb10 ]]; then
     install -d "$stage"/{scripts,packaging}
-    for file in platform_kernels.py surface_laptop7.py surface_pro11.py qualcomm_audio.py qualcomm_firmware.py; do
-        install -m0644 "$PROJECT_DIR/scripts/$file" "$stage/scripts/"
-    done
+    install -m0644 "$PROJECT_DIR"/scripts/{platform_kernels,surface_laptop7,nvidia_platform}.py "$stage/scripts/"
     install -m0644 "$PROJECT_DIR"/packaging/platform-kernels.json \
         "$PROJECT_DIR"/packaging/surface-romulus*.dtso \
         "$PROJECT_DIR"/packaging/{surface-romulus-camss.patch,thinkpad-t14s-camera.dtso} "$stage/packaging/"
+    build_packages=(build-essential pkg-config zstd device-tree-compiler patch bc bison flex cpio gawk
+        pahole libdw-dev libelf-dev libssl-dev zlib1g-dev libzstd-dev openssl kmod)
+    if [[ ${mode[0]:-} == --board-tools ]]; then
+        install -m0644 "$PROJECT_DIR"/scripts/{surface_pro11,qualcomm_audio,qualcomm_firmware}.py "$stage/scripts/"
+        build_packages+=(systemd-dev libudev-dev meson ninja-build cmake ca-certificates alsa-utils m4
+            autoconf automake libtool libyaml-dev libbsd-dev python3-yaml python3-dev
+            libglib2.0-dev libqmi-glib-dev libqrtr-glib-dev libprotobuf-c-dev protobuf-c-compiler protobuf-compiler
+            libgudev-1.0-dev libpolkit-gobject-1-dev cryptsetup-initramfs)
+    elif [[ $platform == aarch64-n1x ]]; then
+        build_packages+=(7zip)
+    fi
     chroot "$ROOTFS" apt-get update -qq
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
-        install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
-        gpg gpgv zstd device-tree-compiler patch meson ninja-build cmake ca-certificates alsa-utils m4 \
-        autoconf automake libtool libyaml-dev libbsd-dev python3-yaml python3-dev \
-        libglib2.0-dev libqmi-glib-dev libqrtr-glib-dev libprotobuf-c-dev protobuf-c-compiler protobuf-compiler \
-        libgudev-1.0-dev libpolkit-gobject-1-dev \
-        bc bison flex cpio pahole libdw-dev libelf-dev libssl-dev zlib1g-dev cryptsetup-initramfs </dev/null
+        install -y --no-install-recommends "${build_packages[@]}" </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
     artifacts="$stage/packages"
@@ -52,7 +56,7 @@ elif [[ ${mode[0]:-} == --apple-tools ]]; then
     install -m0644 "$apple"/{70-claw-asahi-fprintd.conf,80-claw-asahi-touch-id.conf,70-claw-asahi-touch-id.rules,99-claw-asahi-neo.conf} "$assets/"
     chroot "$ROOTFS" apt-get update -qq
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
-        install -y --no-install-recommends build-essential pkg-config gpg gpgv zstd patch meson ninja-build \
+        install -y --no-install-recommends build-essential pkg-config zstd patch meson ninja-build \
         bc bison flex swig python3-pyelftools device-tree-compiler libgnutls28-dev \
         clang-22 llvm-22 lld-22 clang-18 llvm-18 lld-18 libclang-18-dev \
         cpio pahole libdw-dev openssl kmod \

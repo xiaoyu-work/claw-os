@@ -125,6 +125,6 @@ def laptop8_audio_package(release, source, provenance, work, out, package):
     docs = stage / "usr/share/doc" / name
     stage_file(profile / "LICENSE", docs / "copyright")
     stage_file(audioreach / "LICENSE.BSD-3-Clause", docs / "audioreach.LICENSE")
-    package(stage, out, name, "1-1", "arm64", f"linux-image-{release}, alsa-ucm-conf (>= 1.2.16.1-1~bpo13+1), udev",
+    package(stage, out, name, "1-2", "arm64", f"linux-image-{release}, alsa-ucm-conf (>= 1.2.16.1-1~bpo13+1), udev",
             "Audio, input and USB suspend integration for Snapdragon Surface Laptop 8",
             {key: provenance[key] for key in ("qualcomm-audioreach", "arm-kernel-recipes")}, None)
