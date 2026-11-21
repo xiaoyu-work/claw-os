@@ -7,6 +7,8 @@ mod desktop_events;
 #[cfg(target_os = "linux")]
 mod desktop_review;
 #[cfg(target_os = "linux")]
+mod system_settings;
+#[cfg(target_os = "linux")]
 pub(crate) mod audio;
 #[cfg(target_os = "linux")]
 pub(crate) mod file_picker;

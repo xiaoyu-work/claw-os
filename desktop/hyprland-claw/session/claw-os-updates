@@ -1,0 +1,378 @@
+#!/usr/bin/python3 -I
+"""Prepare and install only authenticated Claw OS packages, before user login."""
+
+from datetime import datetime, timezone
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import tempfile
+
+
+PACKAGES = ("claw-os-agent", "claw-os-base", "claw-os-desktop")
+ROOT = Path("/var/lib/claw-os-updates")
+STATE = ROOT / "state.json"
+POLICY = ROOT / "policy.json"
+OFFLINE = Path("/system-update")
+OFFLINE_STARTED = Path("/run/claw-os-offline-updating")
+SOURCE = Path("/etc/apt/sources.list.d/claw-os.list")
+KEY = "/usr/share/keyrings/claw-os-archive-keyring.gpg"
+ENV = {"PATH": "/usr/sbin:/usr/bin", "LANG": "C", "DEBIAN_FRONTEND": "noninteractive"}
+JOBS = ("claw-os-update-check.service", "claw-os-update-prepare.service",
+        "claw-os-update-automatic.service", "claw-os-update-offline.service")
+VERSION = re.compile(r"[0-9][a-zA-Z0-9.+:~\-]*")
+
+
+def run(*command, capture=False, timeout=120):
+    return subprocess.run(command, stdin=subprocess.DEVNULL, text=True, env=ENV,
+                          stdout=subprocess.PIPE if capture else None,
+                          check=True, timeout=timeout).stdout
+
+
+def read(path, default):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+
+
+def write(path, data):
+    with tempfile.NamedTemporaryFile(mode="w", dir=ROOT, delete=False) as file:
+        staged = Path(file.name)
+        try:
+            json.dump(data, file)
+            file.flush()
+            os.fsync(file.fileno())
+            staged.replace(path)
+        finally:
+            staged.unlink(missing_ok=True)
+
+
+def ours():
+    return OFFLINE.is_symlink() and OFFLINE.readlink() == ROOT
+
+
+def policy():
+    return read(POLICY, {"automatic_updates": False, "automatic_restart": False})
+
+
+def status():
+    state = read(STATE, {"phase": "unchecked"})
+    # A queued or in-flight operation is not a successful check or install.
+    units = run("/usr/bin/systemctl", "show", *JOBS, "-p", "ActiveState", "-p", "Job",
+                capture=True, timeout=4).splitlines()
+    busy = any(
+        line in {"ActiveState=active", "ActiveState=activating", "ActiveState=deactivating"}
+        or line.startswith("Job=") and line not in {"Job=", "Job=0"}
+        for line in units
+    )
+    if state["phase"] in {"checking", "downloading", "installing"} and not busy:
+        state["phase"] = "interrupted"
+    print(json.dumps({"updates": {**state, **policy(), "ready": ours(), "busy": busy}}))
+
+
+def apt_options():
+    # The channel has one explicit keyring. Rebuild the isolated source line
+    # rather than accepting trust overrides (for example trusted=yes).
+    entries = [line.strip() for line in SOURCE.read_text().splitlines()
+               if line.strip() and not line.lstrip().startswith("#")]
+    match = re.fullmatch(
+        r"deb \[([^\]]+)\] ((?:https://|file:/)\S+) ([a-z0-9-]+) main",
+        entries[0] if len(entries) == 1 else "",
+    )
+    if not match or f"signed-by={KEY}" not in match[1].split() or not Path(KEY).is_file():
+        raise ValueError("The signed Claw OS APT channel is not configured")
+    source = ROOT / "channel.list"
+    source.write_text(f"deb [signed-by={KEY} check-valid-until=yes] {match[2]} {match[3]} main\n")
+    source.chmod(0o644)
+    (ROOT / "archives").mkdir(exist_ok=True)
+    return (
+        "-o", f"Dir::Etc::sourcelist={source}", "-o", "Dir::Etc::sourceparts=-",
+        "-o", f"Dir::State::lists={ROOT}/lists", "-o", f"Dir::Cache::archives={ROOT}/archives",
+        "-o", "Dir::Cache::pkgcache=", "-o", "Dir::Cache::srcpkgcache=",
+        "-o", "Acquire::AllowInsecureRepositories=false",
+        "-o", "Acquire::AllowDowngradeToInsecureRepositories=false",
+        "-o", "Acquire::AllowWeakRepositories=false", "-o", "Acquire::Check-Valid-Until=true",
+        "-o", "APT::Get::AllowUnauthenticated=false", "-o", "DPkg::Lock::Timeout=30",
+    )
+
+
+def installed():
+    result = subprocess.run(
+        ["/usr/bin/dpkg-query", "-W", "-f=${binary:Package} ${db:Status-Abbrev} ${Version}\\n",
+         *PACKAGES], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=ENV,
+        timeout=5,
+    )
+    states = {}
+    for line in result.stdout.splitlines():
+        name, mark, version = line.split()
+        if name in PACKAGES and mark in {"ii", "hi"} and VERSION.fullmatch(version):
+            states[name] = (version, mark == "hi")
+    return states
+
+
+def check(state, options):
+    state.update(phase="checking", packages=[])
+    state.pop("error", None)
+    write(STATE, state)
+    run("/usr/bin/apt-get", *options, "-o", "Acquire::Retries=1",
+        "-o", "APT::Update::Error-Mode=any", "update", timeout=180)
+    current = installed()
+    updates = []
+    for name in PACKAGES:
+        if name not in current:
+            continue
+        version, held = current[name]
+        result = run("/usr/bin/apt-cache", *options, "policy", name, capture=True, timeout=15)
+        candidate = re.search(r"^  Candidate: (\S+)$", result, re.MULTILINE)
+        if candidate and VERSION.fullmatch(candidate[1]) and subprocess.run(
+            ["/usr/bin/dpkg", "--compare-versions", candidate[1], "gt", version], check=False,
+        ).returncode == 0:
+            updates.append({"package": name, "installed": version, "version": candidate[1],
+                            "held": held})
+    state.update(phase="available" if updates else "up-to-date", packages=updates,
+                 checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    write(STATE, state)
+
+
+def plan(state, options):
+    updates = state["packages"]
+    if not updates:
+        raise ValueError("No checked updates are available")
+    if run("/usr/bin/dpkg", "--audit", capture=True, timeout=15).strip():
+        raise ValueError("Repair the incomplete dpkg transaction before updating")
+    current = installed()
+    expected = {}
+    for item in updates:
+        name, version = item["package"], item["version"]
+        if (name not in PACKAGES or not VERSION.fullmatch(version)
+                or current.get(name) != (item["installed"], False)):
+            raise ValueError("An installed version or package hold changed; check again")
+        expected[name] = version
+    args = ("--no-remove", "--no-install-recommends", "install",
+            *(f"{name}={version}" for name, version in expected.items()))
+    simulation = run("/usr/bin/apt-get", *options, "--simulate", *args, capture=True)
+    unpack = {}
+    for line in simulation.splitlines():
+        if line.startswith("Inst "):
+            match = re.match(r"Inst (\S+) \[[^\]]+\] \((\S+) ", line)
+            if not match:
+                raise ValueError("This update needs a separate administrator APT transaction")
+            unpack[match[1]] = match[2]
+        elif line.startswith(("Remv ", "Purg ")) or (
+            line.startswith("Conf ") and line.split()[1] not in expected
+        ):
+            raise ValueError("This update needs a separate administrator APT transaction")
+    if unpack != expected:
+        raise ValueError("The APT plan changes packages outside the checked Claw OS release")
+    return args, expected
+
+
+def clear_archives():
+    for file in (ROOT / "archives").glob("*.deb"):
+        file.unlink()
+
+
+def archive_hashes(options, expected):
+    packages = [f"{name}={version}" for name, version in expected.items()]
+    listing = run("/usr/bin/apt-get", *options, "-o", "Acquire::ForceHash=sha256",
+                  "--print-uris", "download", *packages, capture=True, timeout=15)
+    hashes = {}
+    for line in listing.splitlines():
+        _, name, size, digest = shlex.split(line)
+        if (not re.fullmatch(r"[A-Za-z0-9_.+%~\-]+\.deb", name)
+                or not re.fullmatch(r"SHA256:[0-9a-f]{64}", digest)):
+            raise ValueError("The signed APT index did not supply an archive hash")
+        hashes[name] = (int(size), digest.removeprefix("SHA256:"))
+    if len(hashes) != len(expected):
+        raise ValueError("The signed APT index did not supply all selected archives")
+    return hashes
+
+
+def verify_archive(file, name, size, digest):
+    if os.fstat(file.fileno()).st_size != size or hashlib.file_digest(file, "sha256").hexdigest() != digest:
+        raise ValueError(f"Cached archive does not match the signed APT index: {name}")
+
+
+def download(options, expected):
+    hashes = archive_hashes(options, expected)
+    apt = pwd.getpwnam("_apt")
+    with tempfile.TemporaryDirectory(prefix="download-", dir=ROOT) as directory:
+        os.chown(directory, apt.pw_uid, apt.pw_gid)
+        # Unlike install --download-only, download also copies file: archives.
+        subprocess.run(
+            ["/usr/bin/apt-get", *options, "download",
+             *(f"{name}={version}" for name, version in expected.items())],
+            stdin=subprocess.DEVNULL, env=ENV, cwd=directory, check=True, timeout=900,
+            user=apt.pw_uid, group=apt.pw_gid, extra_groups=(),
+        )
+        clear_archives()
+        for name, (size, digest) in hashes.items():
+            source = os.open(Path(directory) / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(source, "rb") as file, (ROOT / "archives" / name).open("xb+") as archive:
+                details = os.fstat(file.fileno())
+                if not stat.S_ISREG(details.st_mode) or details.st_size != size:
+                    raise ValueError("APT did not materialize a regular archive of the expected size")
+                # Copy into Root custody before trusting the downloaded bytes.
+                remaining = size + 1
+                while remaining and (chunk := file.read(min(remaining, 1024 * 1024))):
+                    archive.write(chunk)
+                    remaining -= len(chunk)
+                archive.seek(0)
+                verify_archive(archive, name, size, digest)
+
+
+def prepare(state, options):
+    if os.path.lexists(OFFLINE):
+        raise ValueError("An offline update is already scheduled")
+    _, expected = plan(state, options)
+    state.update(phase="downloading")
+    state.pop("error", None)
+    write(STATE, state)
+    download(options, expected)
+    plan(state, options)
+    state["phase"] = "ready"
+    write(STATE, state)
+    OFFLINE.symlink_to(ROOT)
+
+
+def other_sessions(allowed):
+    rows = json.loads(run("/usr/bin/loginctl", "list-sessions", "--json=short",
+                          capture=True, timeout=4) or "[]")
+    return any(row["session"] != allowed and row["class"] != "greeter"
+               for row in rows if not row["class"].startswith("manager"))
+
+
+def reboot(allowed=None):
+    if not ours() or read(STATE, {}).get("phase") != "ready":
+        raise ValueError("No offline Claw OS update is ready")
+    if other_sessions(allowed):
+        raise ValueError("Other users are signed in; restart after they have signed out")
+    run("/usr/bin/systemctl", "--check-inhibitors=yes", "--no-block", "reboot", timeout=8)
+
+
+def automatic_restart(settings):
+    if not settings["automatic_restart"] or not ours():
+        return
+    try:
+        reboot()
+    except (ValueError, subprocess.SubprocessError) as error:
+        print(f"Automatic restart deferred: {error}", file=sys.stderr)
+
+
+def offline(state, options):
+    if state.get("phase") != "ready":
+        raise ValueError("The prepared update has no confirmed download")
+    state["phase"] = "installing"
+    write(STATE, state)
+    args, expected = plan(state, options)
+    for name, (size, digest) in archive_hashes(options, expected).items():
+        with (ROOT / "archives" / name).open("rb") as archive:
+            verify_archive(archive, name, size, digest)
+    environment = {**ENV, "SYSTEMD_OFFLINE": "1"}
+    subprocess.run(
+        ["/usr/bin/apt-get", *options, "--no-download", "-y",
+         "-o", "Dpkg::Options::=--force-confold", *args],
+        stdin=subprocess.DEVNULL, env=environment, timeout=1800, check=True,
+    )
+    after = installed()
+    if any(after.get(name) != (version, False) for name, version in expected.items()):
+        raise ValueError("APT did not confirm the intended installed versions")
+    state.update(phase="installed", packages=[])
+    write(STATE, state)
+
+
+def main(action, argument=None):
+    if os.getuid() != 0:
+        raise PermissionError("Claw OS updates require root")
+    if action == "offline-pending":
+        sys.exit(0 if ours() else 1)
+    if action == "finish-offline":
+        if OFFLINE_STARTED.exists():
+            if ours():
+                OFFLINE.unlink()
+            run("/usr/bin/systemctl", "--no-block", "reboot", timeout=8)
+        return
+    if action == "status":
+        status()
+        return
+    ROOT.mkdir(mode=0o755, exist_ok=True)
+    with (ROOT / "transaction.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        state = read(STATE, {"phase": "unchecked"})
+        settings = policy()
+        if action in {"automatic-on", "automatic-off", "restart-on", "restart-off"}:
+            if action.startswith("automatic-"):
+                settings["automatic_updates"] = action == "automatic-on"
+                if not settings["automatic_updates"]:
+                    settings["automatic_restart"] = False
+            else:
+                if action == "restart-on" and not settings["automatic_updates"]:
+                    raise ValueError("Enable automatic updates before automatic restart")
+                settings["automatic_restart"] = action == "restart-on"
+            write(POLICY, settings)
+        elif action == "cancel":
+            if ours():
+                OFFLINE.unlink()
+                state["phase"] = "available"
+                write(STATE, state)
+                clear_archives()
+        elif action == "reboot":
+            reboot(argument)
+        elif action in {"check", "prepare", "automatic", "offline"}:
+            if action == "automatic" and not settings["automatic_updates"]:
+                return
+            if action == "offline":
+                if not ours():
+                    return
+                OFFLINE_STARTED.touch(mode=0o600)
+                # Avoid retrying an interrupted dpkg transaction at every boot.
+                OFFLINE.unlink()
+            elif os.path.lexists(OFFLINE):
+                if action == "automatic":
+                    automatic_restart(settings)
+                return
+            if action != "offline" and state.get("phase") in {"installing", "install-failed"}:
+                # Do not silently resume an unconfirmed dpkg transaction.
+                if action == "automatic":
+                    return
+                if action != "check" or run("/usr/bin/dpkg", "--audit", capture=True, timeout=15).strip():
+                    state["error"] = "Review the interrupted install and repair dpkg before checking again"
+                    write(STATE, state)
+                    raise ValueError(state["error"])
+            if action == "prepare" and state.get("phase") != "available":
+                raise ValueError("Check the signed Claw OS channel before preparing updates")
+            try:
+                options = apt_options()
+                if action == "offline":
+                    offline(state, options)
+                elif action == "prepare":
+                    prepare(state, options)
+                else:
+                    check(state, options)
+                    if action == "automatic" and state["phase"] == "available":
+                        prepare(state, options)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                state.update(phase="install-failed" if action == "offline" else "failed",
+                             error=str(error) if isinstance(error, ValueError)
+                             else "See the Claw OS update service journal for details")
+                write(STATE, state)
+                raise
+            if action == "automatic":
+                automatic_restart(settings)
+        else:
+            raise ValueError("Invalid Claw OS update action")
+
+
+if __name__ == "__main__":
+    try:
+        main(*sys.argv[1:])
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        sys.exit(str(error))

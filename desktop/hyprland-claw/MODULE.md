@@ -68,6 +68,16 @@ and pre-provisioned profiles use the account picker.
 The first owner can choose a bundled animal or cartoon avatar. The helper
 stores the selection through AccountsService; sign-in and lock only load
 bundled PNGs from the system avatar directory and otherwise use the Claw mark.
+Settings → Sign-in can opt the current account into greetd's once-per-boot
+initial session after administrator authentication. The Root configuration
+snapshot refuses an ineligible account and still runs the ordinary PAM
+account/session stack. It records no password. A normal logout always goes
+back to the greeter; the separate lock PAM service is unchanged.
+On Desktop, Claw's User Manager gives new users the supplemental
+`claw-desktop-users` group. Standard users do not need `sudo`. The socket's
+additional ACL admits the desktop App lifecycle and a closed set of providers;
+normal Root/owner/App checks still apply. Machine settings require the exact
+OS-started Settings instance and a separate administrator decision.
 The wizard keeps its glass panels. The greeter and the in-session locker use
 the original Claw wallpaper full-screen, with a large clock at the top and the
 account and password at the bottom. Cage and Qt Quick render the pre-login UI
@@ -163,6 +173,13 @@ fresh guest without a lab binding. A wrong password left it locked; the
 correct PAM password returned to the same compositor and Shell. A second
 lock followed by controlled locker termination retired that display and
 returned to the login prompt instead of exposing the old desktop.
+The first-run avatar gallery, AccountsService readback and sign-in portrait
+passed in a disposable Debian guest. The native locker also built with the
+same avatar resources. Another guest
+rendered the signed shell through boot login, returned to the greeter without
+repeating it, and rendered an independent desktop for a standard account.
+The signed APT update fixture exercised download, offline boot, installed
+version readback and restart deferral while another login session was present.
 In the standard VGA guest, approved Sleep could not dispatch without the
 locker. With the locker available, S3 resume displayed the native lock screen
 until PAM returned to the same desktop. Hibernation and VirtIO VGA scanout

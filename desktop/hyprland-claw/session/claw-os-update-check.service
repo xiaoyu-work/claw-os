@@ -1,0 +1,8 @@
+[Unit]
+Description=Check the signed Claw OS update channel
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/claw-os-updates check
+TimeoutStartSec=4min

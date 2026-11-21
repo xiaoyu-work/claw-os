@@ -12,6 +12,7 @@ session optional pam_keyinit.so force revoke
 session required pam_limits.so
 session required pam_env.so readenv=1
 session required pam_env.so readenv=1 envfile=/etc/default/locale
+session required pam_env.so readenv=1 envfile=/usr/share/claw-os/desktop-session.env
 @include common-session
 session required pam_claw_display.so open-after
 session optional pam_gnome_keyring.so auto_start

@@ -988,9 +988,17 @@ async fn mutate(
             if !full_name_value.is_empty() {
                 args.extend(["--comment", full_name_value]);
             }
-            if let Some(groups) = groups {
-                ensure_groups_exist(&parse_groups(groups)?)?;
-                args.extend(["--groups", groups]);
+            let mut memberships = groups.map(parse_groups).transpose()?.unwrap_or_default();
+            #[cfg(target_os = "linux")]
+            if group_records()?.iter().any(|entry| entry.name == "claw-desktop-users")
+                && !memberships.iter().any(|group| group == "claw-desktop-users")
+            {
+                memberships.push("claw-desktop-users".into());
+            }
+            let groups = memberships.join(",");
+            if !groups.is_empty() {
+                ensure_groups_exist(&memberships)?;
+                args.extend(["--groups", &groups]);
             }
             args.push(user);
             let backup = prepare_mutation(owner_uid, action, "user", user, before)?;

@@ -418,7 +418,37 @@ async fn serve(
                     Ok(value) => Response::ok(request.id, value),
                     Err(error) => Response::handler_error(request.id, BrokerError::authorization(error)),
                 }
+            } else if request.command == Command::GuiSystemSettings {
+                let result = if endpoint.registration.owner_settings {
+                    // Dropping the request kills an unfinished helper, including
+                    // one still waiting for administrator authentication.
+                    tokio::select! {
+                        _ = shutdown.changed() => return,
+                        result = Box::pin(super::system_settings::request(
+                            request.params, endpoint.registration.owner()
+                        )) => result,
+                    }
+                } else {
+                    Err(BrokerError::authorization(
+                        "Machine settings require the OS-started Settings window",
+                    ))
+                };
+                match result {
+                    Ok(value) => Response::ok(request.id, value),
+                    Err(error) => Response::handler_error(request.id, error),
+                }
             } else if request.command == Command::GuiPackageIntent {
+                if crate::clawd::server::desktop_accounts::restricted(endpoint.registration.owner()) {
+                    respond(
+                        &mut stream,
+                        Response::handler_error(
+                            request.id,
+                            BrokerError::authorization("System package changes require an administrator"),
+                        ),
+                    )
+                    .await;
+                    return;
+                }
                 let bound = endpoint.process.get().expect("authenticated bound GUI process");
                 match crate::clawd::packages::gui::request(
                     &daemon, endpoint.package_intents.clone(), &bound.process, &client, request.params,

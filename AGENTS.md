@@ -78,6 +78,7 @@ editing additional surfaces.
 | OS preinstalled App defaults | `scripts/app_packages.py`, `core/src/clawd/preinstalled.rs` | Exact signed release selection, separate owner denials, scoped App grants; never infer permission from a publisher or App ID |
 | OS permission review UI or decision | `core/src/clawd/system_review.rs`, `crates/clawd-client/MODULE.md` | Shared App/capability DTO, protected display revisions, terminal and native renderers, bounded polkit helper, owner-only cancellation and existing approval authority |
 | Authenticated display login or GUI App lifetime | `core/src/display_session/MODULE.md`, `core/src/clawd/gui/MODULE.md` | `crates/claw-display-{control,login}/`, `core/src/worker/gui_transport/`, compositor/session/PAM startup, checked permission retirement and `docs/updating.md` |
+| Desktop sign-in or system updates | `desktop/hyprland-claw/MODULE.md`, `docs/updating.md` | OS-started Settings GUI in `clawos-app`, private GUI broker, greetd/PAM and the offline APT unit |
 | Bundled App product boundary or source fork | `docs/app-product-redesign.md`, external `clawos-app` guides, `packaging/MODULE.md` | Product UI/backend, App-owned common support, manifests, provenance/licenses, native launchers, account/state migration, compatibility packaging |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |

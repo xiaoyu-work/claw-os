@@ -114,6 +114,7 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
             | super::routes::Command::GuiAudioControl
             | super::routes::Command::GuiFilePicker
             | super::routes::Command::GuiNotificationExchange
+            | super::routes::Command::GuiSystemSettings
             | super::routes::Command::NotificationPresentationControl)
         || command == super::routes::Command::SystemRegionalSettingsControl
         || command == super::routes::Command::SystemMailControl
@@ -152,7 +153,8 @@ pub(crate) fn request_gui_resource_blocking(request: Request) -> Result<Response
         | Command::GuiFileWriteRequest | Command::GuiFileWriteStatus | Command::GuiFileSaveReserve
         | Command::GuiFileCreateRequest | Command::GuiFileCreateStatus | Command::GuiFileCreateReserve
         | Command::GuiPackageIntent | Command::GuiCaptureControl | Command::GuiMediaExchange
-        | Command::GuiAudioControl | Command::GuiFilePicker | Command::GuiNotificationExchange)
+        | Command::GuiAudioControl | Command::GuiFilePicker | Command::GuiNotificationExchange
+        | Command::GuiSystemSettings)
     {
         return Err(ClientError::before_dispatch("private GUI transport accepts only typed resource commands"));
     }

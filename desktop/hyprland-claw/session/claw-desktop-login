@@ -1,0 +1,135 @@
+#!/usr/bin/python3 -I
+"""Root-owned boot login preference and greetd configuration snapshot."""
+
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+
+
+SETTING = Path("/etc/cos/desktop-auto-login.json")
+SETUP = Path("/etc/cos/local-desktop-setup")
+CONFIG = Path("/etc/greetd/claw-desktop.toml")
+RUNTIME = Path("/run/claw-greetd/config.toml")
+ATTEMPT = Path("/run/claw-desktop-auto-login-attempted")
+
+
+def account(uid):
+    if not 1000 <= uid < 60000:
+        return None
+    for line in Path("/etc/passwd").read_text().splitlines():
+        name, _, number, _, _, home, shell = line.split(":")
+        if int(number) != uid or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", name):
+            continue
+        shells = Path("/etc/shells").read_text().splitlines()
+        if shell not in shells or Path(shell).name in {"false", "nologin"}:
+            return None
+        try:
+            directory = Path(home).lstat()
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != uid:
+            return None
+        for line in Path("/etc/shadow").read_text().splitlines():
+            user, password, changed, _, maximum, _, _, expires, _ = line.split(":")
+            if user != name:
+                continue
+            today = int(time.time()) // 86400
+            if (
+                not password or password.startswith(("!", "*")) or changed in {"", "0"}
+                or expires and int(expires) >= 0 and today >= int(expires)
+                or maximum and int(maximum) >= 0 and today > int(changed) + int(maximum)
+            ):
+                return None
+            return {"uid": uid, "name": name}
+    return None
+
+
+def selection():
+    try:
+        saved = json.loads(SETTING.read_text())
+    except FileNotFoundError:
+        return None
+    if not isinstance(saved, dict) or type(saved.get("uid")) is not int:
+        return None
+    return saved if account(saved["uid"]) == saved else None
+
+
+def save(path, text):
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as file:
+        temporary = Path(file.name)
+        try:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def render():
+    source = CONFIG.read_text()
+    try:
+        saved = selection() if not SETUP.exists() else None
+    except (OSError, ValueError):
+        print("Claw OS: invalid boot login preference; sign-in required", file=sys.stderr)
+        saved = None
+    config = tomllib.loads(source)
+    runfile = Path(config.get("general", {}).get("runfile", "/run/greetd.run"))
+    if (saved and not ATTEMPT.exists() and not runfile.exists() and "initial_session" not in config
+            and not any(Path(path).exists() for path in ("/run/nologin", "/etc/nologin"))):
+        # greetd records its own runfile only after a successful start.
+        ATTEMPT.touch(mode=0o600, exist_ok=False)
+        vt = config.get("terminal", {}).get("vt")
+        # Unlike a handoff from the greeter, startup has no active graphical
+        # VT yet. Wait for the configured VT before PAM opens the compositor.
+        if type(vt) is int and 1 <= vt <= 63:
+            try:
+                subprocess.run(("/usr/bin/chvt", str(vt)), stdin=subprocess.DEVNULL,
+                               timeout=8, check=True)
+            except (OSError, subprocess.SubprocessError) as error:
+                print(f"Claw OS: boot login VT unavailable: {error}", file=sys.stderr)
+            else:
+                source += (
+                    '\n[initial_session]\ncommand = "/usr/local/bin/claw-display-session --desktop"\n'
+                    f'user = "{saved["name"]}"\n'
+                )
+    save(RUNTIME, source)
+
+
+def main(args):
+    if os.getuid() != 0:
+        raise ValueError("the boot login preference is root-owned")
+    match args:
+        case ["render"]:
+            render()
+            return
+        case ["enable", uid]:
+            saved = account(int(uid))
+            if not saved:
+                raise ValueError("this account is not eligible for automatic login")
+            if "initial_session" in tomllib.loads(CONFIG.read_text()):
+                raise ValueError("greetd already has a manually configured initial session")
+            SETTING.parent.mkdir(mode=0o755, exist_ok=True)
+            save(SETTING, json.dumps(saved) + "\n")
+        case ["disable"]:
+            SETTING.unlink(missing_ok=True)
+        case ["status"]:
+            pass
+        case _:
+            raise ValueError("invalid desktop login action")
+    saved = selection()
+    print(json.dumps({"automatic_login_user": saved["name"] if saved else None}))
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except (OSError, ValueError) as error:
+        sys.exit(str(error))

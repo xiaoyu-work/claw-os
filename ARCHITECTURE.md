@@ -2488,6 +2488,12 @@ Release runs queue without cancellation; selected packages merge and deploy
 to Pages once. APT indexes intentionally have no expiry or scheduled refresh;
 signature, package-manifest validity and downgrade checks remain enforced.
 
+On Desktop, the authenticated Settings App requests a signed channel check or
+an administrator-authorized update through its private GUI broker. The
+Root-owned updater prepares the OS package set independently of `clawd`,
+then `system-update.target` applies it before the next login. Neither
+the App nor the running desktop is the package transaction owner.
+
 The `core` target publishes Agent/Base together without a Desktop or image
 build. Before repository signing, protocol compatibility is checked against
 both the candidate pool and authenticated previous package manifests.

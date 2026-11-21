@@ -1344,6 +1344,18 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__system-settings" {
+        let [_, action] = args else {
+            return Err("system settings require one closed action".into());
+        };
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "machine settings require the OS-started Settings window")?;
+        let value = request_gui_resource(
+            Command::GuiSystemSettings, json!({"session": session, "action": action}),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__desktop-preferences" {
         let body = if args.get(1).map(String::as_str)==Some("--request-stdin") && args.len()==2 {
             let body=parse_internal_request_object(stdin_data.as_deref(),256*1024,"desktop preferences")?;

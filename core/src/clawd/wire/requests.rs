@@ -70,6 +70,29 @@ pub struct DesktopLock {
 
 pub type DesktopEvents = DesktopLock;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemSettingsAction {
+    Status,
+    EnableAutomaticLogin,
+    DisableAutomaticLogin,
+    CheckUpdates,
+    PrepareUpdates,
+    CancelUpdates,
+    EnableAutomaticUpdates,
+    DisableAutomaticUpdates,
+    EnableAutomaticRestart,
+    DisableAutomaticRestart,
+    RestartForUpdates,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemSettings {
+    pub session: Token,
+    pub action: SystemSettingsAction,
+}
+
 pub use crate::clawd::desktop_preferences::Request as DesktopPreferencesControl;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
 pub use crate::clawd::gui::inputs::{

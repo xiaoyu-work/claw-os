@@ -48,6 +48,9 @@ use super::wire::{
     legacy_upgrade_notice, Fault, InboundRequest, RequestId, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
     PROTOCOL_VERSION,
 };
+
+#[cfg(target_os = "linux")]
+pub(super) mod desktop_accounts;
 use super::{audit, context, event_center, firewall, journal, system_journal, usb_guard};
 
 #[derive(Debug, Clone)]
@@ -637,6 +640,10 @@ pub(crate) async fn admit(
     route
         .authorize(client)
         .map_err(|fault| refuse(fault, envelope.id.clone(), Some(route.name)))?;
+    #[cfg(target_os = "linux")]
+    if !desktop_accounts::permits(command, &params, client) {
+        return Err(refuse(Fault::NotAuthorized, envelope.id, Some(route.name)));
+    }
 
     let uid = client.uid.ok_or_else(|| {
         refuse(
@@ -946,6 +953,14 @@ fn set_socket_permissions(
             source,
         },
     )?;
+    #[cfg(target_os = "linux")]
+    if euid == 0 && mode == 0o660 && expected_gid.is_some() && desktop_accounts::enabled() {
+        desktop_accounts::add_socket_group(socket_path).map_err(|source| DaemonError::Socket {
+            operation: "socket.set_desktop_acl",
+            path: socket_path.to_path_buf(),
+            source,
+        })?;
+    }
     let after = std::fs::symlink_metadata(socket_path).map_err(|source| DaemonError::Socket {
         operation: "socket.verify_permissions",
         path: socket_path.to_path_buf(),

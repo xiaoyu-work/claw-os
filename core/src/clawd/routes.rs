@@ -2566,6 +2566,17 @@ routes! {
         run: |_c| Err(BrokerError::authorization(
             "desktop events require the exact Root-held private GUI endpoint")),
     }
+    GuiSystemSettings {
+        name: "gui.system-settings",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::GuiResource),
+        body: body::SystemSettings,
+        audit: &[("session", FieldRule::Token), ("action", FieldRule::Token)],
+        run: |_c| Err(BrokerError::authorization(
+            "machine settings require the exact OS-started Settings window")),
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

@@ -91,12 +91,29 @@ install -Dm0644 "$session/hyprland.lua" "$stage/etc/xdg/hypr/hyprland.lua"
 install -Dm0644 "$session/claw-desktop-session.target" "$stage/usr/lib/systemd/user/claw-desktop-session.target"
 install -Dm0644 "$session/claw-screen-reader.service" "$stage/usr/lib/systemd/user/claw-screen-reader.service"
 install -Dm0644 "$session/claw-desktop.pam" "$stage/etc/pam.d/claw-desktop"
+install -Dm0644 "$session/desktop-session.env" "$stage/usr/share/claw-os/desktop-session.env"
 install -Dm0755 "$session/claw-greeter" "$stage/usr/libexec/claw-greeter"
+install -Dm0755 "$session/claw-desktop-login" "$stage/usr/libexec/claw-desktop-login"
+for name in claw-system-settings claw-os-updates; do
+    install -Dm0755 "$session/$name" "$stage/usr/libexec/$name"
+done
+install -Dm0644 "$session/org.clawos.desktop.settings.policy" \
+    "$stage/usr/share/polkit-1/actions/org.clawos.desktop.settings.policy"
+units="$stage/usr/lib/systemd/system"
+for file in "$session"/claw-os-update-*.service "$session"/claw-os-update-*.timer; do
+    install -Dm0644 "$file" "$units/${file##*/}"
+done
+install -d "$units/system-update.target.wants" "$units/timers.target.wants"
+ln -s ../claw-os-update-offline.service "$units/system-update.target.wants/"
+ln -s ../claw-os-update-automatic.timer "$units/timers.target.wants/"
 install -Dm0755 "$session/claw-create-local-owner" "$stage/usr/libexec/claw-create-local-owner"
 install -Dm0755 "$session/claw-desktop-locales" "$stage/usr/libexec/claw-desktop-locales"
 install -Dm0755 "$session/claw-desktop-reviews" "$stage/usr/libexec/claw-desktop-reviews"
 install -Dm0644 "$session/greetd.toml" "$stage/etc/greetd/claw-desktop.toml"
 install -Dm0644 "$session/greetd.conf" "$stage/usr/lib/systemd/system/greetd.service.d/claw-desktop.conf"
+install -Dm0644 "$session/claw-desktop-accounts.conf" \
+    "$units/clawd.service.d/claw-desktop-accounts.conf"
+install -Dm0644 "$session/claw-desktop-users.conf" "$stage/usr/lib/sysusers.d/claw-desktop-users.conf"
 install -Dm0644 "$session/hyprland-portals.conf" "$stage/usr/share/xdg-desktop-portal/hyprland-portals.conf"
 install -Dm0755 "$session/claw-oobe" "$stage/usr/libexec/claw-oobe"
 for file in "$session"/oobe/*; do

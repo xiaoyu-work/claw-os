@@ -1,0 +1,19 @@
+[Unit]
+Description=Install verified Claw OS updates before sign-in
+DefaultDependencies=no
+Requires=sysinit.target
+After=sysinit.target local-fs.target
+Before=system-update.target shutdown.target
+Conflicts=shutdown.target clawd.service greetd.service apt-daily.service apt-daily-upgrade.service
+ConditionPathIsSymbolicLink=/system-update
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/libexec/claw-os-updates offline-pending
+ExecStart=/usr/libexec/claw-os-updates offline
+ExecStopPost=/usr/libexec/claw-os-updates finish-offline
+TimeoutStartSec=35min
+StandardOutput=journal+console
+
+[Install]
+WantedBy=system-update.target

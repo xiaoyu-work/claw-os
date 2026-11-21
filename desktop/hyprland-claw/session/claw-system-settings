@@ -1,0 +1,126 @@
+#!/usr/bin/python3 -I
+"""Administrator authentication for closed actions from the system Settings GUI."""
+
+import json
+import os
+from pathlib import Path
+import pwd
+import subprocess
+import sys
+
+from gi.repository import Gio, GLib
+
+
+LOGIN = "/usr/libexec/claw-desktop-login"
+UPDATES = "/usr/libexec/claw-os-updates"
+SERVICE = "org.freedesktop.login1"
+
+
+def run(*command):
+    result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                            text=True, timeout=12, check=False)
+    if result.returncode:
+        raise ValueError(result.stderr.strip()[:1024] or "The system did not confirm the action")
+    return result.stdout
+
+
+def call(bus, name, path, interface, method, arguments, timeout=3000):
+    return bus.call_sync(name, path, interface, method, arguments, None,
+                         Gio.DBusCallFlags.NONE, timeout, None).unpack()
+
+
+def properties(bus, path, interface):
+    return call(bus, SERVICE, path, "org.freedesktop.DBus.Properties", "GetAll",
+                GLib.Variant("(s)", (interface,)))[0]
+
+
+def active_session(bus, uid):
+    seat = properties(bus, "/org/freedesktop/login1/seat/seat0", SERVICE + ".Seat")
+    session, path = seat["ActiveSession"]
+    info = properties(bus, path, SERVICE + ".Session")
+    if (info["User"][0] != uid or not info["Active"] or info["Remote"]
+            or info["Service"] != "claw-desktop" or info["LockedHint"]):
+        raise PermissionError("An active, unlocked local desktop is required")
+    return session
+
+
+def authorize(uid, session, action):
+    # The sandbox lives outside the logind scope. Authenticate against the
+    # installed session subscriber, never an App-supplied PID or a root leader.
+    scope = Path(f"/sys/fs/cgroup/user.slice/user-{uid}.slice/session-{session}.scope")
+    subscriber = Path("/usr/local/bin/claw-display-session")
+    for pid in (pid for leaf in scope.glob("claw-login-*/cgroup.procs")
+                for pid in leaf.read_text().split()):
+        process = Path("/proc") / pid
+        try:
+            if not (process / "exe").samefile(subscriber):
+                continue
+            start = (process / "stat").read_text().rsplit(") ", 1)[1].split()[19]
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        result = subprocess.run(
+            ("/usr/bin/pkcheck", "--action-id", "org.clawos.desktop." + action,
+             "--process", f"{pid},{start},{uid}", "--allow-user-interaction"),
+            stdin=subprocess.DEVNULL, timeout=75, check=False,
+        )
+        if result.returncode == 0:
+            return
+        raise PermissionError("Administrator authentication is required")
+    raise PermissionError("The authenticated desktop session subscriber is unavailable")
+
+
+def status(uid, queued=False):
+    state = json.loads(run(LOGIN, "status"))
+    state.update(json.loads(run(UPDATES, "status")))
+    if queued:
+        state["updates"]["busy"] = True
+    state["current_user"] = pwd.getpwuid(uid).pw_name
+    print(json.dumps(state))
+
+
+def main(action, uid):
+    jobs = {"check-updates": "check", "prepare-updates": "prepare"}
+    update_actions = {
+        "enable-automatic-updates": "automatic-on",
+        "disable-automatic-updates": "automatic-off",
+        "enable-automatic-restart": "restart-on",
+        "disable-automatic-restart": "restart-off",
+        "cancel-updates": "cancel",
+    }
+    if os.getuid() != 0 or not 1000 <= uid < 60000:
+        raise PermissionError("Machine settings require the local desktop")
+    if action == "status":
+        status(uid)
+        return
+    if action not in {*jobs, *update_actions, "restart-for-updates", "enable-automatic-login",
+                       "disable-automatic-login"}:
+        raise ValueError("Invalid system settings action")
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    session = active_session(bus, uid)
+    if action != "check-updates":
+        policy = "automatic-login" if action.endswith("-automatic-login") else "system-updates"
+        authorize(uid, session, policy)
+        if active_session(bus, uid) != session:
+            raise PermissionError("The desktop session changed")
+    if action in jobs:
+        run("/usr/bin/systemctl", "start", "--no-block",
+            f"claw-os-update-{jobs[action]}.service")
+    elif action in update_actions:
+        run(UPDATES, update_actions[action])
+    elif action == "restart-for-updates":
+        run(UPDATES, "reboot", session)
+    elif action == "enable-automatic-login":
+        run(LOGIN, "enable", str(uid))
+    elif action == "disable-automatic-login":
+        run(LOGIN, "disable")
+    status(uid, queued=action in jobs)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1], int(sys.argv[2]))
+    except PermissionError as error:
+        print(error, file=sys.stderr)
+        sys.exit(3)
+    except (OSError, GLib.Error, ValueError, KeyError, subprocess.SubprocessError) as error:
+        sys.exit(str(error))

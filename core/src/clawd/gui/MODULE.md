@@ -34,6 +34,13 @@ spawn itself. Its overlay still requires its own `ui.panel` admission. Other
 GUIs retain exact per-action reviews; sleep still requires an acknowledged
 native lock.
 
+The OS-started Settings instance can request closed machine settings actions
+through `gui.system-settings`. No other GUI, Agent or ordinary broker endpoint
+can dispatch them. Root resolves the active local desktop and uses fresh
+administrator authentication for boot-login changes and update mutations.
+The [Desktop updater](../../../../docs/updating.md#system-updates-in-settings)
+owns the APT transaction outside the GUI and `clawd` lifetimes.
+
 The private `gui.desktop.events` connection sends the system Shell one initial
 window/workspace snapshot, then a new snapshot when the compositor or GUI Host
 reports a change. Only the live Shell with `sys.observe:desktop` can see this

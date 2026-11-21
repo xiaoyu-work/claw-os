@@ -2,10 +2,7 @@
 //
 // Default PolicyKit rules for Claw OS.
 //
-// Claw OS is a single-user desktop: the person sitting in front of the
-// machine is always in the `sudo` group, and they don't want to type
-// their password for routine actions that the system performs on their
-// behalf. These rules whitelist a small set of safe actions for active
+// These rules whitelist a small set of routine actions for active
 // local sessions in `sudo` so the desktop feels coherent (no surprise
 // "authenticate" popups when installing a flatpak from the Store, etc.).
 //

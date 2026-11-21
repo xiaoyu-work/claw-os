@@ -446,6 +446,14 @@ and pids controllers plus a working `cgroup.kill` are available; ordinary
 non-agent `clawd` primitives remain available. On supported systemd hosts no
 manual migration is required.
 
+Desktop also gives `claw-desktop-users` a named socket ACL. The additional
+admission is limited to desktop launch, owner consent and desktop provider
+routes, not administrative or headless Agent access. The original socket
+group and its behavior are unchanged on headless installs.
+An existing agent-home checkpoint stays with its recorded home. Booting
+after a change to the first local account does not mount that checkpoint at
+another user's home.
+
 On the first task after upgrading, `clawd` securely migrates any legacy
 task-owned `/run/cos/extension-hosts/<uid>` directory to a root-owned,
 non-writable parent. It pins the directory without following links and removes
@@ -957,6 +965,35 @@ transaction. It must not promise a background hot-swap, reconnect an old
 compositor through an owner-provided socket, or treat an interrupted session
 command as success. Full Agent/Desktop transactions and real
 greetd/logind/KMS/LSM acceptance remain rollout requirements.
+
+## System Updates in Settings
+
+Desktop requires the matching Agent's `claw-os-desktop-settings-v1` interface.
+On matched Agent, Desktop and Settings builds, **System & accounts → System
+Updates** checks the configured signed Claw OS APT channel. It lists installed
+Claw OS packages with newer versions, including any administrator holds.
+**Download and prepare** asks for administrator authentication, downloads the
+checked versions, and schedules installation at the next restart. Use
+**Restart and install** after saving your work, or **Cancel scheduled install**.
+The offline service runs before sign-in, verifies the result, and reboots
+normally. An interrupted package transaction is not replayed unattended.
+
+**Automatic updates** and **Automatic restart** start off. The first checks
+daily and prepares the same signed updates. The second permits restart at an
+automatic check only when there are no other login sessions and systemd allows
+it. A console, SSH or locked desktop session can defer that restart. Turning
+off automatic updates also turns off automatic restart; cancel separately
+if an install is already scheduled.
+
+This installs newer `claw-os-agent`, `claw-os-base` and `claw-os-desktop`
+packages only. Desktop includes its selected Desktop Shell. The controller
+refuses removals, held packages and plans that require installing or changing
+other packages. Coordinated App dependency changes may require an
+administrator APT transaction and logout; independently published Apps still
+use their existing App update path. Debian security updates are unchanged.
+Installation still goes through the release security floor and its
+maintainer-script verification. A Git source push is not an update:
+the manual release workflow must first publish matching signed artifacts.
 
 Independent App replacement needs an authenticated Root, owner/App-scoped
 retirement barrier and admission fencing, not a display-wide restart. Signed

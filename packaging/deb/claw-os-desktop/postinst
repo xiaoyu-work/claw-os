@@ -105,6 +105,16 @@ enable_fingerprint_auth() {
     fi
 }
 
+enroll_desktop_accounts() {
+    # Keep the existing sudo socket group unchanged. This supplemental group
+    # only admits the broker's desktop route set for local sign-in accounts.
+    systemd-sysusers /usr/lib/sysusers.d/claw-desktop-users.conf
+    awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /\/(false|nologin)$/ {print $1}' /etc/passwd |
+        while IFS= read -r user; do
+            usermod --append --groups claw-desktop-users -- "$user"
+        done
+}
+
 if [ "$1" = "configure" ]; then
     # Desktop integration touches the running system: accounts, PAM,
     # locales, systemd links. Under DPKG_ROOT (an image build, a staged
@@ -121,6 +131,7 @@ if [ "$1" = "configure" ]; then
         enable_desktop_links
         enable_desktop_services
         enable_fingerprint_auth
+        enroll_desktop_accounts
         if command -v systemd-sysusers >/dev/null 2>&1; then
             systemd-sysusers || true
         fi

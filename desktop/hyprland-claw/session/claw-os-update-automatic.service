@@ -1,0 +1,8 @@
+[Unit]
+Description=Prepare unattended Claw OS updates
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/claw-os-updates automatic
+TimeoutStartSec=22min

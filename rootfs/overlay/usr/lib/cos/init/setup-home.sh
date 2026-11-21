@@ -71,6 +71,11 @@ UPPER="$OVERLAY_DIR/upper"
 WORK="$OVERLAY_DIR/work"
 MOUNT_TARGET_FILE="$OVERLAY_DIR/mount-target"
 
+if [ -f "$MOUNT_TARGET_FILE" ] && [ "$(cat "$MOUNT_TARGET_FILE")" != "$TARGET" ]; then
+    printf '{"overlay": "deferred", "reason": "checkpoint data belongs to another home"}\n'
+    exit 0
+fi
+
 record_mount_target() {
     marker_tmp="$MOUNT_TARGET_FILE.new"
     umask 077
