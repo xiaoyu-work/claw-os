@@ -81,6 +81,8 @@ install -Dm0644 "$dependencies/sources/lua-5.5.1/doc/readme.html" "$license/hypr
 for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
     install -Dm0755 "$CARGO_TARGET_DIR/release/$binary" "$stage/usr/local/bin/$binary"
 done
+install -Dm0755 "$project/tools/browser-chat-native-host" \
+    "$stage/usr/lib/cos/browser-chat-native-host"
 install -Dm0755 "$CARGO_TARGET_DIR/release/claw-os-applet-provider" \
     "$stage/usr/libexec/claw-os-applet-provider"
 install -Dm0644 "$project/desktop/services/claw-applet-services/LICENSE" "$license/applet-services.LICENSE"

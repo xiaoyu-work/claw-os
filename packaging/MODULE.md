@@ -115,6 +115,10 @@ OS-owned. Browser's independently owned extension and compatibility launchers
 consume this interface; they do not supply a socket server, privileged policy
 or another App identity. The manual registration command checks installed
 protected assets rather than cloning or overwriting App package files.
+Desktop supplies the separate `browser-chat-native-host` client for the
+existing desktop Agent service. The installer registers it for the same
+extension ID when Desktop is present. Agent-only installs retain browser
+control without requiring the chat client or a Desktop dependency.
 
 Agent depends on `pkexec` and `polkitd`, which provide the polkit runtime and
 password verifier used by the installed `claw-approval-helper`. Headless/WSL Web

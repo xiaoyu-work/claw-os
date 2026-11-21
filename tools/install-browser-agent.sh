@@ -8,6 +8,7 @@
 #   - Chromium managed policy   → /etc/chromium/policies/managed/claw-agent.json
 #   - Chromium NM host manifest → /etc/chromium/native-messaging-hosts/com.clawos.browser.json
 #   - Native host launcher      → /usr/lib/cos/claw-browser-host
+#   - Separate chat NM manifest → /etc/chromium/native-messaging-hosts/com.clawos.browser_chat.json
 #
 # Run as root.  Re-run is idempotent (overwrites).
 #
@@ -24,7 +25,9 @@ fi
 EXT_DEST="/usr/share/claw/extensions/claw-agent-browser"
 HOST_LAUNCHER="/usr/lib/cos/claw-browser-host"
 HOST_IMPL="/usr/lib/cos/browser-native-host.py"
+CHAT_HOST="/usr/lib/cos/browser-chat-native-host"
 NM_MANIFEST="/etc/chromium/native-messaging-hosts/com.clawos.browser.json"
+CHAT_MANIFEST="/etc/chromium/native-messaging-hosts/com.clawos.browser_chat.json"
 POLICY_FILE="/etc/chromium/policies/managed/claw-agent.json"
 
 # Extension ID is deterministic when packed with a known key, but for the MVP
@@ -37,9 +40,12 @@ if [[ -n "${EXT_ID}" && ! "${EXT_ID}" =~ ^[a-p]{32}$ ]]; then
   exit 1
 fi
 
-for file in "${HOST_IMPL}" "${HOST_LAUNCHER}" \
-  "${EXT_DEST}/manifest.json" "${EXT_DEST}/background.js" \
-  "${EXT_DEST}/content.js" "${EXT_DEST}/popup.html" "${EXT_DEST}/popup.js"; do
+files=("${HOST_IMPL}" "${HOST_LAUNCHER}" "${EXT_DEST}/manifest.json" \
+  "${EXT_DEST}/background.js" "${EXT_DEST}/content.js" "${EXT_DEST}/popup.html" "${EXT_DEST}/popup.js")
+if [[ -e "${CHAT_HOST}" || -L "${CHAT_HOST}" ]]; then
+  files+=("${CHAT_HOST}")
+fi
+for file in "${files[@]}"; do
   if [[ ! -f "${file}" || -L "${file}" ]]; then
     echo "missing installed Browser asset: ${file}; install claw-app-browser and the matching claw-os-agent first" >&2
     exit 1
@@ -54,8 +60,12 @@ if [[ ! -x "${HOST_LAUNCHER}" ]]; then
   echo "installed Browser launcher is not executable: ${HOST_LAUNCHER}" >&2
   exit 1
 fi
+if [[ -f "${CHAT_HOST}" && ! -x "${CHAT_HOST}" ]]; then
+  echo "installed Browser chat host is not executable: ${CHAT_HOST}" >&2
+  exit 1
+fi
 
-echo "[claw] installing Helium Native Messaging manifest → ${NM_MANIFEST}"
+echo "[claw] installing Native Messaging for Helium → ${NM_MANIFEST}"
 install -d -m 0755 "$(dirname "${NM_MANIFEST}")"
 if [[ -n "${EXT_ID}" ]]; then
   ALLOWED_ORIGINS=$(printf '"chrome-extension://%s/"' "${EXT_ID}")
@@ -75,6 +85,19 @@ cat > "${NM_MANIFEST}" <<EOF
 }
 EOF
 chmod 0644 "${NM_MANIFEST}"
+
+if [[ -x "${CHAT_HOST}" ]]; then
+  cat > "${CHAT_MANIFEST}" <<EOF
+{
+  "name": "com.clawos.browser_chat",
+  "description": "Claw Agent chat for Helium",
+  "path": "${CHAT_HOST}",
+  "type": "stdio",
+  "allowed_origins": [${ALLOWED_ORIGINS}]
+}
+EOF
+  chmod 0644 "${CHAT_MANIFEST}"
+fi
 
 echo "[claw] installing Chromium managed policy → ${POLICY_FILE}"
 install -d -m 0755 "$(dirname "${POLICY_FILE}")"
@@ -111,7 +134,7 @@ Next steps:
   4. Re-run this script with CLAW_EXT_ID=<id> to pin Native Messaging
      and the extension allowlist to that ID:
        CLAW_EXT_ID=<id> sudo ${BASH_SOURCE[0]}
-  5. Restart Chromium.
+  5. Reload the extension or restart Helium; pin Claw Agent to open chat with one click.
 
 To verify the bridge:
   ls -l \$XDG_RUNTIME_DIR/claw-browser.sock     # socket should exist

@@ -49,6 +49,12 @@ fn protocol_event(event: StreamEvent) -> Event {
     Event::default().event(name).data(data)
 }
 
+fn task_status_event(status: &str) -> Event {
+    Event::default()
+        .event("task_status")
+        .data(json!({ "status": status }).to_string())
+}
+
 fn task_submit_params(
     request: &ChatRequest,
     prompt: &str,
@@ -147,6 +153,7 @@ pub async fn stream_chat(
         let task_id = started.task_id.clone();
         yield Ok(protocol_event(StreamEvent::TaskStarted(started)));
 
+        let mut previous_status = String::new();
         let mut cursor = 0u64;
         let mut emitted_text = false;
         let mut turn_emitted_text = false;
@@ -175,6 +182,10 @@ pub async fn stream_chat(
                 }
             };
             cursor = frame.cursor;
+            if !frame.terminal && frame.job.status != previous_status {
+                previous_status.clone_from(&frame.job.status);
+                yield Ok(task_status_event(&previous_status));
+            }
             for record in frame.events {
                 for outgoing in translation::stream_events(
                     record,
@@ -234,6 +245,7 @@ pub async fn stream_task(
         let task_id = started.task_id.clone();
         yield Ok(protocol_event(StreamEvent::TaskStarted(started)));
 
+        let mut previous_status = String::new();
         let mut cursor = 0u64;
         let mut emitted_text = false;
         let mut turn_emitted_text = false;
@@ -262,6 +274,10 @@ pub async fn stream_task(
                 }
             };
             cursor = frame.cursor;
+            if !frame.terminal && frame.job.status != previous_status {
+                previous_status.clone_from(&frame.job.status);
+                yield Ok(task_status_event(&previous_status));
+            }
             for record in frame.events {
                 for outgoing in translation::stream_events(
                     record,

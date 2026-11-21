@@ -737,6 +737,13 @@ package together. The Browser App requires `claw-os-browser-render-v1`.
 Existing per-user default overrides and Chromium profile data are not changed.
 Load the Claw extension in Helium to use the signed-in path.
 
+To enable the Claw Agent side panel on an existing Desktop installation, update
+the Desktop and Browser App, rerun `tools/install-browser-agent.sh` with the
+same `CLAW_EXT_ID`, and reload the extension. Pin the extension to open chat from
+the toolbar. If the local desktop Agent bridge is unavailable, open the
+desktop Agent once or sign out and back in; browser control on Agent-only
+installs does not require the Desktop chat client.
+
 The old Obscura binaries and raw CDP service on port 9222 are removed.
 The package stops an active system unit before upgrading; separately launched
 legacy browser processes should be stopped before the upgrade.

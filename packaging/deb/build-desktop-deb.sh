@@ -77,6 +77,10 @@ for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
         exit 1
     fi
 done
+if [ ! -x "$STAGE_ROOT/usr/lib/cos/browser-chat-native-host" ]; then
+    echo "error: required Browser chat Native Messaging host missing" >&2
+    exit 1
+fi
 
 APP_DEPS="$(python3 "$PROJECT_DIR/scripts/app_packages.py" check \
     --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" \

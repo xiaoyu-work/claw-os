@@ -1,0 +1,189 @@
+#!/usr/bin/python3 -I
+"""Chat-only Native Messaging client for the desktop Agent bridge."""
+
+from __future__ import annotations
+
+import http.client
+import json
+import os
+import re
+import stat
+import struct
+import sys
+import threading
+from pathlib import Path
+from urllib.parse import urlsplit
+
+MAX_REQUEST = 64 * 1024
+MAX_FRAME = 1024 * 1024
+PROTOCOL = 4
+TASK_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+EVENTS = {"task", "task_status", "delta", "tool_start", "done", "error"}
+
+
+def read_request() -> dict | None:
+    stream = sys.stdin.buffer
+    header = stream.read(4)
+    if not header:
+        return None
+    if len(header) != 4:
+        raise ValueError("Incomplete browser chat request.")
+    size, = struct.unpack("<I", header)
+    if not 0 < size <= MAX_REQUEST:
+        raise ValueError("Browser chat request is too large.")
+    data = stream.read(size)
+    if len(data) != size:
+        raise ValueError("Incomplete browser chat request.")
+    request = json.loads(data)
+    if not isinstance(request, dict):
+        raise ValueError("Expected a browser chat request object.")
+    return request
+
+
+def post_frame(message: dict) -> None:
+    payload = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(payload) >= MAX_FRAME:
+        raise ValueError("Agent response is too large for browser chat.")
+    stream = sys.stdout.buffer
+    stream.write(struct.pack("<I", len(payload)) + payload)
+    stream.flush()
+
+
+def read_endpoint() -> tuple[int, str]:
+    uid = os.getuid()
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", ""))
+    if uid == 0 or runtime.resolve() != Path(f"/run/user/{uid}"):
+        raise ValueError("Browser chat requires the current desktop user's runtime directory.")
+    directory = runtime.resolve() / "cos-agent-bridge"
+    for path in (directory.parent, directory):
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077:
+            raise ValueError("Desktop Agent bridge directory is not private.")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    with os.fdopen(os.open(directory / "endpoint.json", flags), "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077:
+            raise ValueError("Desktop Agent bridge endpoint is not private.")
+        data = source.read(4097)
+    if len(data) > 4096:
+        raise ValueError("Desktop Agent bridge endpoint is too large.")
+    endpoint = json.loads(data)
+    port, token = endpoint["port"], endpoint["token"]
+    if type(port) is not int or not 1 <= port <= 65535 or not re.fullmatch(r"[0-9a-f]{64}", token):
+        raise ValueError("Invalid desktop Agent bridge endpoint.")
+    if not endpoint["min_protocol_version"] <= PROTOCOL <= endpoint["protocol_version"]:
+        raise ValueError("Update the desktop Agent to use browser chat.")
+    return port, token
+
+
+def route(request: dict) -> tuple[str, dict]:
+    action = request.get("action")
+    if action == "chat" and request.keys() <= {"action", "prompt", "session_id", "tab"}:
+        prompt = request.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode()) > 32 * 1024:
+            raise ValueError("Enter a message of at most 32 KiB.")
+        params = {"prompt": prompt}
+        if "session_id" in request:
+            session = request["session_id"]
+            if not isinstance(session, str) or not re.fullmatch(r"ses_[0-9a-f]{13}_[0-9a-f]{12}", session):
+                raise ValueError("Invalid Agent conversation.")
+            params["session_id"] = session
+        if "tab" in request:
+            tab = request["tab"]
+            if not isinstance(tab, dict) or tab.keys() != {"tab_id", "page_url"}:
+                raise ValueError("Invalid browser tab context.")
+            tab_id, url = tab["tab_id"], tab["page_url"]
+            parsed = urlsplit(url) if isinstance(url, str) else None
+            if (
+                type(tab_id) is not int or not 0 <= tab_id <= 2**31 - 1
+                or not parsed or parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None
+                or url != f"{parsed.scheme}://{parsed.netloc}" or any(c.isspace() for c in url)
+                or len(url.encode()) > 4096
+            ):
+                raise ValueError("Invalid browser tab context.")
+            params["context"] = json.dumps({
+                "browser_tab": tab,
+                "read_hint": "Use browser-attached tools for this selected tab. "
+                             "Read or act only as requested by the user and permitted by the broker.",
+            }, ensure_ascii=False)
+        return "/api/chat", params
+    if action in {"stream", "cancel"} and request.keys() == {"action", "task_id"}:
+        task = request["task_id"]
+        if isinstance(task, str) and TASK_ID.fullmatch(task):
+            return f"/api/chat/{task}/{action}", {}
+    raise ValueError("Unsupported browser chat request.")
+
+
+def relay_events(response: http.client.HTTPResponse) -> None:
+    event = ""
+    data: list[bytes] = []
+    size = 0
+    while line := response.readline(MAX_FRAME):
+        if len(line) >= MAX_FRAME or not line.endswith(b"\n"):
+            raise ValueError("Incomplete or oversized Agent event.")
+        line = line.rstrip(b"\r\n")
+        if not line:
+            if event in EVENTS and data:
+                payload = json.loads(b"\n".join(data))
+                post_frame({"event": event, "data": payload})
+                if event in {"done", "error"}:
+                    return
+            event, data, size = "", [], 0
+        elif line.startswith(b"event:"):
+            event = line[6:].strip().decode("ascii")
+        elif line.startswith(b"data:") and event in EVENTS:
+            field = line[5:].removeprefix(b" ")
+            size += len(field) + 1
+            if size >= MAX_FRAME:
+                raise ValueError("Agent event exceeds the browser chat limit.")
+            data.append(field)
+    raise ValueError("Agent stream disconnected; the task may still be running.")
+
+
+def exit_on_disconnect() -> None:
+    # Each port carries one request. Closing the panel ends its HTTP stream,
+    # not the durable Job; only the explicit cancel route cancels a Job.
+    os.read(sys.stdin.fileno(), 1)
+    os._exit(0)
+
+
+def main() -> None:
+    request = read_request()
+    if request is None:
+        return
+    path, params = route(request)
+    try:
+        port, token = read_endpoint()
+    except FileNotFoundError:
+        raise ValueError("Desktop Agent bridge is not running. Open the Claw Agent desktop app and try again.") from None
+    threading.Thread(target=exit_on_disconnect, daemon=True).start()
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    try:
+        connection.request("POST", path, json.dumps(params, ensure_ascii=True), {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-ClawOS-Agent-Protocol-Version": str(PROTOCOL),
+        })
+        with connection.getresponse() as response:
+            if response.status != 200:
+                raise ValueError(f"Desktop Agent bridge rejected the request (HTTP {response.status}).")
+            if request["action"] == "cancel":
+                post_frame({"event": "cancel", "data": json.loads(response.read(MAX_FRAME))})
+            elif response.headers.get_content_type() == "text/event-stream":
+                relay_events(response)
+            else:
+                raise ValueError("Desktop Agent bridge did not return a chat stream.")
+    finally:
+        connection.close()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, http.client.HTTPException):
+        post_frame({"event": "transport_error", "data": {"message": "Cannot reach the desktop Agent bridge."}})
+    except (KeyError, TypeError, json.JSONDecodeError, RecursionError):
+        post_frame({"event": "transport_error", "data": {"message": "Invalid desktop Agent bridge message."}})
+    except ValueError as error:
+        post_frame({"event": "transport_error", "data": {"message": str(error)}})

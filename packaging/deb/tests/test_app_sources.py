@@ -552,7 +552,8 @@ def _browser_asset_check(tmp_path, *, writable=False):
     result = subprocess.run(
         ["bash", "-euc", block], capture_output=True, text=True,
         env={**os.environ, "EXT_ID": "", "EXT_DEST": str(extension),
-             "HOST_IMPL": str(host), "HOST_LAUNCHER": str(launcher)},
+             "HOST_IMPL": str(host), "HOST_LAUNCHER": str(launcher),
+             "CHAT_HOST": str(tmp_path / "browser-chat-native-host")},
     )
     assert {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
     assert result.returncode != 0

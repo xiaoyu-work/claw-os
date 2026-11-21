@@ -75,6 +75,12 @@
     },
     {
       "critical": false,
+      "name": "browser-chat-native-host",
+      "package": "claw-os-desktop",
+      "path": "/usr/lib/cos/browser-chat-native-host"
+    },
+    {
+      "critical": false,
       "name": "cos-agent-ui",
       "package": "claw-os-desktop",
       "path": "/usr/local/bin/cos-agent-ui"

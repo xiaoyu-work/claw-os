@@ -29,6 +29,28 @@ Headless screenshot output is a bounded PNG returned only to the requesting
 App, which writes it to a new authorized file. No renderer path or profile
 is copied to the desktop.
 
+## Claw Agent chat side panel
+
+Pin and click the Claw Agent extension in Helium to open chat beside the page.
+It uses the same model configuration and durable Jobs as the desktop Agent.
+The panel shows streamed replies, approval waits, and Stop cancels the current
+Job. Closing the panel detaches the view, not the Job; reopening it in the same
+browser window reattaches. Private windows do not run the extension.
+
+Select **Use current tab** (or **Summarize this page**) to attach its tab ID and
+origin as labelled request context. No page body, full URL, title, or cookies are
+collected by the panel. Actual reads and actions still require the ordinary
+`browser-attached` tool capability for that origin; providing context is not
+authorization. Switch tabs or origins to clear the selection. **Pause tab
+access** disconnects browser control for new operations until resumed; it
+does not undo actions already started, or stop ordinary chat.
+
+The Desktop package owns `/usr/lib/cos/browser-chat-native-host`. This separate
+unprivileged Native Messaging client accepts only chat, stream, and cancel and
+relays them to the existing owner-authenticated desktop Agent bridge. It
+does not return the bridge token to Helium, expose a new TCP listener, or turn
+the Root-only browser control transport into a browser-callable RPC.
+
 ## Authority and data flow
 
 ```text
@@ -149,8 +171,10 @@ registration remain unchanged. Reload the extension/browser explicitly.
 | `/usr/share/claw/extensions/claw-agent-browser/` | unpacked extension |
 | `/etc/chromium/policies/managed/claw-agent.json` | extension policy |
 | `/etc/chromium/native-messaging-hosts/com.clawos.browser.json` | native-host registration pinned to the extension id |
+| `/etc/chromium/native-messaging-hosts/com.clawos.browser_chat.json` | separate chat registration, when Desktop chat host is installed |
 | `/usr/lib/cos/claw-browser-host` | fixed native-host launcher |
 | `/usr/lib/cos/browser-native-host.py` | OS-owned Native Messaging/socket bridge |
+| `/usr/lib/cos/browser-chat-native-host` | Desktop-owned client for the existing local Agent bridge |
 | `$XDG_RUNTIME_DIR/claw-browser.sock` | owner-owned mode-`0600` socket; root clients only |
 
 The Native Messaging host validates that `XDG_RUNTIME_DIR` resolves exactly to
