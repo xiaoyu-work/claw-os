@@ -131,8 +131,7 @@ case "$1" in
         if [ -z "$DPKG_ROOT" ]; then
             if [ -x /usr/bin/deb-systemd-helper ]; then
                 enable_if_previously_enabled clawd.service
-                deb-systemd-helper unmask cos-browser.service >/dev/null || true
-                deb-systemd-helper update-state cos-browser.service >/dev/null || true
+                deb-systemd-helper purge cos-browser.service >/dev/null || true
             fi
             if [ -d /run/systemd/system ]; then
                 systemctl --system daemon-reload >/dev/null || true
@@ -157,7 +156,6 @@ case "$1" in
                         if deb-systemd-helper --quiet was-enabled clawd.service; then
                             deb-systemd-invoke start clawd.service >/dev/null || true
                         fi
-                        deb-systemd-invoke try-restart cos-browser.service >/dev/null || true
                     else
                         deb-systemd-invoke start clawd.service >/dev/null || true
                     fi

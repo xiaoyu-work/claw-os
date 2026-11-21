@@ -345,14 +345,7 @@ plymouth
 plymouth-themes
 
 # --- Default user-facing GUI apps ---
-# Chromium is the default GUI web browser. It is also the engine the
-# Browser product's `claw-agent-browser` extension + `browser-attached` bridge
-# attach to when the AI agent needs the user's logged-in session
-# (Browser Mode B). Bound to x-scheme-handler/{http,https} and
-# text/html in overlay/etc/xdg/mimeapps.list. The headless cos-browser
-# CLI (`rootfs/features/browser`) is a separate, AI-only surface and
-# does not provide a desktop launcher.
-chromium
+# Helium is installed from its signed archive by the cos-core feature.
 
 # Thunderbird is the default mail / news / calendar client. The AI
 # Agent's email App uses the account-scoped OS mail bridge to the same

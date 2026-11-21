@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-// Uses an installed Chromium browser and Node's built-in CDP WebSocket client;
+// Uses an installed Chromium-based browser and Node's built-in CDP WebSocket client;
 // no browser download, additional dependency, or live agent credentials.
 const dist = path.resolve(process.env.ACTIVITY_UI_DIST || ".activity-validation/dist");
 const profile = path.resolve(".activity-validation", `browser-${randomUUID()}`);
@@ -1472,12 +1472,12 @@ async function installedBrowser() {
       }
     }
   } else {
-    for (const name of ["chromium", "chromium-browser", "google-chrome"]) {
+    for (const name of ["helium", "chromium", "chromium-browser", "google-chrome"]) {
       const result = spawnSync("which", [name], { encoding: "utf8" });
       if (result.status === 0) return result.stdout.trim();
     }
   }
-  throw new Error("No installed Chromium browser found. Set ACTIVITY_BROWSER to its executable.");
+  throw new Error("No installed Chromium-based browser found. Set ACTIVITY_BROWSER to its executable.");
 }
 
 async function connect(endpoint) {

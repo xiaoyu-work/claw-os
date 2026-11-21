@@ -14,6 +14,24 @@ use super::authority::Decision;
 use super::protocol::BrokerError;
 use super::wire::requests::BrowserControl;
 
+#[cfg(target_os = "linux")]
+mod headless;
+
+pub async fn render(
+    params: Value,
+    authority: &Decision,
+    state: &super::state::DaemonState,
+) -> Result<Value, BrokerError> {
+    #[cfg(target_os = "linux")]
+    return headless::render(params, authority, state).await;
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (params, authority, state);
+        Err(BrokerError::unavailable("Helium rendering requires Linux"))
+    }
+}
+
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(35);
 const MAX_BRIDGE_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BRIDGE_ERROR_BYTES: usize = 4096;

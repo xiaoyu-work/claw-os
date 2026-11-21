@@ -467,7 +467,6 @@ fn tool_requires_binding(name: &str, input: &serde_json::Value) -> bool {
     let read_commands: &[&str] = match name {
         "cos_proc" => &["status", "output", "list", "wait", "result", "stats"],
         "cos_service" => &["status", "health", "list", "logs"],
-        "cos_browser" => &["status", "health"],
         "cos_netfilter" => &["list", "check", "export", "rate-limits"],
         "cos_cron" => &["list", "status", "logs"],
         "cos_checkpoint" => &["diff", "list", "status", "quota-status", "namespaces"],

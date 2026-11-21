@@ -830,15 +830,6 @@ fn dispatch_agent_help_does_not_hijack() {
     assert!(v["commands"].is_object());
 }
 
-#[test]
-fn browser_module_compiles() {
-    // cos browser is no longer a user CLI primitive — it's exposed
-    // only as the `cos_browser` agent tool. Smoke-test that the module
-    // is still wired up by reaching the unknown-command path.
-    let err = crate::browser::run("__nope__", &[]).unwrap_err();
-    assert!(err.contains("unknown"));
-}
-
 // -----------------------------------------------------------------
 // `cos app consent` CLI surface — see consent_cmd() above.
 // -----------------------------------------------------------------

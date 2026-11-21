@@ -57,13 +57,6 @@ pub struct NetConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebConfig {
-    /// Browser engine name (informational; cos-browser is currently the only
-    /// supported engine).
-    #[serde(default = "default_web_engine")]
-    pub engine: String,
-    /// Port on which `cos browser start` runs the CDP server.
-    #[serde(default = "default_cdp_port")]
-    pub cdp_port: u16,
     #[serde(default = "default_net_timeout")]
     pub timeout: u64,
     #[serde(default = "default_max_content_length")]
@@ -714,18 +707,6 @@ fn default_net_timeout() -> u64 {
 fn default_true() -> bool {
     true
 }
-fn default_reader_url() -> String {
-    // Retained for backward-compatible JSON parsing. The cos-browser engine
-    // exposes CDP at a port (see default_cdp_port), not a URL — but old
-    // config files may still set reader_url which we now ignore.
-    "http://localhost:3000".into()
-}
-fn default_web_engine() -> String {
-    "cos-browser".into()
-}
-fn default_cdp_port() -> u16 {
-    9222
-}
 fn default_max_content_length() -> usize {
     50000
 }
@@ -853,8 +834,6 @@ impl Default for NetConfig {
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
-            engine: default_web_engine(),
-            cdp_port: default_cdp_port(),
             timeout: default_net_timeout(),
             max_content_length: default_max_content_length(),
         }
@@ -1165,8 +1144,6 @@ pub fn as_env_vars() -> Vec<(String, String)> {
             "COS_NET_ALLOW_OUTBOUND".into(),
             cfg.net.allow_outbound.to_string(),
         ),
-        ("COS_WEB_ENGINE".into(), cfg.web.engine.clone()),
-        ("COS_BROWSER_PORT".into(), cfg.web.cdp_port.to_string()),
         ("COS_WEB_TIMEOUT".into(), cfg.web.timeout.to_string()),
         (
             "COS_WEB_MAX_CONTENT_LENGTH".into(),

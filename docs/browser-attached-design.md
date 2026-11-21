@@ -1,10 +1,10 @@
 # Browser (attached) design
 
-The `browser-attached` App drives the user's running, logged-in Chromium tabs.
-Headless and isolated browsing remains the responsibility of the
-[`web` App](https://github.com/xiaoyu-work/clawos-app/tree/main/products/browser/apps/web)
-and the OS-owned `cos-browser` engine. OS packaging consumes the App from its
-immutable product source pin; it does not merge headless and attached authority.
+The `browser-attached` App drives the user's running, signed-in Helium tabs.
+The [`web` App](https://github.com/xiaoyu-work/clawos-app/tree/main/products/browser/apps/web)
+requests headless rendering through `system.browser.render`. Both use the same
+installed Helium binary. The renderer never receives the desktop profile or
+the Native Messaging extension.
 
 ## Why this is a separate browser path
 
@@ -14,7 +14,20 @@ immutable product source pin; it does not merge headless and attached authority.
 | Operate the window the user is viewing | No | Yes |
 | Isolate an automated browsing profile | Yes | No |
 | Run many independent browser jobs | Yes | No |
-| Keep element references across App calls | Yes | Yes |
+| Keep element references across App calls | No | Yes |
+
+`clawd` checks the exact `net.dial` capability and starts Helium as a non-root
+process in a bounded cgroup and private network, PID, mount and user namespaces.
+The browser retains its own renderer sandbox. The only CDP transport is a pipe
+to the broker, never a listener or an App-supplied command. The broker pins
+public DNS answers; it validates the authorized origin and live grant before
+forwarding each GET or HEAD. It does not follow redirects on the browser's
+behalf. Cross-origin assets and navigation are blocked, and explicit form
+submission stays on the separately authorized HTTP path.
+
+Headless screenshot output is a bounded PNG returned only to the requesting
+App, which writes it to a new authorized file. No renderer path or profile
+is copied to the desktop.
 
 ## Authority and data flow
 
@@ -118,7 +131,9 @@ origin-bound capability and frame identity.
 
 The App, transport launchers and MV3 extension source are owned by
 [`clawos-app/products/browser`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/browser).
-The Native Messaging/socket transport is OS-owned and installed by Agent's
+Helium retains Chromium's Linux system Native Messaging path. Keep that
+compatible path and the `chrome.*` extension APIs unchanged. The Native
+Messaging/socket transport is OS-owned and installed by Agent's
 `claw-os-browser-bridge-v1 (= 1)` interface. It is not another App, an App
 permission bypass or an App-owned privileged socket server.
 Native Messaging registration remains an explicit
@@ -147,7 +162,7 @@ cannot enter that runtime directory.
 
 ## Current platform limits
 
-- The extension is Chromium-specific.
+- Helium uses Chromium's MV3 extension interfaces.
 - DOM operations target frame `0` only.
 - A stale element ref must be replaced with a new `dom.query`.
 - A stable packaged extension id is required for unattended installation.

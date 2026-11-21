@@ -228,15 +228,11 @@ cos sys resources
 cos sys uptime
 ```
 
-## Browser Service
+## Browser
 
-Manage the built-in browser rendering engine:
-
-```bash
-cos browser status
-cos browser health
-cos browser restart
-```
+Use the `web` App to read or render public pages in isolated Helium. Use
+`browser-attached` only for the user's authorized, signed-in Helium tabs.
+The two modes never share a browser profile.
 
 ## Network Doctor
 

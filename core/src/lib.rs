@@ -25,7 +25,6 @@ pub mod apps;
 pub mod audit;
 pub mod audit_policy;
 pub mod bridge;
-pub mod browser;
 pub mod caps;
 pub mod checkpoint;
 pub(crate) mod cli_catalog;

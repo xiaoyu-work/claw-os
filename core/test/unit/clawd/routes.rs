@@ -123,6 +123,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.observation.query",
     "system.notification.control",
     "system.browser.control",
+    "system.browser.render",
     "system.display.control",
     "system.events.control",
     "system.file.replace",

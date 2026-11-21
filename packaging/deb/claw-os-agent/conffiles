@@ -1,3 +1,5 @@
 /etc/apt/apt.conf.d/50claw-os-security-floor
 /etc/apt/sources.list.d/claw-apps.sources
+/etc/apt/sources.list.d/claw-helium.sources
+/etc/apt/preferences.d/claw-helium.pref
 /etc/cos/profile.sh

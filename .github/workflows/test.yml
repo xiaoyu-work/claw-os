@@ -160,9 +160,6 @@ jobs:
           COS_SECURITY_FLOOR_BIN="$GITHUB_WORKSPACE/target/debug/claw-security-floor" \
             bash packaging/deb/tests/test-security-floor-install.sh
 
-      - name: Run cos-browser tests
-        run: cargo test -p cos-browser
-
       - name: Run App data SDK and provider contracts
         run: bash scripts/ci/test-boundaries.sh applets
 

@@ -12,7 +12,6 @@
 #
 # Inputs:
 #   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
-#   target/<RUST_TARGET:gnu>/release/cos-browser  (glibc — V8 needs it)
 #   build/app-packages/                       (authenticated independent App APT inputs)
 #   skills/                                               (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
@@ -192,7 +191,7 @@ ensure_cargo() {
     fi
     if ! command -v cargo >/dev/null 2>&1; then
         echo "error: cargo not found — the Rust toolchain is required to build the" >&2
-        echo "       cos / clawd / cos-browser binaries. Install it with:" >&2
+        echo "       cos / clawd binaries. Install it with:" >&2
         echo "         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" >&2
         echo "         . \"\$HOME/.cargo/env\"" >&2
         echo "       (when building under sudo, the toolchain is still found via" >&2
@@ -238,7 +237,7 @@ ensure_cargo() {
 # cargo never runs).
 #
 # The target defaults to $RUST_TARGET (musl, static). Callers override it for
-# crates that cannot link against musl — see cos-browser below.
+# crates that cannot link against musl.
 #
 #   $1 = binary name to locate   $2 = cargo package to build if missing
 #   $3 = target triple (optional, default $RUST_TARGET)
@@ -446,6 +445,12 @@ install -Dm0644 "$PROJECT_DIR/core/assets/app-store-archive-key.asc" \
     "$AGENT_STAGE/usr/share/keyrings/claw-apps-archive-key.asc"
 install -Dm0644 "$SCRIPT_DIR/claw-os-agent/claw-apps.sources" \
     "$AGENT_STAGE/etc/apt/sources.list.d/claw-apps.sources"
+install -Dm0644 "$SCRIPT_DIR/claw-os-agent/helium-archive-key.asc" \
+    "$AGENT_STAGE/usr/share/keyrings/claw-helium-archive-key.asc"
+install -Dm0644 "$SCRIPT_DIR/claw-os-agent/claw-helium.sources" \
+    "$AGENT_STAGE/etc/apt/sources.list.d/claw-helium.sources"
+install -Dm0644 "$SCRIPT_DIR/claw-os-agent/claw-helium.pref" \
+    "$AGENT_STAGE/etc/apt/preferences.d/claw-helium.pref"
 render_control "$SCRIPT_DIR/claw-os-agent/postinst" "$AGENT_STAGE/DEBIAN/postinst.body"
 {
     cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
@@ -568,20 +573,6 @@ install -m 644 \
     "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
     "$AGENT_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
 
-# V8 only publishes prebuilt libraries for glibc targets, so the browser
-# binaries intentionally live beside the musl-built core in the same package.
-COS_BROWSER_BIN="$(ensure_bin cos-browser cos-browser "${RUST_TARGET/-musl/-gnu}")" || {
-    echo "error: cos-browser binary not built" >&2; exit 1; }
-COS_BROWSER_WORKER="$(dirname "$COS_BROWSER_BIN")/cos-browser-worker"
-if [ ! -f "$COS_BROWSER_WORKER" ] || ! binary_matches_arch "$COS_BROWSER_WORKER"; then
-    echo "error: cos-browser-worker binary not built for $DEB_ARCH" >&2
-    exit 1
-fi
-echo "  :: cos-browser            <- $COS_BROWSER_BIN"
-echo "  :: cos-browser-worker     <- $COS_BROWSER_WORKER"
-install -m 755 "$COS_BROWSER_BIN" "$AGENT_STAGE/usr/local/bin/cos-browser"
-install -m 755 "$COS_BROWSER_WORKER" "$AGENT_STAGE/usr/local/bin/cos-browser-worker"
-
 CLAW_SEMANTIC_DAEMON_BIN="$(
     ensure_bin claw-semantic-daemon claw-semantic "${RUST_TARGET/-musl/-gnu}"
 )" || { echo "error: claw-semantic-daemon binary not built" >&2; exit 1; }
@@ -632,8 +623,6 @@ find "$AGENT_STAGE/usr/lib/cos/python" -name '__pycache__' -type d \
 USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
 install -m 644 "$SYSTEM_UNITS_SRC/clawd.service" \
     "$AGENT_STAGE/usr/lib/systemd/system/clawd.service"
-install -m 644 "$SYSTEM_UNITS_SRC/cos-browser.service" \
-    "$AGENT_STAGE/usr/lib/systemd/system/cos-browser.service"
 NEARBY_ASSETS="$SCRIPT_DIR/claw-os-agent/nearby"
 install -Dm0644 "$NEARBY_ASSETS/claw-nearby-radio.service" \
     "$AGENT_STAGE/usr/lib/systemd/system/claw-nearby-radio.service"

@@ -55,7 +55,7 @@ if [[ ! -x "${HOST_LAUNCHER}" ]]; then
   exit 1
 fi
 
-echo "[claw] installing Native Messaging manifest → ${NM_MANIFEST}"
+echo "[claw] installing Helium Native Messaging manifest → ${NM_MANIFEST}"
 install -d -m 0755 "$(dirname "${NM_MANIFEST}")"
 if [[ -n "${EXT_ID}" ]]; then
   ALLOWED_ORIGINS=$(printf '"chrome-extension://%s/"' "${EXT_ID}")
@@ -105,8 +105,8 @@ cat <<MSG
 [claw] install complete.
 
 Next steps:
-  1. Launch Chromium.
-  2. chrome://extensions → Developer mode ON → Load unpacked → ${EXT_DEST}
+  1. Launch Helium.
+  2. helium://extensions → Developer mode ON → Load unpacked → ${EXT_DEST}
   3. Note the assigned Extension ID (32 lowercase letters).
   4. Re-run this script with CLAW_EXT_ID=<id> to pin Native Messaging
      and the extension allowlist to that ID:

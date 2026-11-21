@@ -187,8 +187,8 @@ body = open(sys.argv[1], encoding="utf-8").read()
 upgrade = body.index('if [ -n "$2" ]; then')
 enabled = body.index("deb-systemd-helper --quiet was-enabled clawd.service", upgrade)
 start = body.index("deb-systemd-invoke start clawd.service", enabled)
-browser = body.index("deb-systemd-invoke try-restart cos-browser.service", start)
-assert upgrade < enabled < start < browser
+assert upgrade < enabled < start
+assert "deb-systemd-invoke try-restart cos-browser.service" not in body
 PY
 assert_contains "$POSTINST" 'identity_finalize' \
     "postinst must validate and write the runtime reservation manifest"

@@ -1403,7 +1403,12 @@ fn dispatch_with_stdin_impl(
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal browser command requires COS_SESSION".to_string())?;
         request.insert("session".to_string(), Value::String(session));
-        let value = request_browser_clawd(Value::Object(request))?;
+        let value = if request.get("action").and_then(Value::as_str) == Some("render") {
+            request.remove("action");
+            request_wire_clawd(Command::SystemBrowserRender, Value::Object(request))?
+        } else {
+            request_browser_clawd(Value::Object(request))?
+        };
         return Ok(Some(value.to_string()));
     }
 

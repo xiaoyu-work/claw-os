@@ -38,7 +38,7 @@ fn child_proxy_is_an_explicit_session_route_allowlist() {
             );
         assert_eq!(child_route(route), expected, "route {}", route.name);
     }
-    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 47);
+    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 48);
     assert!(child_route(Command::SystemPackageQuery.route()));
     assert!(!host_lifecycle_route(Command::SystemPackageQuery));
     assert!(child_route(Command::SystemFileReplace.route()));
@@ -64,6 +64,7 @@ fn child_proxy_is_an_explicit_session_route_allowlist() {
     assert!(child_route(Command::AiChat.route()));
     assert!(child_route(Command::SystemFilesystemWrite.route()));
     assert!(child_route(Command::SystemBrowserControl.route()));
+    assert!(child_route(Command::SystemBrowserRender.route()));
     assert!(child_route(Command::SystemNetworkDiagnose.route()));
     assert!(!child_route(Command::TaskCancel.route()));
     assert!(!child_route(Command::AppSessionRegister.route()));

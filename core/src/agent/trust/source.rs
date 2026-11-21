@@ -611,7 +611,6 @@ impl SourceKind {
         match tool_name {
             "cos_workspace" => Self::WorkspaceSharedSource,
             "cos_app_memory" => Self::AppMemory,
-            "cos_browser" => Self::WebPageContent,
             "cos_tts" | "cos_stt" | "cos_imagegen" | "cos_vision" => Self::MediaTranscript,
             "cos_skill" => Self::SkillInstructions,
             "cos_recall" | "cos_recall_semantic" | "cos_memory" => Self::RecalledMemory,

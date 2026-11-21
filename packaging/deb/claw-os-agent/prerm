@@ -23,11 +23,9 @@ case "$1" in
                         exit 1
                     fi
                 fi
-                deb-systemd-invoke stop cos-browser.service >/dev/null || true
             fi
             if [ -x /usr/bin/deb-systemd-helper ]; then
                 deb-systemd-helper disable clawd.service >/dev/null || true
-                deb-systemd-helper disable cos-browser.service >/dev/null || true
             fi
         fi
         rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/clawd.service"

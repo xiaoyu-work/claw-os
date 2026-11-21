@@ -1,0 +1,7 @@
+Package: helium-bin
+Pin: origin pkg.helium.computer
+Pin-Priority: 500
+
+Package: *
+Pin: origin pkg.helium.computer
+Pin-Priority: -1

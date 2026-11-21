@@ -19,7 +19,7 @@ CLI, semantic, and embedding surfaces.
 | `claw-semantic/` | Filesystem semantic daemon, config, service orchestration, and CLI |
 | `clawd-client/` | Unprivileged typed broker discovery, framing, envelopes, deadlines, and errors |
 | `claw-compositor/` | OS-private native compositor enforcement bridge; no Agent or App capability authority |
-| `cos-browser/`, `cos-cli/` | First-party binaries/tools |
+| `cos-cli/` | First-party CLI tooling |
 | `obscura-*/` | Vendored browser-engine internals |
 | `../Cargo.toml` | Workspace membership and shared dependencies |
 

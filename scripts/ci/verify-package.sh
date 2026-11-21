@@ -48,13 +48,15 @@ case "$component" in
             usr/lib/cos/bin/claw-display-host
             "usr/lib/$(dpkg-architecture -a"$ARCH" -qDEB_HOST_MULTIARCH)/security/pam_claw_display.so"
             usr/lib/sysusers.d/claw-os-agent.conf
-            usr/local/bin/cos-browser
             usr/local/bin/claw-semantic
             usr/local/bin/claw-semantic-daemon
             usr/lib/cos/python/claw_os_sdk/__init__.py
             usr/lib/cos/python/cos_runtime/__init__.py
             usr/share/keyrings/claw-apps-archive-key.asc
             etc/apt/sources.list.d/claw-apps.sources
+            usr/share/keyrings/claw-helium-archive-key.asc
+            etc/apt/sources.list.d/claw-helium.sources
+            etc/apt/preferences.d/claw-helium.pref
             usr/lib/cos/bin/claw-app-apt-hook
             usr/lib/cos/bin/claw-notification-panel
             usr/lib/cos/app-apt-metadata.py
@@ -68,6 +70,11 @@ case "$component" in
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-calendar-read-v1
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-nearby-v1
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-display-session-v2
+        dpkg-deb -f "$deb" Provides | grep -qw claw-os-browser-render-v1
+        if grep -Eq '/(cos-browser(-worker)?|cos-browser\.service)$' "$files"; then
+            echo "error: legacy raw browser service is still packaged" >&2
+            exit 1
+        fi
         if grep -Fxq './etc/cos/oauth.conf' "$files" \
             || grep -q '/usr/lib/cos/apps/' "$files"; then
             echo "error: Agent contains excluded OAuth configuration or App payloads" >&2

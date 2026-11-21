@@ -11,6 +11,13 @@ case "$1" in
     install|upgrade)
         if [ -z "$DPKG_ROOT" ] && [ "$1" = upgrade ] &&
             [ -d "$identity_systemd_dir" ]; then
+            if systemctl --quiet is-active cos-browser.service; then
+                deb-systemd-invoke stop cos-browser.service >/dev/null
+                if systemctl --quiet is-active cos-browser.service; then
+                    echo "claw-os-agent: legacy browser service did not retire before upgrade" >&2
+                    exit 1
+                fi
+            fi
             deb-systemd-invoke stop clawd.service >/dev/null
             if systemctl --quiet is-active clawd.service; then
                 echo "claw-os-agent: clawd.service did not stop before identity migration" >&2

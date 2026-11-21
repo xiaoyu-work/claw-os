@@ -28,7 +28,7 @@ Azure is a platform target rather than a local preset:
   `vmware`, `copilot-cli` and the VM/boot features). `wsl` and `docker` use
   their target's own correct defaults, so they pass no override.
 - The desktop image is large and slow to build from scratch (**~1–2 h**: V8 for
-  `cos-browser`, then the COSMIC crates). See
+  then the COSMIC crates). See
   [`docs/building-desktop.md`](../docs/building-desktop.md) for prerequisites,
   VMware setup, and incremental-rebuild tips.
 - `docker.sh` doesn't need `sudo` (the Docker daemon does the privileged work);

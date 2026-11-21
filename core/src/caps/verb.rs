@@ -217,7 +217,7 @@ impl Verb {
     // These verbs gate the *user's* GUI browser (the Chromium that ships
     // with the OS, with the user's logged-in profile). Per-tab actions
     // are scoped to the page's host. Headless browser ops (the web App →
-    // cos-browser) use net.dial instead — that's a different surface.
+    // Helium headless renderer) use net.dial instead — that's a different surface.
     pub const BROWSER_TABS_READ: Verb = Verb::new("browser.tabs.read");
     pub const BROWSER_NAV: Verb = Verb::new("browser.nav");
     pub const BROWSER_DOM_READ: Verb = Verb::new("browser.dom.read");

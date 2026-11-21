@@ -1,0 +1,9 @@
+Types: deb
+URIs: https://pkg.helium.computer/deb
+Suites: stable
+Components: main
+Architectures: amd64 arm64
+Signed-By: /usr/share/keyrings/claw-helium-archive-key.asc
+Allow-Insecure: no
+Allow-Weak: no
+Allow-Downgrade-To-Insecure: no

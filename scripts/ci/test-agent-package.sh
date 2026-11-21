@@ -84,7 +84,7 @@ installed() {
         --original-mount-namespace "$original_mount" \
         --original-pid-namespace "$original_pid" \
         --original-network-namespace "$original_network"
-    /usr/local/bin/cos-browser --help >/dev/null
+    test ! -e /usr/local/bin/cos-browser
     COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
         /usr/local/bin/cos agent skills list \
         | python3 -c 'import json,sys; data=json.load(sys.stdin); assert "claw-os" in data["names"]'

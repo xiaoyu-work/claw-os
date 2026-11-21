@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-for unit in clawd.service cos-browser.service cos-home-setup.service; do
+for unit in clawd.service cos-home-setup.service; do
     if [ ! -f "$ROOTFS/usr/lib/systemd/system/$unit" ]; then
         echo "error: expected packaged system unit missing: $unit" >&2
         exit 1
@@ -23,7 +23,6 @@ else
     ln -sf /usr/lib/systemd/system/cos-home-setup.service \
         "$ROOTFS/etc/systemd/system/multi-user.target.wants/cos-home-setup.service"
 fi
-echo "  :: cos-browser.service installed (not enabled by default)"
 
 # User indexers are global default.target services, so they also run for
 # headless/SSH user managers. Their ConditionPathIsExecutable directives

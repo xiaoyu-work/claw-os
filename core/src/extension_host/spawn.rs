@@ -1490,7 +1490,7 @@ pub struct ResourceGroup {
 }
 
 impl ResourceGroup {
-    fn create(root: &ContainmentRoot, task_id: &str) -> Result<Self, String> {
+    pub(crate) fn create(root: &ContainmentRoot, task_id: &str) -> Result<Self, String> {
         let digest = crate::crypto::sha256_hex(task_id.as_bytes());
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let name = format!("cos-extension-{}-{}", &digest[..16], &nonce[..12]);
@@ -1530,7 +1530,7 @@ impl ResourceGroup {
         }
     }
 
-    fn procs_fd(&self) -> RawFd {
+    pub(crate) fn procs_fd(&self) -> RawFd {
         self.procs.as_raw_fd()
     }
 
@@ -1623,7 +1623,7 @@ impl Drop for ResourceGroup {
     }
 }
 
-fn attach_current_process(procs_fd: RawFd) -> std::io::Result<()> {
+pub(crate) fn attach_current_process(procs_fd: RawFd) -> std::io::Result<()> {
     let mut digits = [0u8; 10];
     let mut value = unsafe { libc::getpid() } as u32;
     let mut start = digits.len();

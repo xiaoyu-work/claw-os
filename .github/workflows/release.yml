@@ -157,7 +157,6 @@ jobs:
             --manifest-path crates/claw-nearby/Cargo.toml --bins \
             --target "${RUST_TARGET/-musl/-gnu}" --target-dir "$GITHUB_WORKSPACE/target"
           cargo build --release --locked -p claw-display-login --target "${RUST_TARGET/-musl/-gnu}"
-          cargo build --release --locked -p cos-browser --target "${RUST_TARGET/-musl/-gnu}"
           cargo build --release --locked -p claw-semantic --target "${RUST_TARGET/-musl/-gnu}"
 
       - name: Build Agent package

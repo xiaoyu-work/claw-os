@@ -18,8 +18,7 @@ fn default_config_has_sensible_values() {
     assert_eq!(cfg.exec.shell, "/bin/bash");
     assert_eq!(cfg.net.timeout, 30);
     assert!(cfg.net.allow_outbound);
-    assert_eq!(cfg.web.engine, "cos-browser");
-    assert_eq!(cfg.web.cdp_port, 9222);
+    assert_eq!(cfg.web.timeout, 30);
     assert_eq!(cfg.web.max_content_length, 50000);
     assert_eq!(cfg.agent.max_turns, 50);
     assert!(cfg.agent.progressive_tools_enabled);
@@ -33,8 +32,7 @@ fn parse_partial_config() {
     assert_eq!(cfg.home, "/custom");
     // Defaults for missing sections
     assert_eq!(cfg.exec.timeout, 300);
-    assert_eq!(cfg.web.engine, "cos-browser");
-    assert_eq!(cfg.web.cdp_port, 9222);
+    assert_eq!(cfg.web.timeout, 30);
 }
 
 #[test]
@@ -83,7 +81,7 @@ fn parse_full_config() {
     assert_eq!(cfg.exec.shell, "/bin/zsh");
     assert_eq!(cfg.net.timeout, 10);
     assert!(!cfg.net.allow_outbound);
-    assert_eq!(cfg.web.cdp_port, 9333);
+    assert_eq!(cfg.web.timeout, 60);
     assert_eq!(cfg.web.max_content_length, 100000);
 }
 
@@ -93,8 +91,7 @@ fn as_env_vars_returns_all_keys() {
     let keys: Vec<&str> = vars.iter().map(|(k, _)| k.as_str()).collect();
     assert!(keys.contains(&"COS_EXEC_TIMEOUT"));
     assert!(keys.contains(&"COS_NET_TIMEOUT"));
-    assert!(keys.contains(&"COS_WEB_ENGINE"));
-    assert!(keys.contains(&"COS_BROWSER_PORT"));
+    assert!(keys.contains(&"COS_WEB_TIMEOUT"));
     assert!(keys.contains(&"COS_HOME"));
 }
 

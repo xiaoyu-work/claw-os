@@ -51,16 +51,22 @@ install -Dm0644 "$PROJECT_DIR/core/assets/app-store-archive-key.asc" \
     "$ROOTFS/usr/share/keyrings/claw-apps-archive-key.asc"
 install -Dm0644 "$PROJECT_DIR/packaging/deb/claw-os-agent/claw-apps.sources" \
     "$ROOTFS/etc/apt/sources.list.d/claw-apps.sources"
+install -Dm0644 "$PROJECT_DIR/packaging/deb/claw-os-agent/helium-archive-key.asc" \
+    "$ROOTFS/usr/share/keyrings/claw-helium-archive-key.asc"
+install -Dm0644 "$PROJECT_DIR/packaging/deb/claw-os-agent/claw-helium.sources" \
+    "$ROOTFS/etc/apt/sources.list.d/claw-helium.sources"
+install -Dm0644 "$PROJECT_DIR/packaging/deb/claw-os-agent/claw-helium.pref" \
+    "$ROOTFS/etc/apt/preferences.d/claw-helium.pref"
 mkdir -p "$ROOTFS/var/cache/cos-debs/apps"
 cp "$APP_PACKAGE_INPUTS"/archives/*.deb "$ROOTFS/var/cache/cos-debs/apps/"
 app_debs=()
 for app_deb in "$APP_PACKAGE_INPUTS"/archives/*.deb; do
     app_debs+=("/var/cache/cos-debs/apps/$(basename "$app_deb")")
 done
-chroot "$ROOTFS" apt-get update -qq
+chroot "$ROOTFS" apt-get update --error-on=any -qq
 chroot "$ROOTFS" apt-get install -y --no-install-recommends \
     "/var/cache/cos-debs/$(basename "$AGENT_DEB")" \
-    "/var/cache/cos-debs/$(basename "$BASE_DEB")" "${app_debs[@]}"
+    "/var/cache/cos-debs/$(basename "$BASE_DEB")" helium-bin "${app_debs[@]}"
 chroot "$ROOTFS" apt-get clean
 rm -rf "$ROOTFS/var/cache/cos-debs/apps"
 rm -rf "$ROOTFS/var/lib/apt/lists"/*

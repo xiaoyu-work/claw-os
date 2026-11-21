@@ -3,8 +3,8 @@
 //
 // The registry coverage test proves the *table* is complete. This one
 // proves the table is *connected*: for each kind there is a production
-// path that mints it, and that path yields the expected class, lineage
-// and channel. A kind that no builder can produce is dead metadata, and
+// path that mints or replays it with the expected class, lineage and
+// channel. A kind that no builder or reader can produce is dead metadata, and
 // a builder that mints the wrong kind is a mislabelling bug the table
 // alone cannot catch.
 
@@ -215,7 +215,6 @@ fn from_tool_results(observed: &mut std::collections::BTreeSet<SourceKind>) {
         ("mcp_github_issue", SourceKind::McpToolResult),
         ("app_calendar__calendar_list", SourceKind::AppToolResult),
         ("cos_app_memory", SourceKind::AppMemory),
-        ("cos_browser", SourceKind::WebPageContent),
         ("cos_stt", SourceKind::MediaTranscript),
         ("cos_imagegen", SourceKind::MediaTranscript),
         ("cos_skill", SourceKind::SkillInstructions),
@@ -333,6 +332,17 @@ fn from_replay(observed: &mut std::collections::BTreeSet<SourceKind>) {
     assert_eq!(legacy.kind(), SourceKind::LegacyStoredRow);
     assert_eq!(legacy.class(), TrustClass::LegacyUnknown);
     record(observed, legacy);
+
+    // Persisted page results retain their source tag across renderer changes.
+    let stored_page = crate::agent::safety::untrusted::wrap_labeled(
+        SourceKind::WebPageContent,
+        Some("cos_browser"),
+        HOSTILE,
+    );
+    let page = LabeledSegment::from_stored(&stored_page);
+    assert_eq!(page.kind(), SourceKind::WebPageContent);
+    assert_eq!(page.class(), TrustClass::UntrustedExternalContent);
+    record(observed, page);
 
     record(
         observed,

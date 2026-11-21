@@ -262,6 +262,17 @@ pub struct AppServiceManager {
 }
 
 impl AppServiceManager {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn browser_render_group(
+        &self,
+    ) -> Result<crate::extension_host::spawn::ResourceGroup, String> {
+        let parent = self.broker.extension_containment()?;
+        crate::extension_host::spawn::ResourceGroup::create(
+            parent.as_ref(),
+            &format!("browser-render-{}", uuid::Uuid::new_v4()),
+        )
+    }
+
     pub fn new(broker: BrokerContext) -> Arc<Self> {
         Arc::new(Self {
             broker,

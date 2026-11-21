@@ -1604,6 +1604,32 @@ pub struct BrowserControl {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct BrowserRender {
+    pub session: Token,
+    pub url: Text<PATH_BYTES>,
+    pub output: BrowserRenderOutput,
+    pub selector: Option<Text<COMMAND_BYTES>>,
+    pub selector_wait_secs: Option<u16>,
+    pub timeout_secs: Option<u16>,
+    pub user_agent: Option<Text<LABEL_BYTES>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserRenderOutput {
+    Eval {
+        expression: Text<BROWSER_VALUE_BYTES>,
+    },
+    Html,
+    Screenshot {
+        width: u32,
+        height: u32,
+        full_page: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MailControl {
     pub session: Token,
     pub action: Token,

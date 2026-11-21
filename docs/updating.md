@@ -726,6 +726,21 @@ automatic work and cancels associated Jobs without deleting original files,
 goals or evidence. Unconfirmed resource retirement remains visible as pending.
 See [Workspace behavior and controls](workspaces.md).
 
+### Helium browser
+
+The desktop default is `helium.desktop` and headless Browser operations use
+the same `helium-bin` package in a temporary profile. The Agent package ships
+Helium's signed APT source, pinned so that it supplies only `helium-bin`.
+On an existing system, first upgrade `claw-os-agent` to install that source,
+then run `sudo apt update` and upgrade `claw-app-browser` and the Desktop
+package together. The Browser App requires `claw-os-browser-render-v1`.
+Existing per-user default overrides and Chromium profile data are not changed.
+Load the Claw extension in Helium to use the signed-in path.
+
+The old Obscura binaries and raw CDP service on port 9222 are removed.
+The package stops an active system unit before upgrading; separately launched
+legacy browser processes should be stopped before the upgrade.
+
 ### App data moves into per-App directories
 
 Ordinary Python and polyglot operations now wait in `claw-app-runner` until

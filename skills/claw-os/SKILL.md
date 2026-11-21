@@ -45,7 +45,6 @@ namespaces:
 | `cos_watch` | Event-driven file/process/service watching ([details](watch.md)) |
 | `cos_netfilter` | Outbound firewall and rate limiting ([details](network.md)) |
 | `cos_trace` | Execution tracing — tree-structured observability ([details](trace.md)) |
-| `cos_browser` | Standalone CDP server lifecycle for external Puppeteer/Playwright clients (the `web` app already uses cos-browser per-request and does not need this) |
 | `cos_diagnose` | Structured system diagnosis with bounded probes, evidence IDs, confidence, and recommendations ([diagnostic protocol](diagnostics.md)) |
 
 ## System Diagnosis

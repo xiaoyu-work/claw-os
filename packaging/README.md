@@ -36,7 +36,7 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser/semantic binaries, skills, SDK/runtime, trust roots, Agent system/user units and App channel configuration; no App payloads | `amd64`, `arm64` | Debian/Ubuntu runtime libraries, `systemd`, and `pkexec`; recommends `claw-apps-agent` |
+| `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser provider, semantic binaries, skills, SDK/runtime, trust roots, Agent system/user units and App channel configuration; no App payloads | `amd64`, `arm64` | Debian/Ubuntu runtime libraries, `systemd`, and `pkexec`; recommends `claw-apps-agent` and Helium |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy, and model-specific udev/libinput rules | `all` | `claw-os-agent` |
 | `claw-os-desktop` | Protected Hyprland, graphical login and Agent, system services, and the signed Desktop Shell (Quickshell, Caelestia and private Qt) | `amd64`, `arm64` | `claw-os-base`, `claw-os-display-session-v2`, `claw-apps-agent`, every individual graphical Claw App package and the Thunderbird integration |
 
@@ -558,8 +558,9 @@ are documented in [`../docs/updating.md`](../docs/updating.md#downgrade-protecti
 ## Build
 
 The .debs are built **from already-compiled binaries** — `dpkg-deb --build`
-just assembles staging trees. CI builds `cos` (musl) and `cos-browser`
-(glibc) first, then invokes `packaging/deb/build-debs.sh`.
+just assembles staging trees. CI builds `cos` and the separate native
+helpers first. Helium comes from its signed upstream APT channel; the OS
+and Browser App do not redistribute the upstream binary.
 
 Each package version is generated independently as
 `<semver>+git<commit-count>.g<sha>`. Pull-request artifacts use a lower-sorting
@@ -569,7 +570,6 @@ to avoid reusing a stale commit-derived package filename.
 ```bash
 # Build binaries for the host architecture (amd64 shown here).
 cargo build --release -p cos --target x86_64-unknown-linux-musl
-cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
 # Build only the reusable Agent
 python3 scripts/app_packages.py prepare --variant agent --architecture amd64

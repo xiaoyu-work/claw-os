@@ -247,8 +247,8 @@ PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
   python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src \
     packaging/deb/tests/test_app_sources.py
 
-# Browser crate.
-cargo test -p cos-browser
+# Browser broker.
+cargo test -p cos --lib clawd::browser -- --test-threads=1
 
 # OS Applet providers build independently, without App sources or GUI inputs.
 cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
@@ -267,7 +267,7 @@ claw-os/
 │       ├── router.rs      Command dispatch
 │       ├── sandbox.rs     Namespace + cgroup isolation
 │       ├── proc.rs        Process session manager
-│       ├── browser.rs     cos-browser (Obscura) lifecycle
+│       ├── clawd/browser/ Private Helium rendering
 │       ├── bridge.rs      Python app subprocess bridge
 │       ├── audit.rs       JSONL audit logging
 │       ├── sysinfo.rs     Native system info

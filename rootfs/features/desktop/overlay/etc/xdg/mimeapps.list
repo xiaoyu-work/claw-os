@@ -14,13 +14,13 @@
 
 [Default Applications]
 
-# --- Web (Chromium) ---
-x-scheme-handler/http=chromium.desktop
-x-scheme-handler/https=chromium.desktop
-x-scheme-handler/about=chromium.desktop
-x-scheme-handler/unknown=chromium.desktop
-text/html=chromium.desktop
-application/xhtml+xml=chromium.desktop
+# --- Web (Helium) ---
+x-scheme-handler/http=helium.desktop
+x-scheme-handler/https=helium.desktop
+x-scheme-handler/about=helium.desktop
+x-scheme-handler/unknown=helium.desktop
+text/html=helium.desktop
+application/xhtml+xml=helium.desktop
 
 # --- Mail (Thunderbird) ---
 x-scheme-handler/mailto=thunderbird.desktop

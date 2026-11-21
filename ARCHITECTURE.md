@@ -87,7 +87,7 @@ route.
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | App development platform | Versioned, digest-pinned SDK/runtime/toolkit library artifact, independent of App releases and OS implementation checkouts | `packaging/app-platform.json`, `scripts/app_platform.py`, `docs/app-platform.md` |
-| Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
+| Browser and semantic services | Brokered Helium rendering and signed-in tab operations, embedding and semantic-search services | `core/src/clawd/browser/`, `crates/claw-*` |
 | Personal-file vector index | Existing owner daemon, fixed local Qwen3 CPU inference pipe, atomic source-revision SQLite corpus and live-root reconciliation; Workspace read visibility stays broker-owned | `crates/claw-semantic/`, `crates/claw-embed/`, `core/src/model/local_embedding.rs` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
 | Desktop Shell | Root-managed Hyprland with separately signed Quickshell/Caelestia frontend and private Qt; installed acceptance is separate from source selection | `desktop/hyprland/`, `desktop/hyprland-claw/MODULE.md`, external `clawos-app/products/desktop-shell/` |
@@ -468,8 +468,10 @@ Calendar's event/provider operations and complete native panel presentation,
 direct `fs` MCP implementation and
 Recoll-backed `docs` tools, explicit-provider Browser `search` and headless
 `web` App have moved as well. The `browser-attached` App, Native Host and MV3
-extension now live in the Browser product too. The reusable `cos-browser`
-engine and privileged attached-browser provider remain here.
+extension now live in the Browser product too. The product also owns the
+vendored Helium source. The OS admits both private headless rendering and
+attached tab actions through separate typed providers. Desktop and headless
+rendering use the same installed Helium browser without sharing a profile.
 
 Calendar, Clipboard and Widget Rail retain their complete original native UI,
 localization and resources in independent App packages. The OS `cosmic-applets`

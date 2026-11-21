@@ -130,3 +130,18 @@ fn invalid_tab_ids_and_browser_schemes_are_refused() {
         .unwrap_err()
         .contains("credentials"));
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn render_uses_only_read_requests_from_the_authorized_origin() {
+    let origin = url::Url::parse("https://example.com/").unwrap().origin();
+    let request = |url, method| json!({"url": url, "method": method});
+    assert!(headless::read_request(&request("https://example.com/style.css", "GET"), &origin).is_ok());
+    for denied in [
+        request("https://example.org/style.css", "GET"),
+        request("https://example.com:8443/path", "GET"),
+        request("https://example.com/form", "POST"),
+    ] {
+        assert!(headless::read_request(&denied, &origin).is_err());
+    }
+}

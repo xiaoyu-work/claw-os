@@ -2614,6 +2614,19 @@ routes! {
             browser::control(c.params, authority).await
         },
     }
+    SystemBrowserRender {
+        name: "system.browser.render",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::log_query(),
+        authority: session(Audience::SystemService),
+        body: body::BrowserRender,
+        audit: &[("session", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            browser::render(c.params, authority, c.state).await
+        },
+    }
     SystemMailControl {
         name: "system.mail.control",
         access: Access::User,

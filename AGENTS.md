@@ -182,8 +182,8 @@ cargo test -p cos <test-filter> -- --test-threads=1
 GITHUB_WORKSPACE="$PWD" RUNNER_TEMP="$PWD/build" \
   bash scripts/ci/test-boundaries.sh capture
 
-# Browser crate
-cargo test -p cos-browser
+# Browser broker and typed provider contract
+cargo test -p cos --lib clawd::browser -- --test-threads=1
 
 # OS Applet providers (independent workspace; no App source preparation)
 cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1

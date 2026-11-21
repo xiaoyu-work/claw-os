@@ -443,15 +443,6 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         required_any_verbs: &[Verb::IPC_PUBLISH, Verb::IPC_SUBSCRIBE, Verb::IPC_INVOKE],
     },
     PrimitiveSpec {
-        name: "cos_browser",
-        description: "Manage the local cos-browser (Obscura) CDP server. \
-                      Lifecycle only — actual fetches go via the cos web app.",
-        primitive: crate::browser::run,
-        commands: &["start", "stop", "restart", "status", "health"],
-        parallel_safe: false,
-        required_any_verbs: &[Verb::SYS_SERVICE],
-    },
-    PrimitiveSpec {
         name: "cos_netfilter",
         description: "Local firewall rules and rate limits (nftables / pf / wfp \
                       depending on platform). Allow/deny by rule, default \
