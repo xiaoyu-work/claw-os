@@ -5,8 +5,10 @@
 #include <pango/pangocairo.h>
 #include <poll.h>
 #include <pwd.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <systemd/sd-bus.h>
 #include <sys/timerfd.h>
 #include <time.h>
 #include <unistd.h>
@@ -29,6 +31,7 @@ enum {
 static const char *account = "Screen locked";
 static cairo_surface_t *wallpaper;
 static cairo_surface_t *logo;
+static cairo_surface_t *avatar;
 
 struct layout {
 	int x, y, width, height;
@@ -69,9 +72,40 @@ static void clock_tick(int fd, short events, void *data) {
 	damage_state(data);
 }
 
+static cairo_surface_t *load_avatar(uid_t uid) {
+	static const char directory[] = "/usr/share/claw-os/avatars/";
+	char object[64];
+	snprintf(object, sizeof(object), "/org/freedesktop/Accounts/User%u", (unsigned)uid);
+	sd_bus *bus = NULL;
+	char *icon = NULL;
+	if (sd_bus_open_system(&bus) >= 0) {
+		sd_bus_set_method_call_timeout(bus, 500000);
+		sd_bus_get_property_string(bus, "org.freedesktop.Accounts", object,
+				"org.freedesktop.Accounts.User", "IconFile", NULL, &icon);
+		sd_bus_unref(bus);
+	}
+	cairo_surface_t *image = NULL;
+	if (icon && g_str_has_prefix(icon, directory)) {
+		const char *id = icon + sizeof(directory) - 1;
+		size_t length = strspn(id, "abcdefghijklmnopqrstuvwxyz");
+		if (length > 0 && length <= 24 && strcmp(id + length, ".png") == 0) {
+			image = cairo_image_surface_create_from_png(icon);
+			if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
+				cairo_surface_destroy(image);
+				image = NULL;
+			}
+		}
+	}
+	free(icon);
+	return image;
+}
+
 void claw_lock_style_start(struct swaylock_state *state) {
 	wallpaper = load_background_image("/usr/share/backgrounds/claw-os/claw-default.jpg");
-	logo = cairo_image_surface_create_from_png("/usr/share/claw-os/oobe/logo.png");
+	avatar = load_avatar(getuid());
+	if (!avatar) {
+		logo = cairo_image_surface_create_from_png("/usr/share/claw-os/oobe/logo.png");
+	}
 
 	const struct passwd *owner = getpwuid(getuid());
 	if (owner) {
@@ -150,12 +184,14 @@ static void paint_avatar(cairo_t *cr, double y) {
 	cairo_set_source_u32(cr, 0xffffffb3);
 	cairo_set_line_width(cr, 1);
 	cairo_stroke(cr);
-	if (cairo_surface_status(logo) == CAIRO_STATUS_SUCCESS) {
+	cairo_surface_t *image = avatar ? avatar : logo;
+	if (cairo_surface_status(image) == CAIRO_STATUS_SUCCESS) {
+		double size = avatar ? 62 : 36;
 		cairo_save(cr);
-		cairo_translate(cr, x - 18, y - 18);
-		cairo_scale(cr, 36.0 / cairo_image_surface_get_width(logo),
-				36.0 / cairo_image_surface_get_height(logo));
-		cairo_set_source_surface(cr, logo, 0, 0);
+		cairo_translate(cr, x - size / 2, y - size / 2);
+		cairo_scale(cr, size / cairo_image_surface_get_width(image),
+				size / cairo_image_surface_get_height(image));
+		cairo_set_source_surface(cr, image, 0, 0);
 		cairo_paint(cr);
 		cairo_restore(cr);
 	}

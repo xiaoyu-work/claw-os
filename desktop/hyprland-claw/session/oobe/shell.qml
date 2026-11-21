@@ -20,6 +20,7 @@ ShellRoot {
     property string username: ""
     property string newPassword: ""
     property string confirmation: ""
+    property string avatar: ""
     property string language: ""
     property string keyboard: "us"
     property string zone: ""
@@ -75,7 +76,7 @@ ShellRoot {
         state = Object.assign({}, state, message);
         if (message.finishError) {
             finishing = false;
-            if (["invalidUsername", "invalidPassword", "usernameTaken"].includes(message.finishError))
+            if (["invalidUsername", "invalidPassword", "invalidAvatar", "usernameTaken"].includes(message.finishError))
                 go(steps.indexOf("account"));
         }
         if (message.finished) {
@@ -105,7 +106,7 @@ ShellRoot {
         state = Object.assign({}, state, {finishError: ""});
         if (local) {
             send("finish", {
-                username: username, password: newPassword, locale: language,
+                username: username, password: newPassword, avatar: avatar, locale: language,
                 keyboard: keyboard, zone: zone, light: light
             });
         } else {
@@ -345,46 +346,194 @@ ShellRoot {
 
     Component {
         id: accountPage
-        ColumnLayout {
-            spacing: 8
-            Field {
+
+        GridLayout {
+            id: account
+            readonly property bool wide: width >= 550
+            readonly property var avatars: [
+                { id: "fox", name: qsTr("Fox") },
+                { id: "penguin", name: qsTr("Penguin") },
+                { id: "rabbit", name: qsTr("Rabbit") },
+                { id: "frog", name: qsTr("Frog") },
+                { id: "robot", name: qsTr("Robot") },
+                { id: "star", name: qsTr("Star") }
+            ]
+            columns: wide ? 2 : 1
+            columnSpacing: 22
+            rowSpacing: 16
+
+            ColumnLayout {
                 Layout.fillWidth: true
-                placeholderText: qsTr("Username")
-                maximumLength: 31
-                text: setup.username
-                onTextEdited: setup.username = text
+                Layout.alignment: Qt.AlignTop
+                spacing: 8
+
+                Field {
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Username")
+                    maximumLength: 31
+                    text: setup.username
+                    onTextEdited: setup.username = text
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.bottomMargin: 4
+                    text: qsTr("Start with a lowercase letter. You can also use digits, hyphens or underscores.")
+                    color: theme.muted
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                }
+                Field {
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Password")
+                    maximumLength: 256
+                    echoMode: TextInput.Password
+                    text: setup.newPassword
+                    onTextEdited: setup.newPassword = text
+                }
+                Field {
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Confirm password")
+                    maximumLength: 256
+                    echoMode: TextInput.Password
+                    text: setup.confirmation
+                    onTextEdited: setup.confirmation = text
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: (setup.confirmation !== "" && !setup.matchingPassword) || setup.state.finishError !== ""
+                    color: theme.error
+                    text: setup.confirmation !== "" && !setup.matchingPassword ? qsTr("Passwords don't match.")
+                        : setup.state.finishError === "usernameTaken" ? qsTr("That username is already in use.")
+                        : setup.state.finishError === "invalidAvatar" ? qsTr("Choose an available avatar or use the Claw logo.")
+                        : qsTr("Check the account and setup fields, then try again.")
+                    wrapMode: Text.Wrap
+                }
             }
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Use lowercase letters, digits, hyphens or underscores. Start with a letter.")
-                color: theme.muted
-                font.pixelSize: 12
-                wrapMode: Text.Wrap
-            }
-            Field {
-                Layout.fillWidth: true
-                placeholderText: qsTr("Password")
-                maximumLength: 256
-                echoMode: TextInput.Password
-                text: setup.newPassword
-                onTextEdited: setup.newPassword = text
-            }
-            Field {
-                Layout.fillWidth: true
-                placeholderText: qsTr("Confirm password")
-                maximumLength: 256
-                echoMode: TextInput.Password
-                text: setup.confirmation
-                onTextEdited: setup.confirmation = text
-            }
-            Label {
-                Layout.fillWidth: true
-                visible: (setup.confirmation !== "" && !setup.matchingPassword) || setup.state.finishError !== ""
-                color: theme.error
-                text: setup.confirmation !== "" && !setup.matchingPassword ? qsTr("Passwords don't match.")
-                    : setup.state.finishError === "usernameTaken" ? qsTr("That username is already in use.")
-                    : qsTr("Check the account and setup fields, then try again.")
-                wrapMode: Text.Wrap
+
+            Rectangle {
+                Layout.fillWidth: !account.wide
+                Layout.preferredWidth: 276
+                Layout.alignment: Qt.AlignTop
+                implicitHeight: gallery.implicitHeight + 24
+                radius: 16
+                color: theme.card
+                border.color: theme.outline
+
+                Controls.ButtonGroup { id: avatarGroup }
+
+                ColumnLayout {
+                    id: gallery
+
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        AccountAvatar {
+                            Layout.preferredWidth: 40
+                            Layout.preferredHeight: 40
+                            avatarId: setup.avatar
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("Choose an avatar")
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.Wrap
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: account.avatars.find(item => item.id === setup.avatar)?.name ?? qsTr("Claw logo")
+                                color: theme.muted
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+                        }
+                        ActionButton {
+                            text: qsTr("Reset")
+                            Accessible.name: qsTr("Use the Claw logo")
+                            enabled: setup.avatar !== ""
+                            implicitHeight: 30
+                            leftPadding: 8
+                            rightPadding: 8
+                            font.pixelSize: 12
+                            onClicked: setup.avatar = ""
+                        }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: width < 200 ? 2 : width >= 435 ? 6 : 3
+                        columnSpacing: 4
+                        rowSpacing: 3
+
+                        Repeater {
+                            model: account.avatars
+
+                            delegate: Controls.RadioButton {
+                                id: option
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 72
+                                implicitHeight: 68
+                                padding: 3
+                                hoverEnabled: true
+                                text: modelData.name
+                                checked: setup.avatar === modelData.id
+                                Controls.ButtonGroup.group: avatarGroup
+                                Accessible.name: text
+                                onClicked: setup.avatar = modelData.id
+                                indicator: null
+                                background: Rectangle {
+                                    radius: 12
+                                    color: option.checked ? theme.selected : option.hovered ? theme.hover : "transparent"
+                                    border.color: option.visualFocus ? theme.accent : "transparent"
+                                }
+                                contentItem: Column {
+                                    spacing: 3
+                                    Item {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: 44
+                                        height: 44
+                                        AccountAvatar {
+                                            anchors.fill: parent
+                                            avatarId: option.modelData.id
+                                        }
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            anchors.margins: -2
+                                            radius: width / 2
+                                            color: "transparent"
+                                            border.color: theme.accent
+                                            border.width: 2
+                                            visible: option.checked
+                                        }
+                                    }
+                                    Label {
+                                        width: parent.width
+                                        text: option.text
+                                        font.pixelSize: 11
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Shown on sign-in and lock screens.")
+                        color: theme.muted
+                        font.pixelSize: 12
+                        wrapMode: Text.Wrap
+                    }
+                }
             }
         }
     }

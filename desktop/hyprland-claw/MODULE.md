@@ -65,6 +65,9 @@ then consumes the marker. The wizard uses the just-entered password once
 in the normal greetd/PAM conversation for the fixed Hyprland session. It
 does not store a password or enable persistent auto-login. Later logins
 and pre-provisioned profiles use the account picker.
+The first owner can choose a bundled animal or cartoon avatar. The helper
+stores the selection through AccountsService; sign-in and lock only load
+bundled PNGs from the system avatar directory and otherwise use the Claw mark.
 The wizard keeps its glass panels. The greeter and the in-session locker use
 the original Claw wallpaper full-screen, with a large clock at the top and the
 account and password at the bottom. Cage and Qt Quick render the pre-login UI

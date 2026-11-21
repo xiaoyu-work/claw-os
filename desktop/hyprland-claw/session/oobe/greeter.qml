@@ -19,8 +19,9 @@ ShellRoot {
     property bool authenticationRejected: false
     property string submitted: ""
     readonly property bool idle: Greetd.state === GreetdState.Inactive
+    readonly property var selectedAccount: root.otherAccount ? null : root.accounts[accounts.currentIndex]
     readonly property string username: root.otherAccount ? other.text.trim()
-        : root.accounts[accounts.currentIndex]?.username ?? ""
+        : root.selectedAccount?.username ?? ""
 
     function submit(): void {
         if (!signIn.enabled)
@@ -169,20 +170,9 @@ ShellRoot {
                 width: 280
                 spacing: 8
 
-                Rectangle {
+                AccountAvatar {
                     Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredWidth: 62
-                    Layout.preferredHeight: 62
-                    radius: width / 2
-                    color: "#e7edf4"
-                    border.color: "#b3ffffff"
-                    Image {
-                        anchors.centerIn: parent
-                        width: 36
-                        height: width
-                        source: "logo.png"
-                        fillMode: Image.PreserveAspectFit
-                    }
+                    avatarId: root.selectedAccount?.avatar ?? ""
                 }
                 Caption {
                     visible: root.otherAccount || root.accounts.length < 2

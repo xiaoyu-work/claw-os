@@ -28,6 +28,9 @@ The [original Claw OS mountain wallpaper](../assets/brand/wallpaper/NOTICE)
 is used unchanged for setup, sign-in and lock under its existing CC BY-SA 4.0
 license. No COSMIC greeter or compositor code is used for these pages.
 
+The [bundled account avatars](../assets/brand/avatars/) are original generated
+illustrations for Claw OS. They use no third-party characters or images.
+
 ## Shared App framework
 
 These are retained to support existing standalone products and the Agent UI.

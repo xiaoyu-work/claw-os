@@ -102,6 +102,9 @@ install -Dm0755 "$session/claw-oobe" "$stage/usr/libexec/claw-oobe"
 for file in "$session"/oobe/*; do
     install -Dm0644 "$file" "$stage/usr/share/claw-os/oobe/${file##*/}"
 done
+for file in "$project"/assets/brand/avatars/*.png; do
+    install -Dm0644 "$file" "$stage/usr/share/claw-os/avatars/${file##*/}"
+done
 install -Dm0644 "$project/assets/brand/clawos-icon-192.png" "$stage/usr/share/claw-os/oobe/logo.png"
 install -Dm0644 "$project/assets/brand/wallpaper/claw-default.jpg" "$stage/usr/share/backgrounds/claw-os/claw-default.jpg"
 install -Dm0644 "$project/assets/brand/wallpaper/claw-default-blurred.jpg" "$stage/usr/share/claw-os/oobe/wallpaper-blurred.jpg"

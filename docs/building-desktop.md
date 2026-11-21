@@ -34,7 +34,8 @@ See [the Azure build](building-azure.md) for a generalized Gen2 VHD.
 ## Login
 
 The local desktop VM opens the graphical setup wizard without asking you to
-sign in. Create your account and select **Finish** to enter the desktop.
+sign in. Create your account, optionally choose an avatar, and select
+**Finish** to enter the desktop.
 After logout or reboot, sign in with that account and password. Sign-in and
 lock show the Claw wallpaper full-screen, with the time above and the
 password field at the bottom. First-run setup keeps its frosted-glass panels.

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import signal
 import subprocess
 import sys
@@ -427,17 +428,47 @@ def backend(completed, staging=None):
     Setup().run()
 
 
+def sign_in_accounts():
+    from gi.repository import Gio, GLib
+
+    users = [
+        row for row in pwd.getpwall()
+        if 1000 <= row.pw_uid < 60000 and Path(row.pw_shell).name not in ("nologin", "false", "")
+    ]
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    except GLib.Error:
+        bus = None
+
+    deadline = time.monotonic() + 1
+    rows = []
+    for row in users:
+        avatar = ""
+        remaining = int((deadline - time.monotonic()) * 1000)
+        if bus is not None and remaining > 0:
+            try:
+                reply = bus.call_sync(
+                    "org.freedesktop.Accounts", f"/org/freedesktop/Accounts/User{row.pw_uid}",
+                    "org.freedesktop.DBus.Properties", "Get",
+                    GLib.Variant("(ss)", ("org.freedesktop.Accounts.User", "IconFile")),
+                    GLib.VariantType.new("(v)"), Gio.DBusCallFlags.NONE, remaining, None,
+                )
+                match = re.fullmatch(r"/usr/share/claw-os/avatars/([a-z]{1,24})\.png", reply.unpack()[0])
+                if match:
+                    avatar = match[1]
+            except GLib.Error:
+                pass
+        rows.append({"username": row.pw_name, "name": row.pw_gecos.split(",", 1)[0] or row.pw_name,
+                     "avatar": avatar})
+    return sorted(rows, key=lambda row: row["name"].casefold())
+
+
 def main():
     config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     completed = config / "cos/first-run-complete"
     args = sys.argv[1:]
     if args == ["--accounts"]:
-        rows = [
-            {"username": row.pw_name, "name": row.pw_gecos.split(",", 1)[0] or row.pw_name}
-            for row in pwd.getpwall()
-            if 1000 <= row.pw_uid < 60000 and Path(row.pw_shell).name not in ("nologin", "false", "")
-        ]
-        print(json.dumps(sorted(rows, key=lambda row: row["name"].casefold())))
+        print(json.dumps(sign_in_accounts()))
         return 0
     if args == ["--check-complete"]:
         return int(not completed.is_file())

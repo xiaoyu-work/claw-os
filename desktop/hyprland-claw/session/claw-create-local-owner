@@ -14,6 +14,7 @@ from zoneinfo import available_timezones
 
 
 MARKER = Path("/etc/cos/local-desktop-setup")
+AVATARS = Path("/usr/share/claw-os/avatars")
 MAX_REQUEST = 256 * 1024
 ENV = {"PATH": "/usr/sbin:/usr/bin", "LANG": "C.UTF-8"}
 ACCOUNT = re.compile(r"[a-z][a-z0-9_-]{0,30}")
@@ -31,7 +32,7 @@ def request():
         raise ValueError("invalidInput")
     data = json.loads(raw)
     if not isinstance(data, dict) or set(data) != {
-        "username", "password", "locale", "keyboard", "zone", "light", "agent",
+        "username", "password", "avatar", "locale", "keyboard", "zone", "light", "agent",
     }:
         raise ValueError("invalidInput")
     for key in ("username", "password", "locale", "keyboard", "zone"):
@@ -42,6 +43,11 @@ def request():
     password = data["password"]
     if not 0 < len(password.encode()) <= 256 or any(c in password for c in "\x00\r\n"):
         raise ValueError("invalidPassword")
+    avatar = data["avatar"]
+    if not isinstance(avatar, str) or avatar and (
+        not re.fullmatch(r"[a-z]{1,24}", avatar) or not (AVATARS / f"{avatar}.png").is_file()
+    ):
+        raise ValueError("invalidAvatar")
     if type(data["light"]) is not bool:
         raise ValueError("invalidInput")
     layouts = {"us", "gb", "de", "fr", "es", "it", "br", "jp", "ru"}
@@ -100,6 +106,16 @@ def initialize_home(account, data):
     os._exit(0)
 
 
+def set_avatar(uid, avatar):
+    if not avatar:
+        return
+    service = "org.freedesktop.Accounts"
+    call = ("/usr/bin/busctl", "--system", "--timeout=5s", "call", service)
+    system(*call, "/org/freedesktop/Accounts", service, "FindUserById", "x", str(uid))
+    system(*call, f"/org/freedesktop/Accounts/User{uid}", service + ".User",
+           "SetIconFile", "s", str(AVATARS / f"{avatar}.png"))
+
+
 def create_owner():
     if (os.getuid() != 0 or os.geteuid() != 0
             or os.environ.get("PKEXEC_UID") != str(pwd.getpwnam("_greetd").pw_uid)):
@@ -129,6 +145,7 @@ def create_owner():
             system("timedatectl", "set-timezone", data["zone"])
             # chpasswd uses the OS password stack; the secret never goes in argv.
             system("chpasswd", data=(name + ":" + data["password"] + "\n").encode())
+            set_avatar(account.pw_uid, data["avatar"])
         except (OSError, subprocess.SubprocessError):
             system("userdel", "--remove", "--", name)
             raise
@@ -146,7 +163,7 @@ if __name__ == "__main__":
         code = str(error)
         print(json.dumps({"error": code if code in {
             "notAvailable", "usernameTaken", "invalidInput", "invalidUsername",
-            "invalidPassword", "invalidRegionalSettings", "invalidAgentSettings",
+            "invalidPassword", "invalidAvatar", "invalidRegionalSettings", "invalidAgentSettings",
         } else "invalidInput"}))
     except subprocess.CalledProcessError as error:
         print(f"Claw OS: {error.cmd[0]} failed during local owner setup ({error.returncode})", file=sys.stderr)
