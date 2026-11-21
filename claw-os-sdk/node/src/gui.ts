@@ -7,8 +7,8 @@
 // context it receives once kernel-spawned as a GUI, plus the one
 // privileged action a GUI commonly wants — summoning the agent overlay.
 //
-// When an app declares a `desktop` block in app.json, `cos app install`
-// writes a launcher whose Exec is `cos app <id> --gui`. Activating it
+// When an app declares a `desktop` block in app.json, `yu app install`
+// writes a launcher whose Exec is `yu app <id> --gui`. Activating it
 // routes the launch back through the kernel, which spawns the app with
 // COS_APP_GUI=1 and COS_APP_ID set, so identity/audit/consent apply to
 // the GUI exactly as to the headless path.

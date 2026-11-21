@@ -400,7 +400,7 @@ fn delegated_executor_verb(origin: SessionOrigin) -> Option<Verb> {
 ///
 /// * the subsystem's own executor verb, which addresses the session's
 ///   own children rather than a resource; and
-/// * one credential named exactly as `cos cron add --credential` asked
+/// * one credential named exactly as `yu cron add --credential` asked
 ///   for and the owner approved. A glob is refused, so a snapshot that
 ///   somehow carries `secret.read:**` grants nothing.
 ///
@@ -458,7 +458,7 @@ const LOCAL_LAUNCH_DENIED_VERBS: &[Verb] = &[
 ];
 
 /// Ceiling `clawd` delegates to a launcher it could not tie to a
-/// registered session — the interactive `cos` CLI and the desktop
+/// registered session — the interactive `yu` CLI and the desktop
 /// launcher.
 ///
 /// This is a *policy* value owned by the daemon, not something a caller

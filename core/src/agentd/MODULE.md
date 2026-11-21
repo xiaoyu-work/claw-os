@@ -280,7 +280,7 @@ caller reports, not proof that declared effects occurred. A recording failure
 preserves the original outcome and offers only recording repair; it never
 repeats an App invocation. Both paths use the same Activity receipt ledger.
 Human CLI calls do not enable this automatic task capture; explicit
-`cos operation execute --activity` owns its one receipt, avoiding a second
+`yu operation execute --activity` owns its one receipt, avoiding a second
 Root report when the caller's session is already Activity-associated.
 
 ## Residual Same-UID Boundary
@@ -328,7 +328,7 @@ Removing the worker's broker access is deliberate:
   session-scoped provider routes for their nearest registered child session.
   If either Host or its authenticated lease is absent, dynamic execution fails
   closed instead of falling back into `claw-agentd`.
-- **Scheduler mutation from inside a task.** `cos cron` / `cos triggers` state
+- **Scheduler mutation from inside a task.** `yu cron` / `yu triggers` state
   lives in the root-owned daemon tree, so a worker can read its own scope but
   cannot persist system schedules. `scheduler.run` is a broker route and is not
   on the worker channel.

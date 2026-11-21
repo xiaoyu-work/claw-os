@@ -14,14 +14,14 @@ Unsupported modalities are not published as placeholder SDK APIs.
 ## Transport
 
 **v1 uses a subprocess transport.** A request is encoded as
-`cos --wire=1` plus command-line arguments and, optionally, stdin JSON. The
+`yu --wire=1` plus command-line arguments and, optionally, stdin JSON. The
 reply is exactly one JSON **envelope** on stdout. Exit code 0 accompanies a
 success envelope; non-zero accompanies an error envelope. SDKs reject flat
 command output, JSON on stderr, malformed envelopes, unsupported versions, and
 an exit-status/`ok` mismatch.
 
 Reasoning:
-- Identity and audit-trail come from process ancestry. The `cos`
+- Identity and audit-trail come from process ancestry. The `yu`
   binary verifies that its parent is an app the kernel itself launched.
 - Subprocess transport works on every OS without setting up sockets,
   named pipes, or daemons.
@@ -62,9 +62,9 @@ be added in v1; existing codes keep their meaning.
 | Family   | Route                                   | Schema                  |
 |----------|-----------------------------------------|-------------------------|
 | `policy` | OS-internal capability check; no public SDK API | `perms.schema.json` |
-| `ai`     | `cos ai chat --app <id> [...] `         | `ai.schema.json`        |
-| `tool`   | `cos ai tool <name> --app <id> --args <json>` | `tool.schema.json` |
-| `app`    | `cos app <id> <verb> [...]`             | `app.schema.json`       |
+| `ai`     | `yu ai chat --app <id> [...] `         | `ai.schema.json`        |
+| `tool`   | `yu ai tool <name> --app <id> --args <json>` | `tool.schema.json` |
+| `app`    | `yu app <id> <verb> [...]`             | `app.schema.json`       |
 
 The `policy` wire family is consumed only by the OS-internal
 `cos-runtime` package. It is not an importable API in any public SDK;
@@ -140,16 +140,16 @@ See `error_codes.md` for the canonical list. The minimum:
 | `UNKNOWN_APP`         | App id not installed.                                      |
 | `UNKNOWN_VERB`        | App doesn't expose this verb / catalog tool not found.     |
 | `INVALID_ARGS`        | Args failed schema validation.                             |
-| `KERNEL_UNAVAILABLE`  | `cos` binary couldn't reach a required subsystem.          |
+| `KERNEL_UNAVAILABLE`  | `yu` binary couldn't reach a required subsystem.          |
 | `INTERNAL_ERROR`      | Anything else; details in `detail.message`.                |
 
 ## Versioning
 
 The protocol version is announced in three places:
 
-1. The SDK requests a version explicitly with `cos --wire=1`.
+1. The SDK requests a version explicitly with `yu --wire=1`.
 2. `wire_version` in every reply must equal the requested version.
-3. `cos --wire=1 --version` provides a transport-level compatibility probe.
+3. `yu --wire=1 --version` provides a transport-level compatibility probe.
 
 Breaking changes bump the wire version. Bug fixes in the kernel that
 don't change the envelope shape do not.

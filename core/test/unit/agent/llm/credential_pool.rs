@@ -94,7 +94,7 @@ fn legacy_config_pool_unresolved_fails_with_source_names() {
     match error {
         crate::agent::llm::LlmError::NotConfigured(message) => {
             assert!(message.contains(ENV_NAME), "got: {message}");
-            assert!(message.contains("cos credential store"), "got: {message}");
+            assert!(message.contains("yu credential store"), "got: {message}");
         }
         other => panic!("expected NotConfigured, got {other:?}"),
     }

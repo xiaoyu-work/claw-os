@@ -9,7 +9,7 @@
 //!
 //! ## Why a separate sentinel
 //!
-//! - Readers (`cos agent ls`, future GUI) want to know the current
+//! - Readers (`yu agent ls`, future GUI) want to know the current
 //!   holder without touching any lock; they just read `lease.json`.
 //! - Writers (the lease holder) need to update `lease.json` for
 //!   heartbeats; doing that under flock on `lease.json` itself would

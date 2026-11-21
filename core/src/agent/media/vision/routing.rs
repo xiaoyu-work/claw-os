@@ -14,7 +14,7 @@
 //! capabilities) and gets back a [`RoutingDecision`].
 //!
 //! The analyze tool (future) consumes the decision and either
-//! shells out to a vision LLM or routes through `cos model` for
+//! shells out to a vision LLM or routes through `yu model` for
 //! local OCR.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +80,7 @@ pub struct RoutingPolicy {
     /// Maximum bytes to send natively (avoid blowing up token cost
     /// on multi-MB images).
     pub max_native_bytes: usize,
-    /// True if a local OCR backend is available (cos model OCR or
+    /// True if a local OCR backend is available (yu model OCR or
     /// equivalent).
     pub ocr_available: bool,
 }

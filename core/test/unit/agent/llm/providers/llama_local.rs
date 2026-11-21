@@ -81,7 +81,7 @@ fn is_configured_requires_installed_engine() {
 
 /// With both an engine *and* a model file installed, the provider
 /// reports configured. This is the "happy path" Phase 0.5 status
-/// will display once a user has run `cos engine update llama-cpp`.
+/// will display once a user has run `yu engine update llama-cpp`.
 #[test]
 fn is_configured_true_when_engine_and_model_present() {
     let tmp_engines = tempfile::tempdir().unwrap();
@@ -135,7 +135,7 @@ fn is_configured_true_when_engine_and_model_present() {
 }
 
 /// With no engine installed, `chat()` surfaces `NotConfigured` so
-/// the user gets a clear pointer to `cos engine update`.
+/// the user gets a clear pointer to `yu engine update`.
 #[tokio::test]
 async fn chat_without_engine_returns_not_configured() {
     let tmp_engines = tempfile::tempdir().unwrap();
@@ -153,7 +153,7 @@ async fn chat_without_engine_returns_not_configured() {
     match err {
         LlmError::NotConfigured(msg) => {
             assert!(
-                msg.contains("llama-cpp") || msg.contains("cos engine"),
+                msg.contains("llama-cpp") || msg.contains("yu engine"),
                 "unexpected message: {msg}"
             );
         }

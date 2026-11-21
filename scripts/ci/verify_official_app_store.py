@@ -93,7 +93,7 @@ def main():
     bootstrap = secrets.token_hex(32)
     master, slave = pty.openpty()
     web = subprocess.Popen(
-        ["/usr/local/bin/cos", "agent", "serve", "--bind", "127.0.0.1",
+        ["/usr/local/bin/yu", "agent", "serve", "--bind", "127.0.0.1",
          "--port", "38082", "--token", bootstrap],
         cwd=home, env=owner_env, stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL, stderr=slave, start_new_session=True, **identity,

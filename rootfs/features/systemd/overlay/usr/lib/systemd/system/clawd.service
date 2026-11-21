@@ -11,7 +11,7 @@ ExecStart=/usr/local/bin/clawd --socket /run/cos/clawd.sock
 Restart=on-failure
 RestartSec=3
 KillMode=control-group
-Environment=COS_BIN=/usr/local/bin/cos
+Environment=COS_BIN=/usr/local/bin/yu
 Environment=COS_DATA_DIR=/var/lib/cos
 Environment=COS_RUNTIME_DIR=/run/cos
 Environment=COS_LOG_DIR=/var/log/cos

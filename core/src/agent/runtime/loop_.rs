@@ -322,7 +322,7 @@ pub async fn run_with_deps(
     .await
 }
 
-/// Run a single `cos agent ask` invocation end-to-end with the supplied
+/// Run a single `yu agent ask` invocation end-to-end with the supplied
 /// provider and tool registry. Memory recording is disabled — the
 /// conversation history is not persisted. Use [`ask_with_memory`] for the
 /// production path.
@@ -1911,7 +1911,7 @@ fn freeze_policy(
         Ok(None) => {}
         Err(error) if error.is_integrity_failure() => {
             return Err(AgentError::MemoryIntegrity(format!(
-                "refusing session {sid}: {error}; run `cos agent sessions health` and explicit repair"
+                "refusing session {sid}: {error}; run `yu agent sessions health` and explicit repair"
             )));
         }
         Err(error) => {
@@ -1929,7 +1929,7 @@ fn freeze_policy(
             Ok(())
         }
         Err(error) if error.is_integrity_failure() => Err(AgentError::MemoryIntegrity(format!(
-            "refusing session {sid}: {error}; run `cos agent sessions health` and explicit repair"
+            "refusing session {sid}: {error}; run `yu agent sessions health` and explicit repair"
         ))),
         Err(error) => {
             tracing::warn!(
@@ -2825,7 +2825,7 @@ fn merge_mcp_specs(
 }
 
 /// Crate-public re-export of [`attach_mcp_servers`] so the
-/// `cos agent live` CLI handler (which lives in `agent::mod`) can
+/// `yu agent live` CLI handler (which lives in `agent::mod`) can
 /// build the same registry the production `ask` path builds without
 /// needing to duplicate the spec-translation logic.
 pub async fn attach_mcp_servers_for_cli(
@@ -2993,7 +2993,7 @@ pub fn retry_policy_from_cfg(
 /// After the ask future completes, we drain any background tasks
 /// (auto-curator, semantic indexer) that the loop spawned via
 /// [`crate::agent::runtime::background::spawn`] before the runtime is
-/// dropped. Without this, `cos agent ask` in one-shot mode cancels
+/// dropped. Without this, `yu agent ask` in one-shot mode cancels
 /// the curator mid-LLM-call and `MEMORY.md` never gets updated —
 /// runtime drop kills every spawned task immediately
 /// (`shutdown_timeout` only helps `spawn_blocking`, not async
@@ -3013,7 +3013,7 @@ pub fn ask_blocking(user_prompt: &str) -> Result<AskResult, AgentError> {
 }
 
 /// Worst-case wait for background tasks (curator + semantic indexer) at the
-/// end of a one-shot `cos agent ask` invocation. Overridable via
+/// end of a one-shot `yu agent ask` invocation. Overridable via
 /// `COS_AGENT_BACKGROUND_DRAIN_SECS` for tests / debugging; defaults to 30s
 /// which comfortably covers a slow auxiliary-LLM curator call without
 /// noticeably delaying normal CLI exit (the drain returns as soon as all

@@ -83,7 +83,7 @@ fn redact_from_file() {
 #[test]
 fn redact_joins_multiple_positional_args() {
     // Without --, the dispatcher will tokenize on spaces; we
-    // re-stitch them so `cos agent redact hello world` doesn't
+    // re-stitch them so `yu agent redact hello world` doesn't
     // error out.
     let v = redact_cmd(&[
         "hello".into(),

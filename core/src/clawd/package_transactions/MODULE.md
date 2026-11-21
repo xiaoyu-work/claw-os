@@ -99,7 +99,7 @@ enters the Debian dispatch path.
 `system.package.status` and `system.package.recover` derive the owner from the
 authenticated peer, not request selectors. They expose only that owner's
 records. Request/invocation IDs correlate records; they confer no authority.
-`cos package-transactions [id]`, `--invocation <id>` and `--recover <id>` work
+`yu package-transactions [id]`, `--invocation <id>` and `--recover <id>` work
 outside an affected App and do not require an Agent UI or model.
 
 Recovery checks outcomes without rerunning APT. It cannot clear missing child

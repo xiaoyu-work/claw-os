@@ -156,7 +156,7 @@ def phase(name, code=None):
 def refused():
     phase("intent-send")
     result = subprocess.run(
-        ["/usr/local/bin/cos", "--wire=1", "__package_intent", "--retained",
+        ["/usr/local/bin/yu", "--wire=1", "__package_intent", "--retained",
          "review", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "install",
          "claw-package-acceptance-side-effect"],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
@@ -287,7 +287,7 @@ fn private_native_package_owner() {
             claw_os_sdk::cos_call_json_with_stdin("native-package-fixture", "owner", argv, b"{}")
         } else {
             claw_os_sdk::cos_call_json_with_binary(
-                "/usr/local/bin/cos", "native-package-fixture", "owner", argv,
+                "/usr/local/bin/yu", "native-package-fixture", "owner", argv,
             )
         };
         eprintln!("native package helper command={label} phase=cli-return ok={} elapsed_ms={}",
@@ -310,13 +310,13 @@ fn owner_invoke_caps() -> CapSet {
 fn owner_command(arguments: &[&str]) -> &'static str {
     match arguments {
         ["binding"] => "binding",
-        ["app", DENIED_APP, "probe"] => "cos --wire=1 app gui-package-denied probe",
+        ["app", DENIED_APP, "probe"] => "yu --wire=1 app gui-package-denied probe",
         ["app", DENIED_APP, "intent-probe", "--args-stdin"] =>
-            "cos --wire=1 app gui-package-denied intent-probe --args-stdin",
-        ["review", "show", _] => "cos --wire=1 review show",
-        ["package-transactions", "--invocation", _] => "cos --wire=1 package-transactions --invocation",
-        ["package-transactions", "--recover", _] => "cos --wire=1 package-transactions --recover",
-        ["package-transactions", _] => "cos --wire=1 package-transactions",
+            "yu --wire=1 app gui-package-denied intent-probe --args-stdin",
+        ["review", "show", _] => "yu --wire=1 review show",
+        ["package-transactions", "--invocation", _] => "yu --wire=1 package-transactions --invocation",
+        ["package-transactions", "--recover", _] => "yu --wire=1 package-transactions --recover",
+        ["package-transactions", _] => "yu --wire=1 package-transactions",
         _ => "unclassified-command",
     }
 }
@@ -385,7 +385,7 @@ impl OwnerPeer {
             .env_clear().env("HOME", "/run/display-home")
             .env("PATH", "/usr/local/bin:/usr/bin:/bin").env("COS_NATIVE_PACKAGE_PEER", "1")
             .env("COS_PROC_DATA_DIR", "/run/cos/caps/62050").env("CLAWD_SOCKET", "/run/cos/clawd.sock")
-            .env("CLAW_COS_BIN", "/usr/local/bin/cos")
+            .env("CLAW_COS_BIN", "/usr/local/bin/yu")
             .current_dir("/run/display-home").stdin(Stdio::piped())
             .stdout(Stdio::piped()).stderr(Stdio::inherit());
         unsafe {

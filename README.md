@@ -214,11 +214,11 @@ and combine them:
 
 ```bash
 cos  # list primitives
-cos app web read https://example.com  # fetch URL → {url, title, text, links}
-cos agent setup text  # configure the conversational text model
-cos agent ask "why is my network so slow right now?"
-cos agent ask "why did my last app crash?"
-cos agent chat  # interactive REPL with cross-app memory
+yu app web read https://example.com  # fetch URL → {url, title, text, links}
+yu agent setup text  # configure the conversational text model
+yu agent ask "why is my network so slow right now?"
+yu agent ask "why did my last app crash?"
+yu agent chat  # interactive REPL with cross-app memory
 ```
 
 ## License

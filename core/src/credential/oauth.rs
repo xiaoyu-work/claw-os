@@ -6,7 +6,7 @@ use super::*;
 
 /// Refresh an OAuth token by exchanging a refresh token for a new access token.
 ///
-/// Usage: cos credential oauth-refresh <provider> [--namespace NS]
+/// Usage: yu credential oauth-refresh <provider> [--namespace NS]
 ///
 /// Supported providers: google, microsoft
 ///
@@ -22,7 +22,7 @@ pub(super) fn cmd_oauth_refresh(
 
     let provider = rest
         .first()
-        .ok_or("usage: cos credential oauth-refresh <google|microsoft> [--namespace NS]")?;
+        .ok_or("usage: yu credential oauth-refresh <google|microsoft> [--namespace NS]")?;
 
     match provider.as_str() {
         "google" => oauth_refresh_google(store, &namespace),
@@ -91,7 +91,7 @@ fn refresh_google_tokens(
         output_tier,
         Some(expires_in),
         Some(format!(
-            "cos credential oauth-refresh google --namespace {namespace}"
+            "yu credential oauth-refresh google --namespace {namespace}"
         )),
     )?;
 
@@ -181,7 +181,7 @@ fn refresh_microsoft_tokens(
         access_tier,
         Some(expires_in),
         Some(format!(
-            "cos credential oauth-refresh microsoft --namespace {namespace}"
+            "yu credential oauth-refresh microsoft --namespace {namespace}"
         )),
     )?;
 
@@ -337,8 +337,8 @@ fn store_token(
 pub(super) fn broker_oauth_provider<'a>(refresh_cmd: &'a str, namespace: &str) -> Option<&'a str> {
     let parts = refresh_cmd.split_whitespace().collect::<Vec<_>>();
     let provider = match parts.as_slice() {
-        ["cos", "credential", "oauth-refresh", provider] => *provider,
-        ["cos", "credential", "oauth-refresh", provider, "--namespace", requested]
+        ["yu", "credential", "oauth-refresh", provider] => *provider,
+        ["yu", "credential", "oauth-refresh", provider, "--namespace", requested]
             if *requested == namespace =>
         {
             *provider

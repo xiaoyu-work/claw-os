@@ -31,7 +31,7 @@
 //! model, session id. All filters are AND-combined. The full
 //! aggregator runs when the query is left at default.
 //!
-//! Library + CLI wrapper. The CLI surface is `cos agent usage` in
+//! Library + CLI wrapper. The CLI surface is `yu agent usage` in
 //! [`crate::agent::mod`], which calls into [`aggregate_path_filtered`]
 //! after parsing scope + flags.
 

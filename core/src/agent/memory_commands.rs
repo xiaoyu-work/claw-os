@@ -1,8 +1,8 @@
 use super::memory;
 use serde_json::{json, Value};
 
-/// `cos agent learn <subcmd>` — memory curation, distinct from
-/// `cos agent curator` (which is the *skill* curator).
+/// `yu agent learn <subcmd>` — memory curation, distinct from
+/// `yu agent curator` (which is the *skill* curator).
 ///
 ///   extract --session <id> [--limit N] [--min-confidence F]
 ///                          [--dry-run]
@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 ///       Print the embedded system prompt used for fact extraction.
 ///
 /// Auxiliary provider/model come from `[agent] auxiliary_*` in
-/// config.json — same source as `cos agent aux`.
+/// config.json — same source as `yu agent aux`.
 pub(super) fn learn_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::memory::curator::{
         default_log_path, default_system_prompt, CurationLog, CuratorConfig, MemoryCurator,
@@ -73,7 +73,7 @@ pub(super) fn learn_cmd(args: &[String]) -> Result<Value, String> {
                 }
             }
             let session_id = session_id.ok_or_else(|| {
-                "--session <id> required (use `cos agent sessions list` to find one)".to_string()
+                "--session <id> required (use `yu agent sessions list` to find one)".to_string()
             })?;
 
             let config = crate::config::current_snapshot();
@@ -266,7 +266,7 @@ pub(super) fn learn_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent semantic <subcmd>` — vector-memory operations.
+/// `yu agent semantic <subcmd>` — vector-memory operations.
 ///
 ///   index <namespace> <key> "<text>" — embed and store
 ///   search [--namespace NS] [--limit N] "<query>"
@@ -282,7 +282,7 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::memory::semantic::{SemanticStore, SemanticStoreExt};
 
     let sub = args.first().map(|s| s.as_str()).ok_or(
-        "usage: cos agent semantic <index|search|list|count|remove|clear|clear-all|status> ...",
+        "usage: yu agent semantic <index|search|list|count|remove|clear|clear-all|status> ...",
     )?;
     let rest = &args[1..];
 
@@ -326,7 +326,7 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
         }
         "index" => {
             if rest.len() < 3 {
-                return Err("usage: cos agent semantic index <namespace> <key> \"<text>\"".into());
+                return Err("usage: yu agent semantic index <namespace> <key> \"<text>\"".into());
             }
             let store = SemanticStore::open_default()
                 .map_err(|e| e.to_string())?
@@ -368,7 +368,7 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
                 }
             }
             if positional.is_empty() {
-                return Err("usage: cos agent semantic search [--namespace NS] [--limit N] \"<query>\"".into());
+                return Err("usage: yu agent semantic search [--namespace NS] [--limit N] \"<query>\"".into());
             }
             let query = positional.join(" ");
             let store = SemanticStore::open_default()
@@ -463,7 +463,7 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
         }
         "remove" => {
             if rest.len() < 2 {
-                return Err("usage: cos agent semantic remove <namespace> <key>".into());
+                return Err("usage: yu agent semantic remove <namespace> <key>".into());
             }
             let store = SemanticStore::open_default()
                 .map_err(|e| e.to_string())?
@@ -473,7 +473,7 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
         }
         "clear" => {
             if rest.is_empty() {
-                return Err("usage: cos agent semantic clear <namespace>".into());
+                return Err("usage: yu agent semantic clear <namespace>".into());
             }
             let store = SemanticStore::open_default()
                 .map_err(|e| e.to_string())?
@@ -489,7 +489,7 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
             let confirmed = rest.iter().any(|a| a == "--yes");
             if !confirmed {
                 return Err(
-                    "refusing to wipe semantic.db without --yes. usage: cos agent semantic clear-all --yes"
+                    "refusing to wipe semantic.db without --yes. usage: yu agent semantic clear-all --yes"
                         .into(),
                 );
             }
@@ -512,9 +512,9 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent memory [list|show|search|forget]` — user-facing
+/// `yu agent memory [list|show|search|forget]` — user-facing
 /// inspect/redact view of app-emitted memory rows. Apps push entries
-/// in via the hidden `cos __memory remember` bridge under the
+/// in via the hidden `yu __memory remember` bridge under the
 /// `memory.write` capability; this CLI surfaces what's been stored
 /// and lets the user delete entries per row or per source.
 pub(super) fn memory_cmd(args: &[String]) -> Result<Value, String> {
@@ -564,7 +564,7 @@ fn memory_list(args: &[String]) -> Result<Value, String> {
 fn memory_show(args: &[String]) -> Result<Value, String> {
     let id: i64 = args
         .first()
-        .ok_or_else(|| "usage: cos agent memory show <row_id>".to_string())?
+        .ok_or_else(|| "usage: yu agent memory show <row_id>".to_string())?
         .parse()
         .map_err(|e| format!("row_id must be an integer: {e}"))?;
     let db = memory::sqlite_fts::MemoryDb::open_default()
@@ -576,7 +576,7 @@ fn memory_show(args: &[String]) -> Result<Value, String> {
 fn memory_search(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
         return Err(
-            "usage: cos agent memory search \"<query>\" [--source <id>] [--limit N]".into(),
+            "usage: yu agent memory search \"<query>\" [--source <id>] [--limit N]".into(),
         );
     }
     let query = args[0].clone();
@@ -637,7 +637,7 @@ fn memory_forget(args: &[String]) -> Result<Value, String> {
         }
     }
     if source.is_some() == row.is_some() {
-        return Err("usage: cos agent memory forget {--row <id> | --source <id>} [--yes]".into());
+        return Err("usage: yu agent memory forget {--row <id> | --source <id>} [--yes]".into());
     }
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
@@ -661,7 +661,7 @@ fn memory_forget(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// `cos agent notes [list|read <name>|write <name> <content>|append <name> <line>|delete <name>]`
+/// `yu agent notes [list|read <name>|write <name> <content>|append <name> <line>|delete <name>]`
 /// — manages base/profile notes and model-selected knowledge. `search <query>
 /// [name] [limit]` returns bounded literal matches without changing any note.
 pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
@@ -670,9 +670,9 @@ pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
     match sub {
         "search" => {
             let query = args.get(1)
-                .ok_or_else(|| "usage: cos agent notes search <query> [name] [limit]".to_string())?;
+                .ok_or_else(|| "usage: yu agent notes search <query> [name] [limit]".to_string())?;
             if args.len() > 4 {
-                return Err("usage: cos agent notes search <query> [name] [limit]".into());
+                return Err("usage: yu agent notes search <query> [name] [limit]".into());
             }
             let limit = match args.get(3) {
                 None => 5,
@@ -693,7 +693,7 @@ pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
         "read" => {
             let name = args.get(1).cloned().unwrap_or_default();
             if name.is_empty() {
-                return Err("usage: cos agent notes read <name>".into());
+                return Err("usage: yu agent notes read <name>".into());
             }
             let content = store
                 .read(&name)
@@ -708,7 +708,7 @@ pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
             let name = args.get(1).cloned().unwrap_or_default();
             let content = args.get(2).cloned().unwrap_or_default();
             if name.is_empty() {
-                return Err("usage: cos agent notes write <name> <content>".into());
+                return Err("usage: yu agent notes write <name> <content>".into());
             }
             store
                 .write(&name, &content)
@@ -722,7 +722,7 @@ pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
             let name = args.get(1).cloned().unwrap_or_default();
             let line = args.get(2).cloned().unwrap_or_default();
             if name.is_empty() {
-                return Err("usage: cos agent notes append <name> <line>".into());
+                return Err("usage: yu agent notes append <name> <line>".into());
             }
             store
                 .append(&name, &line)
@@ -735,7 +735,7 @@ pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
         "delete" => {
             let name = args.get(1).cloned().unwrap_or_default();
             if name.is_empty() {
-                return Err("usage: cos agent notes delete <name>".into());
+                return Err("usage: yu agent notes delete <name>".into());
             }
             store
                 .delete(&name)

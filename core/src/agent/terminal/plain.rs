@@ -36,7 +36,7 @@ pub(super) fn run(options: ChatOptions) -> Result<Value, String> {
         let mut app=App::new(backend.info().clone(),conversation);
         let streaming=!options.no_stream;
         let stdout_tty=std::io::stdout().is_terminal();
-        eprintln!("cos agent chat — provider={} model={} session={} workspace={} memory={} streaming={}",
+        eprintln!("yu agent chat — provider={} model={} session={} workspace={} memory={} streaming={}",
             app.info.provider,app.selected_model,app.conversation.id,app.conversation.workspace_id.as_deref().unwrap_or("personal"),
             !options.no_memory,streaming);
         eprintln!("/new /workspace UUID|none /directory PATH|home /history [N] /session /quit");
@@ -76,7 +76,7 @@ pub(super) fn run(options: ChatOptions) -> Result<Value, String> {
                 eprintln!("Unknown plain chat command. Use /help.");
                 continue;
             }
-            if !app.info.provider_ready{return Err("Configure a text model before submitting work; Workspace management remains available through cos workspace.".into());}
+            if !app.info.provider_ready{return Err("Configure a text model before submitting work; Workspace management remains available through yu workspace.".into());}
             let job=backend.submit(&prompt,&[],&app.conversation.id,&app.selected_workspace,None,!options.no_memory,
                 options.max_turns,&app.selected_model,None,false).await?;
             app.begin_task(&job);

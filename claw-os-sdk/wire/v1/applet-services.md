@@ -6,7 +6,7 @@ not an eligibility list. OS providers remain in
 [`claw-applet-services`](../../../desktop/services/claw-applet-services/MODULE.md);
 neither the public client nor the App contains provider implementations.
 
-This is a separate fixed-helper protocol, not an extension of `cos --wire=1`,
+This is a separate fixed-helper protocol, not an extension of `yu --wire=1`,
 a plugin ABI, an App-to-App transport or a new worker socket. The OS package
 installs `/usr/libexec/claw-os-applet-provider`. Its only accepted invocation is
 `--stdio-v1`, with no further arguments. Consuming packages require the virtual
@@ -57,7 +57,7 @@ is not selection permission. CopyQ behavior and user history stay in Clipboard.
 `calendar`, `tasks` and `history` name existing resources, not privileged App IDs.
 `history-check` is a permission preflight, not execution of a history operation
 or a transferable authorization token.
-The installed helper selects `/usr/local/bin/cos` directly, ignoring `COS_BIN`
+The installed helper selects `/usr/local/bin/yu` directly, ignoring `COS_BIN`
 and `PATH` overrides. A successful policy response must affirm exactly the
 requested verb and scope. Calendar uses the owner-scoped OS read service,
 which independently checks the existing named read grant. The caller's data

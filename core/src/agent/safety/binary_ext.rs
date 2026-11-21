@@ -18,7 +18,7 @@
 //!     `is_likely_text(bytes)` (NUL byte / utf8 validity) on top.
 //!
 //! Scope: helpers like `is_binary_path` and the optional default
-//! extension list. CLI wiring lives at `cos agent binary-ext`
+//! extension list. CLI wiring lives at `yu agent binary-ext`
 //! (see `agent::mod::binary_ext_cmd`).
 
 use std::collections::BTreeSet;

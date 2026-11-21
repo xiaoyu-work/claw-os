@@ -1020,14 +1020,14 @@ impl ToolRegistry {
     }
 }
 
-/// Build the default registry shipped with `cos agent`.
+/// Build the default registry shipped with `yu agent`.
 ///
 /// Includes:
 /// - Side-effect-free built-ins (`echo`, `now`).
-/// - All cos kernel primitive proxies (sandbox, proc, sysinfo, credential,
+/// - All yu kernel primitive proxies (sandbox, proc, sysinfo, credential,
 ///   cron, checkpoint, service, trace, watch, ipc, browser, netfilter,
 ///   policy, model). Each proxy gives the model the exact same surface as
-///   the cos CLI for that primitive.
+///   the yu CLI for that primitive.
 /// - Authenticated MCP App tools, progressively disclosed behind the fixed
 ///   search/describe/call bridge.
 /// - `cos_memory` (notes) and, if the default memory DB opens cleanly,

@@ -127,7 +127,7 @@ category.
 
 The resolver's existing `operation` field names an ordinary public App command;
 its field name and the `id_arg` / `revision_arg` fields are unchanged. Under
-the MCP-first manifest contract, `cos app <id> <command>` selects an explicit
+the MCP-first manifest contract, `yu app <id> <command>` selects an explicit
 `operations[command]` first, otherwise exactly the declared
 `mcp.tools` entry named `<id>.<command>`. For example, an MCP-only Notes App can
 bind `"operation": "get"` to `notes.get` without inventing a legacy `get`

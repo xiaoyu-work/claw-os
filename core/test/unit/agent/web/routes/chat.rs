@@ -9,7 +9,7 @@ fn chat_setup_errors_explain_missing_configuration_before_submission() {
     let error = require_chat_setup(&config).expect_err("missing provider");
     assert!(error.contains("not ready"));
     assert!(error.contains("Settings > Text"));
-    assert!(error.contains("cos agent setup text"));
+    assert!(error.contains("yu agent setup text"));
     assert!(!error.contains("authentication failed"));
 
     config.provider = "ollama".into();

@@ -96,7 +96,7 @@ fn is_ready_blocks_on_mock_provider() {
     let err = is_ready(&mock_cfg()).unwrap_err();
     assert!(err.contains("agent not configured"));
     assert!(err.contains("mock"));
-    assert!(err.contains("cos agent setup"));
+    assert!(err.contains("yu agent setup"));
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn is_ready_blocks_on_unconfigured_default() {
     let err = is_ready(&unconfigured_cfg()).unwrap_err();
     assert!(err.contains("agent not configured"));
     assert!(err.contains("no text-model provider"));
-    assert!(err.contains("cos agent setup"));
+    assert!(err.contains("yu agent setup"));
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn is_ready_blocks_real_provider_with_no_credential() {
     std::env::remove_var("__COS_TEST_DEFINITELY_UNSET__");
     let err = is_ready(&cfg).unwrap_err();
     assert!(err.contains("no credential found"));
-    assert!(err.contains("cos agent setup"));
+    assert!(err.contains("yu agent setup"));
 }
 
 #[test]
@@ -317,7 +317,7 @@ async fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers
             other => panic!("expected typed credential-store error, got {other:?}"),
         }
         let display = error.to_string();
-        assert!(display.contains("cos credential revoke"));
+        assert!(display.contains("yu credential revoke"));
         assert!(!display.contains(ENV_VALUE));
 
         let readiness = is_ready(&cfg).expect_err("corrupt credential must block readiness");
@@ -329,7 +329,7 @@ async fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers
         assert_eq!(payload["namespace"], "agent");
         assert!(payload["fix"]
             .as_str()
-            .is_some_and(|fix| fix.contains("cos credential revoke")));
+            .is_some_and(|fix| fix.contains("yu credential revoke")));
         assert!(!readiness.contains(ENV_VALUE));
 
         let legacy: std::sync::Arc<dyn llm::Provider> = match provider {
@@ -612,8 +612,8 @@ fn help_subcommand_lists_modes() {
     let v = run(&["--help".into()]).expect("help ok");
     let cmd = v.get("command").and_then(|s| s.as_str()).unwrap_or("");
     assert!(
-        cmd.starts_with("cos agent setup <MODALITY>"),
-        "expected help command to start with `cos agent setup <MODALITY>`; got `{cmd}`"
+        cmd.starts_with("yu agent setup <MODALITY>"),
+        "expected help command to start with `yu agent setup <MODALITY>`; got `{cmd}`"
     );
     let modalities = v.get("modalities").and_then(|s| s.as_object());
     assert!(modalities.is_some(), "expected modalities table in help");
@@ -927,7 +927,7 @@ fn providers_cmd_llm_includes_azure_with_extra_fields() {
 fn providers_cmd_llm_hides_mock_and_llama_local() {
     // The GUI catalogue consumed by cosmic-settings and
     // cosmic-initial-setup must not expose `mock` (test-only) or
-    // `llama_local` (managed via `cos model load`). Both remain
+    // `llama_local` (managed via `yu model load`). Both remain
     // buildable through the registry for power users / tests.
     let v = providers_cmd(Modality::Llm).expect("providers ok");
     let providers = v
@@ -1045,10 +1045,10 @@ fn require_provider_rejects_empty_and_missing() {
 #[test]
 fn user_facing_providers_hides_mock_and_llama_local() {
     // Same contract as the GUI catalogue, but for the interactive
-    // `cos agent setup text` wizard's provider picker — it consumes
+    // `yu agent setup text` wizard's provider picker — it consumes
     // `user_facing_providers()` instead of `available_providers()`
     // so neither test-only `mock` nor `llama_local` (managed via
-    // `cos model load`) show up in the numbered list. Power users
+    // `yu model load`) show up in the numbered list. Power users
     // can still set them via `apply --provider mock ...`.
     let names = user_facing_providers();
     assert!(
@@ -1292,7 +1292,7 @@ fn status_embed_auto_prompts_when_local_stack_missing() {
         v["reason"]["error"].as_str(),
         Some("embedding not configured")
     );
-    assert_eq!(v["reason"]["fix"].as_str(), Some("cos agent setup embed"));
+    assert_eq!(v["reason"]["fix"].as_str(), Some("yu agent setup embed"));
     assert!(
         v["reason"]["details"]
             .as_str()
@@ -1344,7 +1344,7 @@ fn apply_embed_local_rejects_missing_local_stack() {
         envelope["error"].as_str(),
         Some("local embedding stack unavailable")
     );
-    assert_eq!(envelope["fix"].as_str(), Some("cos agent setup embed"));
+    assert_eq!(envelope["fix"].as_str(), Some("yu agent setup embed"));
 
     std::env::remove_var("COS_CONFIG_PATH");
     std::fs::remove_dir_all(&tmp_dir).ok();

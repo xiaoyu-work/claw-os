@@ -214,11 +214,11 @@ class WireValidationTests(unittest.TestCase):
         validate_budget_show(
             {"app": "notes", "period": "2026-08", "units_used": 7}
         )
-        with mock.patch.object(ai, "_cos_binary", return_value="cos"), mock.patch.object(
+        with mock.patch.object(ai, "_cos_binary", return_value="yu"), mock.patch.object(
             subprocess,
             "run",
             return_value=subprocess.CompletedProcess(
-                ["cos"],
+                ["yu"],
                 0,
                 _wire_success_json(
                     '{"app":"notes","period":"2026-08","units_used":7}'
@@ -230,7 +230,7 @@ class WireValidationTests(unittest.TestCase):
         self.assertEqual(budget.period, "2026-08")
         self.assertEqual(budget.units_used, 7)
         self.assertEqual(budget.units_cap, 0)
-        self.assertEqual(run.call_args.args[0][:2], ["cos", "--wire=1"])
+        self.assertEqual(run.call_args.args[0][:2], ["yu", "--wire=1"])
 
     def test_mcp_call_context_is_closed(self) -> None:
         context = {
@@ -278,10 +278,10 @@ class WireValidationTests(unittest.TestCase):
         self.assertIn("WIRE_TYPE", str(raised.exception))
         self.assertIn(" at $:", str(raised.exception))
 
-        with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
+        with mock.patch.object(tools, "_cos_binary", return_value="yu"), mock.patch.object(
             tools,
             "_run_with_timeout",
-            return_value=subprocess.CompletedProcess(["cos"], 0, "null", ""),
+            return_value=subprocess.CompletedProcess(["yu"], 0, "null", ""),
         ):
             with self.assertRaises(tools.ToolUnavailable) as tool_error:
                 tools.call("echo", app_id="notes")
@@ -300,14 +300,14 @@ class WireValidationTests(unittest.TestCase):
         self.assertEqual(response.tool_calls[0].input, Decimal(lexeme))
 
         completed = subprocess.CompletedProcess(
-            ["cos"],
+            ["yu"],
             0,
             _wire_success_json(
                 '{"tool":"echo","app_id":"notes","status":"ok","result":null}'
             ),
             "",
         )
-        with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
+        with mock.patch.object(tools, "_cos_binary", return_value="yu"), mock.patch.object(
             tools, "_run_with_timeout", return_value=completed
         ) as run:
             tools.call(
@@ -321,14 +321,14 @@ class WireValidationTests(unittest.TestCase):
     def test_public_lossless_values_and_catalog_schemas_encode_exactly(self) -> None:
         lexeme = "0.12345678901234567890"
         tool_completed = subprocess.CompletedProcess(
-            ["cos"],
+            ["yu"],
             0,
             _wire_success_json(
                 f'{{"tool":"echo","app_id":"notes","status":"ok","result":{lexeme}}}'
             ),
             "",
         )
-        with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
+        with mock.patch.object(tools, "_cos_binary", return_value="yu"), mock.patch.object(
             tools, "_run_with_timeout", return_value=tool_completed
         ):
             result = tools.call("echo", {}, app_id="notes")
@@ -336,7 +336,7 @@ class WireValidationTests(unittest.TestCase):
         self.assertEqual(encode_wire_json(result.value), lexeme)
 
         catalog_completed = subprocess.CompletedProcess(
-            ["cos"],
+            ["yu"],
             0,
             (
                 _wire_success_json(
@@ -350,7 +350,7 @@ class WireValidationTests(unittest.TestCase):
             ),
             "",
         )
-        with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
+        with mock.patch.object(tools, "_cos_binary", return_value="yu"), mock.patch.object(
             tools, "_run_with_timeout", return_value=catalog_completed
         ):
             entry = tools.catalog()[0]
@@ -359,7 +359,7 @@ class WireValidationTests(unittest.TestCase):
 
     def test_tool_call_preserves_null_scalar_and_array_arguments(self) -> None:
         completed = subprocess.CompletedProcess(
-            ["cos"],
+            ["yu"],
             0,
             _wire_success_json(
                 '{"tool":"echo","app_id":"notes","status":"ok","result":null}'
@@ -368,7 +368,7 @@ class WireValidationTests(unittest.TestCase):
         )
         for args in (None, "scalar", [1, True]):
             with self.subTest(args=args), mock.patch.object(
-                tools, "_cos_binary", return_value="cos"
+                tools, "_cos_binary", return_value="yu"
             ), mock.patch.object(
                 tools, "_run_with_timeout", return_value=completed
             ) as run:
@@ -447,22 +447,22 @@ class WireValidationTests(unittest.TestCase):
 
     def test_transport_rejects_flat_and_incoherent_wire_replies(self) -> None:
         for completed in (
-            subprocess.CompletedProcess(["cos"], 0, '{"value":1}', ""),
+            subprocess.CompletedProcess(["yu"], 0, '{"value":1}', ""),
             subprocess.CompletedProcess(
-                ["cos"],
+                ["yu"],
                 1,
                 _wire_success_json('{"value":1}'),
                 "",
             ),
             subprocess.CompletedProcess(
-                ["cos"],
+                ["yu"],
                 0,
                 _wire_error("denied", "PERMISSION_DENIED"),
                 "",
             ),
         ):
             with self.subTest(completed=completed), mock.patch.object(
-                tools, "_cos_binary", return_value="cos"
+                tools, "_cos_binary", return_value="yu"
             ), mock.patch.object(
                 tools, "_run_with_timeout", return_value=completed
             ):

@@ -739,7 +739,7 @@ fn authorize_session_caps(
             return match mode {
                 Mode::Permissive => Ok(()),
                 Mode::Strict => Err(Denial::verb_not_granted(verb, scope).with_hint(format!(
-                    "session `{session_id}` has no caps field; spawn it with `cos session start \
+                    "session `{session_id}` has no caps field; spawn it with `yu session start \
                      --role <role>` to enrol it in the new permission system"
                 ))),
             }

@@ -68,7 +68,7 @@ pub fn error(code: &str, message: &str) -> Value {
 ///   "code": "auth.credential_not_found",
 ///   "recovery": {
 ///     "hint": "Store the credential first",
-///     "try": ["cos credential store OPENAI_KEY <value> --tier 0"]
+///     "try": ["yu credential store OPENAI_KEY <value> --tier 0"]
 ///   }
 /// }
 /// ```

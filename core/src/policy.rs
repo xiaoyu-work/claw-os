@@ -1,6 +1,6 @@
 //! Legacy session-tier reader.
 //!
-//! All of the old `cos policy` CLI (elevate / drop / status / check),
+//! All of the old `yu policy` CLI (elevate / drop / status / check),
 //! the [`OpType`]-based [`require`] gate, scope helpers, and the
 //! elevation-grant machinery were retired alongside the kernel-call-site
 //! migration to [`crate::caps`]. The only surviving function is

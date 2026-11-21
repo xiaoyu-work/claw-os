@@ -22,7 +22,7 @@ fn llm_providers_returns_known_providers_with_counts() {
 
 #[test]
 fn llm_providers_default_when_no_args() {
-    // The bare `cos agent llm` invocation with no subcommand
+    // The bare `yu agent llm` invocation with no subcommand
     // defaults to providers (mirrors `usage` defaulting to overall).
     let v = llm_cmd(&[]).expect("llm default ok");
     assert!(v.get("providers").is_some());

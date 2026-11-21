@@ -60,7 +60,7 @@ CLI or Agent
   -> local policy check
   -> cos_runtime.browser_bridge
        sensitive request body on stdin, never argv
-  -> hidden cos __browser bridge
+  -> hidden yu __browser bridge
   -> typed system.browser.control route
   -> clawd verifies:
        authenticated caller App/session identity, without a business-name entitlement

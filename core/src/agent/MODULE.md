@@ -67,7 +67,7 @@ surfaces.
 
 | Path | Role |
 | --- | --- |
-| `mod.rs` | Agent module composition and top-level `cos agent` routing |
+| `mod.rs` | Agent module composition and top-level `yu agent` routing |
 | `command_catalog.rs` | Recursive-discovery metadata for the internal `agent dev` namespace |
 | `conversation_commands.rs` | `ask`/`chat` routing and the compatible plain-text conversation interface |
 | `terminal/` | Claw-owned ratatui state, renderer, direct broker client, stream projection and model catalogue |
@@ -160,10 +160,10 @@ Unit test bodies mirror their production modules under
 `*_commands.rs` file:
 
 ```bash
-cargo test -p cos agent::setup::tests -- --test-threads=1
-cargo test -p cos agent::runtime::turn::tests -- --test-threads=1
-cargo test -p cos agent::llm::providers::<provider>::tests -- --test-threads=1
-cargo test -p cos agent::llm::accumulate::tests -- --test-threads=1
+cargo test -p yu agent::setup::tests -- --test-threads=1
+cargo test -p yu agent::runtime::turn::tests -- --test-threads=1
+cargo test -p yu agent::llm::providers::<provider>::tests -- --test-threads=1
+cargo test -p yu agent::llm::accumulate::tests -- --test-threads=1
 ```
 
 For an LLM-provider change, test setup/discovery, auth, request serialization,

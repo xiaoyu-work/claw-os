@@ -45,5 +45,5 @@ Qwen3 embedding task retains its existing separate token limit.
 ## Tests
 
 ```bash
-cargo test -p cos model:: -- --test-threads=1
+cargo test -p yu model:: -- --test-threads=1
 ```

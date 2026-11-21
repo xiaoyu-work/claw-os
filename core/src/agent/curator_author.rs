@@ -160,7 +160,7 @@ pub fn fallback_body(draft: &SkillDraft) -> String {
         out.push('\n');
     }
     out.push_str(
-        "_This skill was auto-drafted by `cos agent curator` but the LLM authoring step did not run. Edit this file to describe the steps the agent should take._\n",
+        "_This skill was auto-drafted by `yu agent curator` but the LLM authoring step did not run. Edit this file to describe the steps the agent should take._\n",
     );
     out
 }

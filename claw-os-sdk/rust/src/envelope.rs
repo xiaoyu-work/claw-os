@@ -1,4 +1,4 @@
-//! Strict decoding for replies requested with `cos --wire=1`.
+//! Strict decoding for replies requested with `yu --wire=1`.
 
 use serde::{Deserialize, Serialize};
 

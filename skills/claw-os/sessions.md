@@ -13,22 +13,22 @@ to keep in sync.
 
 ## User-facing CLI
 
-The word "session" never appears in `cos --help`. Users think in terms of
-**tasks an agent is doing**. The five verbs are under `cos agent`:
+The word "session" never appears in `yu --help`. Users think in terms of
+**tasks an agent is doing**. The five verbs are under `yu agent`:
 
 ```bash
-cos agent ls                       # list every active / paused / failed task
-cos agent show <task-id>           # purpose, status, lease, turns, mutations
-cos agent stop <task-id>           # politely tell the runtime to wind down
-cos agent undo <task-id>           # roll the mutation log back
-cos agent resume <task-id>         # let a fresh runtime pick a paused task up
+yu agent ls                       # list every active / paused / failed task
+yu agent show <task-id>           # purpose, status, lease, turns, mutations
+yu agent stop <task-id>           # politely tell the runtime to wind down
+yu agent undo <task-id>           # roll the mutation log back
+yu agent resume <task-id>         # let a fresh runtime pick a paused task up
 ```
 
 `stop` is cooperative — it drops a `stop.requested` sentinel for the live
 runtime to notice on its next heartbeat. If no runtime is attached, it
 flips the meta status to `paused` immediately so `ls` reflects reality.
 `resume` flips `paused → pending`; the agent stack itself (e.g.
-`cos agent chat --session <id>`) takes it from there.
+`yu agent chat --session <id>`) takes it from there.
 
 ## Disk layout
 
@@ -42,7 +42,7 @@ $COS_DATA_DIR/sessions/<sid>/
   lease.json        — current owner: {pid, runtime, started_at, heartbeat_at}
   lease.lock        — flock sentinel; the kernel auto-releases it on holder death
   files/inverse/    — pre-mutation byte snapshots referenced by FsWrite/FsDelete
-  stop.requested    — present iff `cos agent stop` has been issued
+  stop.requested    — present iff `yu agent stop` has been issued
 ```
 
 ### Session id
@@ -61,7 +61,7 @@ pending → running → paused → running → done
 
 `pending` = created, no agent has ever attached. `running` = a process holds
 the lease and is making progress. `paused` = the lease was released
-voluntarily (or `cos agent stop` was issued). `done` / `failed` are
+voluntarily (or `yu agent stop` was issued). `done` / `failed` are
 terminal — read-only, eligible for archival once the GC retention window
 elapses.
 
@@ -125,7 +125,7 @@ tail entry).
 
 ## Schema — mutations.jsonl
 
-Append-only inverse-action log. `cos agent undo <sid>` walks this file
+Append-only inverse-action log. `yu agent undo <sid>` walks this file
 newest-first.
 
 ```json
@@ -152,7 +152,7 @@ scheme.
 ## Cross-runtime handover
 
 This is the load-bearing claim: **a third-party runtime can attach to a
-session our `cos agent` runtime started, read its turns, and append new
+session our `yu agent` runtime started, read its turns, and append new
 ones — without ever shelling out to `cos`.** Python is the shipped
 reference implementation; other runtimes must implement the same
 protocol before writing.
@@ -204,7 +204,7 @@ s.append_turn(
 
 # Record a reversible file edit. `prev_bytes` is what the file held
 # before you changed it — claw-os stores it as an inverse blob so
-# `cos agent undo <sid>` can put it back.
+# `yu agent undo <sid>` can put it back.
 s.record_fs_write("/home/jay/report.md", prev_bytes=old, runtime="my-bot-py")
 ```
 
@@ -231,5 +231,5 @@ it to continue, it belongs in `turns.jsonl`.
 
 Sessions in `done` or `failed` status get archived to
 `$COS_DATA_DIR/sessions/.archive/<sid>.zip` after a retention window;
-the original directory is removed. `Session.list()` and `cos agent ls`
+the original directory is removed. `Session.list()` and `yu agent ls`
 both skip the `.archive` directory automatically.

@@ -6,7 +6,7 @@ This module is the public surface a Go App uses to expose MCP tools, reach the
 kernel's stable chat and fixed tool catalog, and bootstrap a desktop GUI.
 It does not allow App-to-App invocation. Like the Python, Rust, and Node SDKs,
 its outbound transport is a **thin client over
-wire protocol v1**: supported operations shell out to the `cos` binary,
+wire protocol v1**: supported operations shell out to the `yu` binary,
 which enforces capabilities, prompt-origin allowlists, monthly budget,
 the safety pipeline, and audit before any model or computer operation
 runs.
@@ -25,10 +25,10 @@ import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 
 | Area          | Functions                                                          | Equivalent CLI                    |
 |---------------|--------------------------------------------------------------------|-----------------------------------|
-| AI            | `Chat` / chat-untrusted access; `Budget`                         | `cos ai chat --app <id>`          |
-| Tools         | `CallTool`, `Catalog`, `ForChat`                                   | `cos ai tool <name> --app <id>`   |
+| AI            | `Chat` / chat-untrusted access; `Budget`                         | `yu ai chat --app <id>`          |
+| Tools         | `CallTool`, `Catalog`, `ForChat`                                   | `yu ai tool <name> --app <id>`   |
 | MCP service   | `LoadMCPApp`, `(*MCPApp).Bind`, `Serve`, `ServeStdio`               | App Host private stdio transport  |
-| GUI           | `IsGUILaunch`, `Context`, `(*GuiContext).OpenAgentOverlay`         | launched via `cos app <id> --gui` |
+| GUI           | `IsGUILaunch`, `Context`, `(*GuiContext).OpenAgentOverlay`         | launched via `yu app <id> --gui` |
 | Objects       | `FormatReference`, `ParseReference`                               | Pure identifiers; no transport |
 | Transport     | `CosBinary`, error types (advanced)                                | —                                 |
 | (generated)   | Typed structs from `wire/v1/*.schema.json` (`generated.go`)        | —                                 |
@@ -167,11 +167,11 @@ published as placeholder APIs.
 - **Name a verb or pick a model.** You describe what you want; the gate
   picks the caps verb, and the machine owner configures the one
   provider/model in `/etc/cos/agent.toml`.
-- **Import a provider SDK** (`openai`, `anthropic`, …). `cos app lint`
+- **Import a provider SDK** (`openai`, `anthropic`, …). `yu app lint`
   refuses apps that do; this module is the only sanctioned route to a
   model.
-- **Call `cos agent`.** That is the kernel's own Agent product. Apps use
-  `cos ai` (the App-facing primitive) — which is what this SDK wraps.
+- **Call `yu agent`.** That is the kernel's own Agent product. Apps use
+  `yu ai` (the App-facing primitive) — which is what this SDK wraps.
 
 ## Errors
 

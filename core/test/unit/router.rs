@@ -335,7 +335,7 @@ fn recovery_hint_file_not_found() {
     let try_cmds = hint["try"].as_array().unwrap();
     assert!(try_cmds
         .iter()
-        .any(|v| v.as_str().unwrap().contains("cos app fs ls")));
+        .any(|v| v.as_str().unwrap().contains("yu app fs ls")));
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn recovery_hint_disk_full() {
     let try_cmds = hint["try"].as_array().unwrap();
     assert!(try_cmds
         .iter()
-        .any(|v| v.as_str().unwrap().contains("cos sys resources")));
+        .any(|v| v.as_str().unwrap().contains("yu sys resources")));
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn recovery_hint_connection_refused() {
     let try_cmds = hint["try"].as_array().unwrap();
     assert!(try_cmds
         .iter()
-        .any(|v| v.as_str().unwrap().contains("cos service")));
+        .any(|v| v.as_str().unwrap().contains("yu service")));
 }
 
 #[test]
@@ -477,8 +477,8 @@ fn recovery_hint_returns_valid_json_structure() {
         for cmd in try_arr {
             assert!(cmd.is_string(), "Non-string in 'try' array for '{}'", error);
             assert!(
-                cmd.as_str().unwrap().starts_with("cos "),
-                "Recovery command should start with 'cos': {}",
+                cmd.as_str().unwrap().starts_with("yu "),
+                "Recovery command should start with 'yu': {}",
                 cmd
             );
         }
@@ -584,7 +584,7 @@ fn show_command_schema_returns_json() {
     assert!(result.is_ok());
     let output = result.unwrap().unwrap();
     let v: Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(v["command"], "cos checkpoint create");
+    assert_eq!(v["command"], "yu checkpoint create");
     assert!(v["parameters"].is_array());
     assert!(v["example"].is_string());
 }
@@ -678,7 +678,7 @@ fn agent_usage_is_publicly_discoverable() {
     assert_eq!(help["model_tools"]["usage"], "cos_usage");
 
     let leaf = parse(dispatch(&["agent".into(), "usage".into(), "--schema".into()]).unwrap());
-    assert_eq!(leaf["command"], "cos agent usage");
+    assert_eq!(leaf["command"], "yu agent usage");
     assert_eq!(leaf["schema_available"], true);
     assert!(leaf["parameters"].is_array());
 }
@@ -686,7 +686,7 @@ fn agent_usage_is_publicly_discoverable() {
 #[test]
 fn bare_agent_usage_returns_progressive_help() {
     let help = parse(dispatch(&["agent".into(), "usage".into()]).unwrap());
-    assert_eq!(help["command"], "cos agent usage");
+    assert_eq!(help["command"], "yu agent usage");
     assert_eq!(help["model_tool"], "cos_usage");
     assert!(help["scopes"].get("provider <name>").is_some());
 }
@@ -731,14 +731,14 @@ fn parse(out: Option<String>) -> Value {
 #[test]
 fn dispatch_help_flag_returns_overview() {
     let v = parse(dispatch(&["--help".into()]).unwrap());
-    assert_eq!(v["name"], "cos");
+    assert_eq!(v["name"], "yu");
     assert!(v["primitives"].is_array());
 }
 
 #[test]
 fn dispatch_h_short_flag_returns_overview() {
     let v = parse(dispatch(&["-h".into()]).unwrap());
-    assert_eq!(v["name"], "cos");
+    assert_eq!(v["name"], "yu");
 }
 
 #[test]
@@ -764,7 +764,7 @@ fn dispatch_help_unknown_topic_returns_overview_with_note() {
 #[test]
 fn dispatch_builtin_null_result_yields_no_output() {
     // A handler that has already written its human-facing output
-    // directly to stdout (e.g. `cos agent ask` printing the plain
+    // directly to stdout (e.g. `yu agent ask` printing the plain
     // answer) returns Value::Null to signal "nothing more to
     // render". dispatch_builtin must surface that as Ok(None) so
     // main.rs does not print a stray `null` line afterwards.
@@ -807,7 +807,7 @@ fn dispatch_builtin_recovery_envelope_propagates_failure() {
 fn dispatch_version_returns_envelope() {
     for flag in ["--version", "-v", "-V"] {
         let v = parse(dispatch(&[flag.into()]).unwrap());
-        assert_eq!(v["name"], "cos");
+        assert_eq!(v["name"], "yu");
         assert_eq!(v["version"], VERSION);
     }
 }
@@ -823,7 +823,7 @@ fn dispatch_builtin_help_token_returns_overview() {
 
 #[test]
 fn dispatch_agent_help_does_not_hijack() {
-    // `cos agent --help` must return the command list rather than
+    // `yu agent --help` must return the command list rather than
     // dropping into the interactive chat/setup shortcut.
     let v = parse(dispatch(&["agent".into(), "--help".into()]).unwrap());
     assert_eq!(v["app"], "agent");
@@ -831,7 +831,7 @@ fn dispatch_agent_help_does_not_hijack() {
 }
 
 // -----------------------------------------------------------------
-// `cos app consent` CLI surface — see consent_cmd() above.
+// `yu app consent` CLI surface — see consent_cmd() above.
 // -----------------------------------------------------------------
 
 fn empty_apps() -> std::collections::BTreeMap<String, apps::App> {

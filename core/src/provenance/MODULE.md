@@ -16,7 +16,7 @@ schemas or model-visible metadata are trusted.
   snapshot bound to an open directory descriptor.
 - Stage, verify and atomically publish untrusted bundles, retaining
   content-addressed artifacts for verified rollback.
-- Expose the operator/developer CLI (`cos provenance …`).
+- Expose the operator/developer CLI (`yu provenance …`).
 
 ## Key Files
 
@@ -73,7 +73,7 @@ no-follow, nonblocking descriptors so a replaced FIFO cannot stall Root.
 
 The packaged vendor and local operator publisher roots share one system
 generation at `/etc/cos/trust/state.json`. Agent package configuration records
-it with the root-only `cos provenance trust record-system` command. It
+it with the root-only `yu provenance trust record-system` command. It
 activates no App permissions; verification still checks each trusted key
 and signed payload.
 

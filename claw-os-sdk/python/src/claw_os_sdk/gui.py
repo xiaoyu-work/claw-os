@@ -10,11 +10,11 @@ agent overlay.
 
 ## How a GUI app is launched
 
-When an app declares a ``desktop`` block in ``app.json``, ``cos app
-install`` writes a launcher whose ``Exec`` is ``cos app <id> --gui``.
+When an app declares a ``desktop`` block in ``app.json``, ``yu app
+install`` writes a launcher whose ``Exec`` is ``yu app <id> --gui``.
 Clicking it routes the launch back through the kernel, which spawns the
 app's entry with ``COS_APP_GUI=1`` and ``COS_APP_ID`` set. Routing the
-launch through ``cos app`` (rather than exec-ing the binary) is what
+launch through ``yu app`` (rather than exec-ing the binary) is what
 makes identity, audit, and consent apply to the GUI exactly as they do
 to the headless operation path.
 
@@ -119,7 +119,7 @@ def _selected_write_call(action: str, request: dict[str, Any]) -> generated.GuiF
 
 def _selected_file_call(bridge: str, action: str, request: dict[str, Any]) -> Any:
     return call_json_with_stdin_binary(
-        os.environ.get("CLAW_COS_BIN", "/usr/local/bin/cos"),
+        os.environ.get("CLAW_COS_BIN", "/usr/local/bin/yu"),
         [bridge, action, "--request-stdin"],
         generated.encode_wire_json(request).encode("utf-8"),
         deadline_unix_ms=time.time_ns() // 1_000_000 + 30_000,

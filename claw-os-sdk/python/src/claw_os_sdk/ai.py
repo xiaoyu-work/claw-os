@@ -1,13 +1,13 @@
 """AI helper for Claw OS Python apps.
 
 ``chat`` is the stable model API and shells out to
-``cos ai chat --app <id>``. The kernel derives ``ai.chat`` or
+``yu ai chat --app <id>``. The kernel derives ``ai.chat`` or
 ``ai.chat.untrusted`` from the prompt origin, then runs capability
 checks, budget, safety, and audit before a model sees the prompt.
 
-``cos ai chat`` is deliberately separate from ``cos agent chat``.
-``cos agent`` is the kernel's *own* Agent product (REPL, memory,
-skills, hooks, sessions, recall). Apps must not use it. ``cos ai``
+``yu ai chat`` is deliberately separate from ``yu agent chat``.
+``yu agent`` is the kernel's *own* Agent product (REPL, memory,
+skills, hooks, sessions, recall). Apps must not use it. ``yu ai``
 is the App-developer-facing primitive: raw, gated LLM access with
 no loop and no kernel state.
 
@@ -38,8 +38,8 @@ Why a subprocess and not an in-process check?
 
 Apps are **not** allowed to import provider SDKs (openai, anthropic,
 google.generativeai, ...). The kernel enforces this at install time
-via ``cos app lint``; the AI helper is the *only* sanctioned route to
-a model. Centralising the request in ``cos ai chat`` means the
+via ``yu app lint``; the AI helper is the *only* sanctioned route to
+a model. Centralising the request in ``yu ai chat`` means the
 kernel — not the app — controls budget, safety, and audit.
 """
 
@@ -62,7 +62,7 @@ from .generated import (
 )
 
 
-# Subprocess timeout — covers every shell-out to the `cos` binary. The
+# Subprocess timeout — covers every shell-out to the `yu` binary. The
 # default is long enough for slow providers but bounded so a hung child
 # never blocks the calling app forever.
 _DEFAULT_TIMEOUT_S = 60
@@ -85,7 +85,7 @@ class AiDenied(AiError):
     """A gate (capability / origin / budget) refused the call.
 
     The ``payload`` attribute holds the structured envelope
-    ``cos ai chat`` returned (verb, scope, reason, hint, …) —
+    ``yu ai chat`` returned (verb, scope, reason, hint, …) —
     suitable for forwarding back to the agent.
     """
 
@@ -216,11 +216,11 @@ def budget(app_id: Optional[str] = None) -> Budget:
         )
     except subprocess.TimeoutExpired as exc:
         raise AiUnavailable(
-            f"cos agent budget show timed out after {_DEFAULT_TIMEOUT_S}s"
+            f"yu agent budget show timed out after {_DEFAULT_TIMEOUT_S}s"
         ) from exc
     text = (proc.stdout or "").strip()
     try:
-        env = decode_response(text, proc.returncode, "cos agent budget show")
+        env = decode_response(text, proc.returncode, "yu agent budget show")
     except (WireDenied, WireUnavailable) as exc:
         raise AiUnavailable(str(exc)) from exc
     try:
@@ -249,7 +249,7 @@ def _dispatch(
     system: Optional[str] = None,
     tools: Optional[List[str]] = None,
 ) -> AiResponse:
-    """Build the stable ``cos ai chat`` command and parse its envelope."""
+    """Build the stable ``yu ai chat`` command and parse its envelope."""
     app = app_id or os.environ.get("COS_APP_ID")
     if not app:
         raise AiError(
@@ -296,11 +296,11 @@ def _dispatch(
             )
         except subprocess.TimeoutExpired as exc:
             raise AiUnavailable(
-                f"cos ai {modality} timed out after {_DEFAULT_TIMEOUT_S}s"
+                f"yu ai {modality} timed out after {_DEFAULT_TIMEOUT_S}s"
             ) from exc
     payload_text = (proc.stdout or "").strip()
     try:
-        envelope = decode_response(payload_text, proc.returncode, "cos ai chat")
+        envelope = decode_response(payload_text, proc.returncode, "yu ai chat")
     except WireDenied as exc:
         _raise_for_error(exc.payload)
     except WireUnavailable as exc:
@@ -364,9 +364,9 @@ def _cos_binary() -> str:
     override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
-    found = shutil.which("cos")
+    found = shutil.which("yu")
     if found is None:
         raise AiUnavailable(
-            "the `cos` binary is not on PATH; cannot reach the AI gate"
+            "the `yu` binary is not on PATH; cannot reach the AI gate"
         )
     return found

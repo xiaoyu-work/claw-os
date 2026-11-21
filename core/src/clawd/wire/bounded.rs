@@ -59,7 +59,7 @@ impl<'de> Deserialize<'de> for FileText {
 }
 
 /// Longest a client may ask a long-polling route to wait: one day,
-/// which is the ceiling `cos agent ask` already uses. Without a bound
+/// which is the ceiling `yu agent ask` already uses. Without a bound
 /// here `Instant::now() + Duration::from_millis(v)` overflows and the
 /// connection is pinned for as long as the caller likes.
 pub const MAX_WAIT_MS: u64 = 24 * 60 * 60 * 1_000;

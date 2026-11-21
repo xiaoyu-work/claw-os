@@ -2,7 +2,7 @@
  * Token bootstrap modal. Mirrors the old single-file SPA's first-launch
  * flow: read `cos.token` from localStorage; if missing or rejected by
  * `/api/meta`, prompt the user to paste the bootstrap secret printed by
- * `cos agent serve`. The bootstrap secret is exchanged for a one-hour signed
+ * `yu agent serve`. The bootstrap secret is exchanged for a one-hour signed
  * access token; only the short-lived token is stored in localStorage.
  *
  * Also reads `?t=<token>` from the initial URL so the user can just
@@ -97,7 +97,7 @@ export function TokenGate({ children, onMeta }: { children: React.ReactNode; onM
           <DialogHeader>
             <DialogTitle>Paste your access token</DialogTitle>
             <DialogDescription>
-              Run <code className="font-mono text-xs">cos agent serve --status</code> on
+              Run <code className="font-mono text-xs">yu agent serve --status</code> on
               the host to see the bootstrap URL, or paste the bootstrap token manually.
             </DialogDescription>
           </DialogHeader>

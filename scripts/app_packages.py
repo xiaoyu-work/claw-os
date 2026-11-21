@@ -297,7 +297,7 @@ def selection(records, variant, configuration):
     for record in selected.values():
         if record["Package"] == configuration["headless_set"]:
             continue
-        runtime = re.findall(r"(?:^|,\s*)claw-os-app-runtime-v1 \(>= ([^\s()]+)\)(?:,|$)",
+        runtime = re.findall(r"(?:^|,\s*)yuos-app-runtime-v1 \(>= ([^\s()]+)\)(?:,|$)",
                              record.get("Depends", "").replace("\n", " "))
         if len(runtime) != 1 or not compare(runtime[0], "ge", minimum) or not compare(
             platform()["version"], "ge", runtime[0],

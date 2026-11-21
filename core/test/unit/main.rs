@@ -105,7 +105,7 @@ fn extract_format_preserves_delimiter_and_app_data_flags() {
 
 #[test]
 fn extract_format_leaves_internal_bridge_argv_alone() {
-    // `cos __memory remember --json <payload>` is a private wire
+    // `yu __memory remember --json <payload>` is a private wire
     // format between the SDK and the kernel: stripping `--json` here
     // would silently deliver a payload-less call to the bridge.
     let original = vec![

@@ -166,7 +166,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "app_session.check_live",
     "app_session.set_transient",
     "app_session.deregister",
-    // The human `cos app <id> <command>` surface for MCP-only Apps. It is
+    // The human `yu app <id> <command>` surface for MCP-only Apps. It is
     // `Access::User` (an unprivileged local CLI peer), a distinct command
     // from the `Access::PrivateTaskHost` `app_service.call`, and the daemon
     // derives every authority fact from the peer rather than the request.

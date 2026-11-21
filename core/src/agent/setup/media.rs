@@ -37,8 +37,8 @@ pub(super) fn tts_spec() -> &'static ModalitySpec {
     static SPEC: ModalitySpec = ModalitySpec {
         name: "tts",
         config_block: "tts",
-        headline: "cos agent setup tts — text-to-speech wizard",
-        next_command_hint: "cos agent voice 'hello world'",
+        headline: "yu agent setup tts — text-to-speech wizard",
+        next_command_hint: "yu agent voice 'hello world'",
         default_provider: "edge",
         providers: &[
             ProviderChoice {
@@ -106,8 +106,8 @@ pub(super) fn stt_spec() -> &'static ModalitySpec {
     static SPEC: ModalitySpec = ModalitySpec {
         name: "stt",
         config_block: "stt",
-        headline: "cos agent setup stt — speech-to-text wizard",
-        next_command_hint: "cos model transcribe path/to/audio.wav",
+        headline: "yu agent setup stt — speech-to-text wizard",
+        next_command_hint: "yu model transcribe path/to/audio.wav",
         default_provider: "openai",
         providers: &[
             ProviderChoice {
@@ -147,8 +147,8 @@ pub(super) fn imagegen_spec() -> &'static ModalitySpec {
     static SPEC: ModalitySpec = ModalitySpec {
         name: "imagegen",
         config_block: "imagegen",
-        headline: "cos agent setup imagegen — image generation wizard",
-        next_command_hint: "cos agent image 'a serene mountain lake at dawn'",
+        headline: "yu agent setup imagegen — image generation wizard",
+        next_command_hint: "yu agent image 'a serene mountain lake at dawn'",
         default_provider: "openai",
         providers: &[
             ProviderChoice {
@@ -188,8 +188,8 @@ pub(super) fn embed_spec() -> &'static ModalitySpec {
     static SPEC: ModalitySpec = ModalitySpec {
         name: "embed",
         config_block: "embed",
-        headline: "cos agent setup embed — text-embedding wizard (semantic memory)",
-        next_command_hint: "cos agent recall 'your query here'",
+        headline: "yu agent setup embed — text-embedding wizard (semantic memory)",
+        next_command_hint: "yu agent recall 'your query here'",
         default_provider: "local",
         providers: &[
             ProviderChoice {
@@ -289,7 +289,7 @@ pub(super) fn wizard_media(
 ) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err(json!({
-            "error": "cos agent setup requires an interactive TTY",
+            "error": "yu agent setup requires an interactive TTY",
             "modality": spec.name,
             "hint": format!(
                 "run it in a terminal, or edit ~/.config/cos/config.json's `{}` block manually",
@@ -360,7 +360,7 @@ pub(super) fn wizard_media(
             return Err(json!({
                 "error": "local embedding stack unavailable",
                 "details": local_embed_unavailable_details(&err),
-                "fix": "cos agent setup embed",
+                "fix": "yu agent setup embed",
             })
             .to_string());
         }
@@ -639,7 +639,7 @@ pub(super) fn status_media(modality: Modality) -> Value {
             json!({
                 "error": "embedding not configured",
                 "details": details,
-                "fix": "cos agent setup embed",
+                "fix": "yu agent setup embed",
             }),
         )
     } else if matches!(modality, Modality::Embed) && is_local_embed_provider(&provider) {
@@ -650,7 +650,7 @@ pub(super) fn status_media(modality: Modality) -> Value {
                 json!({
                     "error": "local embedding stack unavailable",
                     "details": local_embed_unavailable_details(&err),
-                    "fix": "cos agent setup embed",
+                    "fix": "yu agent setup embed",
                 }),
             ),
         }
@@ -660,7 +660,7 @@ pub(super) fn status_media(modality: Modality) -> Value {
             json!({
                 "error": format!("{} not configured", spec.name),
                 "details": "provider is set to `none`.",
-                "fix": format!("cos agent setup {}", spec.name),
+                "fix": format!("yu agent setup {}", spec.name),
             })
         } else if !key_resolvable {
             json!({
@@ -669,7 +669,7 @@ pub(super) fn status_media(modality: Modality) -> Value {
                     "provider `{provider}` needs a credential; none resolvable from \
                      store or env."
                 ),
-                "fix": format!("cos agent setup {}", spec.name),
+                "fix": format!("yu agent setup {}", spec.name),
             })
         } else {
             Value::Null
@@ -744,7 +744,7 @@ pub(super) fn verify_media(modality: Modality) -> Value {
         "hint": if ready {
             Value::Null
         } else {
-            json!(format!("run `cos agent setup {}` to reconfigure", modality.name()))
+            json!(format!("run `yu agent setup {}` to reconfigure", modality.name()))
         },
     })
 }

@@ -213,7 +213,7 @@ fn sessions_clear_requires_session_id() {
 
 #[test]
 fn sessions_cmd_numeric_first_arg_routes_to_list() {
-    // Numeric first arg keeps backward-compat: cos agent sessions 5 → list 5.
+    // Numeric first arg keeps backward-compat: yu agent sessions 5 → list 5.
     let v = sessions_cmd(&["5".into()]).expect("legacy list ok");
     assert_eq!(v.get("limit").and_then(|n| n.as_u64()), Some(5));
 }

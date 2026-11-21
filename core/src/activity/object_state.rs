@@ -33,7 +33,7 @@ pub(super) fn parse(command: &str, args: &[String]) -> Result<(Command, Value), 
             ("retract-object-state", "--reason") => "reason",
             _ => {
                 return Err(format!(
-                    "unsupported argument for cos activity {command}: {flag}"
+                    "unsupported argument for yu activity {command}: {flag}"
                 ))
             }
         };
@@ -94,7 +94,7 @@ pub(super) fn submit(params: Value) -> Result<Value, String> {
 
 pub(super) fn from_stdin(args: &[String]) -> Result<Value, String> {
     if args.len() != 2 || args[1] != "--stdin" || std::io::stdin().is_terminal() {
-        return Err("usage: pipe entry JSON to cos activity record-object-state ID --stdin".into());
+        return Err("usage: pipe entry JSON to yu activity record-object-state ID --stdin".into());
     }
     crate::activities::validate_id(&args[0]).map_err(|error| error.to_string())?;
     let entry = read(std::io::stdin().lock())?;

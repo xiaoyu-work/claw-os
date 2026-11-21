@@ -45,7 +45,7 @@
 //! - surface anything in the user CLI (Phase 5).
 //!
 //! Everything here is a library: a future `cos-apid` daemon and the
-//! existing in-process `cos` binary will both call these same functions.
+//! existing in-process `yu` binary will both call these same functions.
 
 mod gc;
 mod id;

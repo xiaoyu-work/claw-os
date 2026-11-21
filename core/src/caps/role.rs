@@ -21,7 +21,7 @@
 //! | `automator`   | Automator              | Curator + run programs + outbound network + secrets.           |
 //! | `agent-host`  | Agent Coordinator      | Automator + spawn / call / delegate to sub-agents.             |
 //! | `admin`       | Administrator          | Agent-host + system services + packages + devices.             |
-//! | `kernel`      | Kernel                 | Reserved: held only by the cos process itself.                  |
+//! | `kernel`      | Kernel                 | Reserved: held only by the yu process itself.                  |
 //!
 //! Roles are intentionally only verb sets — pairing with a scope is
 //! the caller's responsibility (see [`Role::caps_with_scopes`]). This

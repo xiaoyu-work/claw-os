@@ -333,7 +333,7 @@ fn validate_path(path: &Path) -> Result<(), SystemPlaybackError> {
 }
 
 // =====================================================================
-// Diagnostics — surfaced by `cos agent media playback-status`
+// Diagnostics — surfaced by `yu agent media playback-status`
 // =====================================================================
 
 /// Human-readable summary of which backend / player would be used

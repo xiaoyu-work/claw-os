@@ -234,7 +234,7 @@ fn current_process_uid() -> Option<u32> {
 
 /// All session metadata currently on disk, in arbitrary order. Skips
 /// directories whose `meta.json` is missing or corrupt (so a half-
-/// created or hand-edited session doesn't take down `cos agent ls`).
+/// created or hand-edited session doesn't take down `yu agent ls`).
 ///
 /// The store does no caching — every call is a fresh disk walk. With
 /// the typical few-hundred-sessions ceiling per machine this is fine;
@@ -780,7 +780,7 @@ where
     file.flush()
         .map_err(|e| SessionError::io(path.clone(), e))?;
     // Persist the new line to disk *before* releasing the lock.
-    // Without `sync_data()` a `cos agent undo` started by the next
+    // Without `sync_data()` a `yu agent undo` started by the next
     // process can read a turn from the page cache that the kernel
     // hasn't yet committed; a crash after the next process exits
     // would then lose the entry our caller already considers

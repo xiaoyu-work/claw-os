@@ -57,7 +57,7 @@ pub fn current_owner_uid() -> Result<u32, String> {
         let uid = unsafe { libc::geteuid() } as u32;
         if uid == 0 {
             return Err(
-                "cos agent serve refuses to run as root; launch one instance per desktop user"
+                "yu agent serve refuses to run as root; launch one instance per desktop user"
                     .to_string(),
             );
         }
@@ -65,7 +65,7 @@ pub fn current_owner_uid() -> Result<u32, String> {
     }
     #[cfg(not(unix))]
     {
-        Err("cos agent serve multi-user isolation requires Unix user identities".to_string())
+        Err("yu agent serve multi-user isolation requires Unix user identities".to_string())
     }
 }
 

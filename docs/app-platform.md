@@ -71,8 +71,8 @@ SDK artifacts are build inputs; installed App downloads and updates use the
 separate signed App APT channel.
 
 The Agent Debian package derives its versioned
-`claw-os-app-runtime-v1 (= 0.2.1)` Provides from `packaging/app-platform.json`.
-Independent App packages require `claw-os-app-runtime-v1 (>= 0.2.1)` so an
+`yuos-app-runtime-v1 (= 0.2.1)` Provides from `packaging/app-platform.json`.
+Independent App packages require `yuos-app-runtime-v1 (>= 0.2.1)` so an
 old/unversioned 0.2.0 provider cannot satisfy the new implementation contract.
 This keeps ABI 1; the implementation floor is neither a grant nor adoption of
 an unpublished development pin. See

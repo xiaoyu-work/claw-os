@@ -86,7 +86,7 @@ pub fn current_locale() -> Locale {
 }
 
 /// Override the global locale. Normally called once at boot by
-/// [`init_locale_from_env`]; tests and the future `cos locale set` CLI
+/// [`init_locale_from_env`]; tests and the future `yu locale set` CLI
 /// may also use it.
 pub fn set_locale(loc: Locale) {
     if let Ok(mut g) = cell().write() {

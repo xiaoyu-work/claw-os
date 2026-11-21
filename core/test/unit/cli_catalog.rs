@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn stdio_catalogue_is_explicitly_non_model_callable_and_opaque() {
     let command = command_help("app", "stdio").unwrap();
-    assert_eq!(command["command"], "cos app stdio");
+    assert_eq!(command["command"], "yu app stdio");
     assert_eq!(command["model_callable"], false);
     assert!(command["model_tool"].is_null());
     assert_eq!(command["stdin"], true);
@@ -120,7 +120,7 @@ fn agent_usage_is_discoverable_and_model_callable() {
     assert_eq!(namespace["model_tools"]["usage"], "cos_usage");
 
     let command = command_help("agent", "usage").expect("usage command");
-    assert_eq!(command["command"], "cos agent usage");
+    assert_eq!(command["command"], "yu agent usage");
     assert_eq!(command["model_callable"], true);
     assert_eq!(command["model_tool"], "cos_usage");
 }
@@ -162,7 +162,7 @@ fn root_discloses_namespaces_before_commands() {
         .unwrap();
     assert_eq!(agent["commands_available"], 24);
     assert!(agent.get("commands").is_none());
-    assert_eq!(agent["next"], "cos agent");
+    assert_eq!(agent["next"], "yu agent");
 }
 
 #[test]

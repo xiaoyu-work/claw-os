@@ -1,7 +1,7 @@
-# cos agent serve — web UI
+# yu agent serve — web UI
 
 This is a Vite + React 18 + Tailwind v4 + Radix UI single-page app
-that gets compiled into the cos binary by include_dir!. The visual
+that gets compiled into the yu binary by include_dir!. The visual
 language is ported verbatim from open-agents/apps/web (oklch dark
 tokens, sidebar + inset shell, shadcn primitives).
 
@@ -10,7 +10,7 @@ tokens, sidebar + inset shell, shadcn primitives).
 The compiled bundle lives in dist/ and is **committed to git**
 so cargo builds don't require bun/node.
 
-On WSL, `cos agent serve --open` launches the Windows default browser, keeping
+On WSL, `yu agent serve --open` launches the Windows default browser, keeping
 Windows Chinese/other input methods in the host input stack. The server stays
 inside WSL and is reached through localhost. Windows interop must be enabled;
 the launcher does not depend on Windows directories being appended to Linux
@@ -31,7 +31,7 @@ cd core/src/agent/web/ui
 ~/.local/bin/bun run build
 ```
 
-Then cargo build -p cos --bin cos will pick up the new dist files
+Then cargo build -p cos --bin yu will pick up the new dist files
 via include_dir!. Commit the regenerated dist/.
 Install dependencies with `bun install` only when setting up a checkout or when
 the chosen validation reports missing dependencies. If `dist/` already has
@@ -112,7 +112,7 @@ uses the owner-only non-grant path. Confirmation-used status is refreshed by
 review ID even after the request leaves the pending list; absence is never
 treated as success. App frames receive no Web token or OS approval interface.
 Agent Markdown cannot render password inputs or other active form controls;
-task-list checkboxes remain inert presentation. `cos review` remains the
+task-list checkboxes remain inert presentation. `yu review` remains the
 independent attended-terminal interface.
 
 ## Inbox and conversation visibility
@@ -185,7 +185,7 @@ decisions, and conversation history open the existing `#/tasks`,
 `#/approvals`, and `#/chat/:id` views; Activities introduce no new approval
 authority.
 Protected App reviews remain separate from that capability-approval page:
-use `cos review` or the native OS review presenter. Activities do not bypass
+use `yu review` or the native OS review presenter. Activities do not bypass
 owner review, enable an unreviewed App service, or turn planning data into
 trusted model policy.
 

@@ -16,7 +16,7 @@ pub(crate) fn cos_binary() -> String {
     if let Ok(binary) = std::env::var("COS_BIN") {
         return binary;
     }
-    "/usr/local/bin/cos".to_string()
+    "/usr/local/bin/yu".to_string()
 }
 
 async fn bounded(reader: impl AsyncRead + Unpin, limit: usize) -> io::Result<Vec<u8>> {

@@ -239,7 +239,7 @@ async fn missing_and_broken_providers_are_visible_errors() {
         }
     ));
     unsafe {
-        std::env::set_var("COS_BIN", fixture.root.join("cos"));
+        std::env::set_var("COS_BIN", fixture.root.join("yu"));
     }
     fs::write(fixture.root.join("policy-reply"), "not json").unwrap();
     let response = service.handle(request(day())).await;

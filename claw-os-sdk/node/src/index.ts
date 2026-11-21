@@ -3,7 +3,7 @@
 // This package is the AI-facing surface a third-party Linux developer
 // uses when their Node app touches the kernel's AI features or runs as
 // a desktop GUI. Transport calls are thin clients over wire protocol v1: each
-// shells out to the `cos` binary, which enforces capabilities, budget,
+// shells out to the `yu` binary, which enforces capabilities, budget,
 // safety, and audit. See ../README.md and ../wire/v1/README.md.
 //
 //   import { ai, tools, gui, mcp } from "@claw-os/sdk";

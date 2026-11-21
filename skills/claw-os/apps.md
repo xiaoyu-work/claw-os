@@ -3,7 +3,7 @@
 The system Agent discovers permitted App MCP tools through `cos_tool_search`,
 checks their live schema with `cos_tool_describe`, and invokes them with
 `cos_tool_call`. The catalogue is authoritative. Human CLI examples below use
-`cos app <name> <command>`; a CLI example does not make that command model-callable.
+`yu app <name> <command>`; a CLI example does not make that command model-callable.
 Apps never invoke other Apps or orchestrate Agent tasks themselves.
 
 ## Browser (Web Reading)
@@ -11,9 +11,9 @@ Apps never invoke other Apps or orchestrate Agent tasks themselves.
 Fetch web pages as clean Markdown with JavaScript rendered. No Selenium needed:
 
 ```bash
-cos app web read https://example.com
-cos app web screenshot https://example.com
-cos app web submit https://example.com/form --data '{"q": "search term"}'
+yu app web read https://example.com
+yu app web screenshot https://example.com
+yu app web submit https://example.com/form --data '{"q": "search term"}'
 ```
 
 ## Web Search
@@ -21,16 +21,16 @@ cos app web submit https://example.com/form --data '{"q": "search term"}'
 Search the web through an explicitly selected Google or Brave provider:
 
 ```bash
-cos app search web --provider brave "Rust async runtime" --max-results 5
-cos app search image --provider brave "architecture diagram" --max-results 5
+yu app search web --provider brave "Rust async runtime" --max-results 5
+yu app search image --provider brave "architecture diagram" --max-results 5
 ```
 
 Requires credentials:
 ```bash
-cos credential store BRAVE_SEARCH_API_KEY "BSA..." --tier 1
+yu credential store BRAVE_SEARCH_API_KEY "BSA..." --tier 1
 # Or configure Google:
-cos credential store GOOGLE_SEARCH_API_KEY "AIza..." --tier 1
-cos credential store GOOGLE_SEARCH_ENGINE_ID "a1b2c3..." --tier 1
+yu credential store GOOGLE_SEARCH_API_KEY "AIza..." --tier 1
+yu credential store GOOGLE_SEARCH_ENGINE_ID "a1b2c3..." --tier 1
 ```
 
 ## Email
@@ -39,12 +39,12 @@ Read, search, draft and send through the owner's existing Thunderbird accounts.
 Discover accounts first and explicitly select the returned account ID:
 
 ```bash
-cos app email accounts
-cos app email folders --account ACCOUNT_ID
-cos app email search --account ACCOUNT_ID --query "urgent" --max-results 10
-cos app email list --account ACCOUNT_ID --unread --max-results 5
-cos app email read --account ACCOUNT_ID --id MESSAGE_REFERENCE_ID
-cos app email draft_save --account SENDER_ACCOUNT_ID \
+yu app email accounts
+yu app email folders --account ACCOUNT_ID
+yu app email search --account ACCOUNT_ID --query "urgent" --max-results 10
+yu app email list --account ACCOUNT_ID --unread --max-results 5
+yu app email read --account ACCOUNT_ID --id MESSAGE_REFERENCE_ID
+yu app email draft_save --account SENDER_ACCOUNT_ID \
   --to user@example.com --subject "Report" --body "Review the report"
 ```
 
@@ -83,12 +83,12 @@ Select `local`, `google` or `outlook` explicitly. Local CRUD needs no remote
 account, but is not a meeting-delivery or account-synchronization engine:
 
 ```bash
-cos app calendar create --provider local --title "Standup" \
+yu app calendar create --provider local --title "Standup" \
   --start "2026-11-08T09:00:00Z" --end "2026-11-08T09:30:00Z"
-cos app calendar today --provider local
-cos app calendar list --provider local --from "2026-11-08" --to "2026-11-09"
-cos app calendar update --provider local --id EVENT_ID --title "New title"
-cos app calendar delete --provider local --id EVENT_ID
+yu app calendar today --provider local
+yu app calendar list --provider local --from "2026-11-08" --to "2026-11-09"
+yu app calendar update --provider local --id EVENT_ID --title "New title"
+yu app calendar delete --provider local --id EVENT_ID
 ```
 
 `local_event`, `google_event` and `outlook_event` are independent ID-only object
@@ -143,7 +143,7 @@ Only Discord, Telegram, Slack and WhatsApp are selected. Their IDs remain
 Existing outbound `send` operations remain independent.
 
 A human configures exact provider account, channel, sender and owned Activity
-trigger through `cos channels configure PLATFORM` with the closed JSON request
+trigger through `yu channels configure PLATFORM` with the closed JSON request
 on stdin. The trigger must match `channel:gateway-PLATFORM` and
 `message.received`, with active finite limits and its approved generation.
 The model and Apps cannot supply owner identities, credentials or trigger
@@ -165,13 +165,13 @@ receivers, credentials, capacity or corrupt progress are explicit holds.
 ## File System
 
 ```bash
-cos app fs ls /home/cos
-cos app fs read /home/cos/file.txt
-cos app fs write /home/cos/output.txt --content='hello'
-cos app fs stat /home/cos/file.txt
-cos app fs search "pattern" /home/cos
-cos app fs rm /home/cos/tmp
-cos app fs mkdir /home/cos/new-dir
+yu app fs ls /home/cos
+yu app fs read /home/cos/file.txt
+yu app fs write /home/cos/output.txt --content='hello'
+yu app fs stat /home/cos/file.txt
+yu app fs search "pattern" /home/cos
+yu app fs rm /home/cos/tmp
+yu app fs mkdir /home/cos/new-dir
 ```
 
 Filesystem commands use the MCP-only contract. Writes require explicit
@@ -182,29 +182,29 @@ Filesystem commands use the MCP-only contract. Writes require explicit
 Read PDFs, DOCX, XLSX, PPTX, CSV, and other formats as structured text:
 
 ```bash
-cos app doc read document.pdf
-cos app doc read spreadsheet.xlsx
-cos app doc read presentation.pptx
-cos app doc info document.pdf
+yu app doc read document.pdf
+yu app doc read spreadsheet.xlsx
+yu app doc read presentation.pptx
+yu app doc info document.pdf
 ```
 
 ## Database (SQLite)
 
 ```bash
-cos app db exec mydb "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
-cos app db exec mydb "INSERT INTO users (name) VALUES ('Alice')"
-cos app db query mydb "SELECT * FROM users"
-cos app db tables mydb
-cos app db schema mydb users
-cos app db databases
+yu app db exec mydb "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"
+yu app db exec mydb "INSERT INTO users (name) VALUES ('Alice')"
+yu app db query mydb "SELECT * FROM users"
+yu app db tables mydb
+yu app db schema mydb users
+yu app db databases
 ```
 
 ## HTTP Client
 
 ```bash
-cos app net fetch https://api.example.com/data
-cos app net fetch https://api.example.com/data --method POST --data '{"key": "value"}'
-cos app net download https://example.com/file.zip --output /home/cos/file.zip
+yu app net fetch https://api.example.com/data
+yu app net fetch https://api.example.com/data --method POST --data '{"key": "value"}'
+yu app net download https://example.com/file.zip --output /home/cos/file.zip
 ```
 
 ## Key-Value Store
@@ -213,19 +213,19 @@ Persistent App-owned key-value storage for explicitly selected records, not
 Agent memory, another product's private data or credentials:
 
 ```bash
-cos app kv set project:status "building"
-cos app kv get project:status
-cos app kv list "project:*"
-cos app kv del project:status
+yu app kv set project:status "building"
+yu app kv get project:status
+yu app kv list "project:*"
+yu app kv del project:status
 ```
 
 ## System Info
 
 ```bash
-cos sys info
-cos sys env
-cos sys resources
-cos sys uptime
+yu sys info
+yu sys env
+yu sys resources
+yu sys uptime
 ```
 
 ## Browser
@@ -237,11 +237,11 @@ The two modes never share a browser profile.
 ## Network Doctor
 
 ```bash
-cos app netdiag interfaces
-cos app netdiag routes
-cos app netdiag dns example.com
-cos app netdiag tcp example.com:443 --attempts 3
-cos app netdiag diagnose example.com:443
+yu app netdiag interfaces
+yu app netdiag routes
+yu app netdiag dns example.com
+yu app netdiag tcp example.com:443 --attempts 3
+yu app netdiag diagnose example.com:443
 ```
 
 `diagnose` checks the local link, IPv4 default route, one-time DNS resolution,
@@ -252,13 +252,13 @@ connection.
 ## NetworkManager Control
 
 ```bash
-cos app network-manager status
-cos app network-manager wifi-list
-cos app network-manager wifi-connect "Cafe WiFi" default/cafe_wifi_psk
-cos app network-manager wifi-toggle off
-cos app network-manager vpn-list
-cos app network-manager vpn-up work-vpn
-cos app network-manager airplane on
+yu app network-manager status
+yu app network-manager wifi-list
+yu app network-manager wifi-connect "Cafe WiFi" default/cafe_wifi_psk
+yu app network-manager wifi-toggle off
+yu app network-manager vpn-list
+yu app network-manager vpn-up work-vpn
+yu app network-manager airplane on
 ```
 
 The optional Wi-Fi credential uses `namespace/name` form and is loaded only
@@ -271,9 +271,9 @@ names are never interpreted as glob capability patterns.
 ## Crash Doctor
 
 ```bash
-cos app crash-doctor recent 60 20
-cos app crash-doctor diagnose 60 20
-cos app crash-doctor backtrace <boot-id>:<pid>:<timestamp-us>
+yu app crash-doctor recent 60 20
+yu app crash-doctor diagnose 60 20
+yu app crash-doctor backtrace <boot-id>:<pid>:<timestamp-us>
 ```
 
 Crash Doctor correlates systemd coredumps with bounded kernel and service
@@ -287,12 +287,12 @@ stack only and never launch GDB as root.
 ## Storage Manager
 
 ```bash
-cos app storage-manager status
-cos app storage-manager health /dev/sdb
-cos app storage-manager check /dev/sdb1
-cos app storage-manager mount /dev/sdb1
-cos app storage-manager unmount /dev/sdb1
-cos app storage-manager eject /dev/sdb
+yu app storage-manager status
+yu app storage-manager health /dev/sdb
+yu app storage-manager check /dev/sdb1
+yu app storage-manager mount /dev/sdb1
+yu app storage-manager unmount /dev/sdb1
+yu app storage-manager eject /dev/sdb
 ```
 
 `health` combines SMART JSON, filesystem-specific metadata, and matching
@@ -307,13 +307,13 @@ eject targets are refused.
 ## Audio Manager
 
 ```bash
-cos app audio-manager status
-cos app audio-manager output-volume 75
-cos app audio-manager output-mute toggle
-cos app audio-manager input-mute on
-cos app audio-manager output-default 42
-cos app audio-manager output-route 42 1
-cos app audio-manager profile 30 2
+yu app audio-manager status
+yu app audio-manager output-volume 75
+yu app audio-manager output-mute toggle
+yu app audio-manager input-mute on
+yu app audio-manager output-default 42
+yu app audio-manager output-route 42 1
+yu app audio-manager profile 30 2
 ```
 
 Audio Manager connects to the requesting user's PipeWire and WirePlumber
@@ -327,10 +327,10 @@ revalidates object type and serial immediately before each graph mutation.
 ## Desktop Manager
 
 ```bash
-cos app desktop-manager list
-cos app desktop-manager focus <identifier>
-cos app desktop-manager close <identifier>
-cos app desktop-manager restart <identifier> <app-id>
+yu app desktop-manager list
+yu app desktop-manager focus <identifier>
+yu app desktop-manager close <identifier>
+yu app desktop-manager restart <identifier> <app-id>
 ```
 
 Window identifiers come from `ext-foreign-toplevel-list-v1` and remain stable
@@ -344,13 +344,13 @@ duplicate instance.
 ## Bluetooth Manager
 
 ```bash
-cos app bluetooth-manager status
-cos app bluetooth-manager power AA:BB:CC:DD:EE:FF on
-cos app bluetooth-manager scan AA:BB:CC:DD:EE:FF 15
-cos app bluetooth-manager pair AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
-cos app bluetooth-manager pair-respond <pairing-id> yes
-cos app bluetooth-manager trust AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
-cos app bluetooth-manager connect AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
+yu app bluetooth-manager status
+yu app bluetooth-manager power AA:BB:CC:DD:EE:FF on
+yu app bluetooth-manager scan AA:BB:CC:DD:EE:FF 15
+yu app bluetooth-manager pair AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
+yu app bluetooth-manager pair-respond <pairing-id> yes
+yu app bluetooth-manager trust AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
+yu app bluetooth-manager connect AA:BB:CC:DD:EE:FF 11:22:33:44:55:66
 ```
 
 All mutations require the fixed high-risk `device.bluetooth:control` scope;
@@ -365,11 +365,11 @@ than its command line. Discovery likewise runs in one bounded
 ## Power Manager
 
 ```bash
-cos app power-manager status
-cos app power-manager suspend --confirm
-cos app power-manager hibernate --confirm
-cos app power-manager reboot --confirm
-cos app power-manager poweroff --confirm
+yu app power-manager status
+yu app power-manager suspend --confirm
+yu app power-manager hibernate --confirm
+yu app power-manager reboot --confirm
+yu app power-manager poweroff --confirm
 ```
 
 `status` reads UPower devices and logind `Can*` capabilities. Every state
@@ -381,13 +381,13 @@ machine transitions before the normal clawd response audit completes.
 ## Hardware Center
 
 ```bash
-cos app hardware-center summary
-cos app hardware-center cpu
-cos app hardware-center gpu
-cos app hardware-center usb
-cos app hardware-center memory
-cos app hardware-center drivers
-cos app hardware-center thermal
+yu app hardware-center summary
+yu app hardware-center cpu
+yu app hardware-center gpu
+yu app hardware-center usb
+yu app hardware-center memory
+yu app hardware-center drivers
+yu app hardware-center thermal
 ```
 
 Hardware Center combines kernel sysfs/proc data with bounded lscpu, lspci,
@@ -400,13 +400,13 @@ silently producing an empty healthy-looking section.
 ## Security Center
 
 ```bash
-cos app security-center summary
-cos app security-center auth
-cos app security-center ssh
-cos app security-center sudo
-cos app security-center mac
-cos app security-center ports
-cos app security-center events
+yu app security-center summary
+yu app security-center auth
+yu app security-center ssh
+yu app security-center sudo
+yu app security-center mac
+yu app security-center ports
+yu app security-center events
 ```
 
 Security Center uses the high-risk read-only `sys.security:audit` scope because
@@ -419,14 +419,14 @@ listeners, and recent kernel security events.
 ## Container Manager
 
 ```bash
-cos app container-manager status
-cos app container-manager list docker
-cos app container-manager list podman
-cos app container-manager list containerd k8s.io
-cos app container-manager logs docker web 200
-cos app container-manager namespaces podman web
-cos app container-manager restart docker web
-cos app container-manager remove docker old-job --confirm
+yu app container-manager status
+yu app container-manager list docker
+yu app container-manager list podman
+yu app container-manager list containerd k8s.io
+yu app container-manager logs docker web 200
+yu app container-manager namespaces podman web
+yu app container-manager restart docker web
+yu app container-manager remove docker old-job --confirm
 ```
 
 Inventory, inspect, logs, process, stats, cgroup, and namespace evidence require
@@ -440,10 +440,10 @@ passes volume-deletion or force flags and requires explicit confirmation.
 ## Safe Config Editor
 
 ```bash
-cos app config-editor inspect /etc/hosts
-cos app config-editor validate /etc/hosts /home/cos/hosts.new
-cos app config-editor apply /etc/hosts /home/cos/hosts.new --confirm
-cos app config-editor restore /etc/hosts <backup-token> --confirm
+yu app config-editor inspect /etc/hosts
+yu app config-editor validate /etc/hosts /home/cos/hosts.new
+yu app config-editor apply /etc/hosts /home/cos/hosts.new --confirm
+yu app config-editor restore /etc/hosts <backup-token> --confirm
 ```
 
 Replacement content is read from an approved source file, never placed in
@@ -458,11 +458,11 @@ automatically, and manual restore refuses to overwrite newer edits.
 ## Event Center
 
 ```bash
-cos app event-center status
-cos app event-center recent
-cos app event-center recent security 50
-cos app event-center recent storage 50
-cos app event-center watch-pid 1234
+yu app event-center status
+yu app event-center recent
+yu app event-center recent security 50
+yu app event-center recent storage 50
+yu app event-center watch-pid 1234
 ```
 
 Event Center starts with clawd and maintains restartable subscriptions to udev,
@@ -475,12 +475,12 @@ in-memory and persisted to a bounded rotating JSONL log under
 ## Backup Center
 
 ```bash
-cos app backup-center init /media/cos/backup/repo default/restic
-cos app backup-center backup /media/cos/backup/repo /home/cos/Documents default/restic
-cos app backup-center snapshots /media/cos/backup/repo default/restic
-cos app backup-center check /media/cos/backup/repo default/restic
-cos app backup-center restore /media/cos/backup/repo latest /home/cos/restore default/restic --confirm
-cos app backup-center retention /media/cos/backup/repo default/restic 7 4 12 --confirm
+yu app backup-center init /media/cos/backup/repo default/restic
+yu app backup-center backup /media/cos/backup/repo /home/cos/Documents default/restic
+yu app backup-center snapshots /media/cos/backup/repo default/restic
+yu app backup-center check /media/cos/backup/repo default/restic
+yu app backup-center restore /media/cos/backup/repo latest /home/cos/restore default/restic --confirm
+yu app backup-center retention /media/cos/backup/repo default/restic 7 4 12 --confirm
 ```
 
 Backup Center runs Restic as the requesting user. Repositories must live on a
@@ -495,12 +495,12 @@ explicit confirmation and never delete volumes.
 ## Firewall Manager
 
 ```bash
-cos app firewall-manager status
-cos app firewall-manager add allow input tcp 22 --remote 192.0.2.0/24 --interface eth0
-cos app firewall-manager add deny input tcp 22 --remote 0.0.0.0/0
-cos app firewall-manager delete <rule-id>
-cos app firewall-manager clear --confirm
-cos app firewall-manager restore <backup-token> --confirm
+yu app firewall-manager status
+yu app firewall-manager add allow input tcp 22 --remote 192.0.2.0/24 --interface eth0
+yu app firewall-manager add deny input tcp 22 --remote 0.0.0.0/0
+yu app firewall-manager delete <rule-id>
+yu app firewall-manager clear --confirm
+yu app firewall-manager restore <backup-token> --confirm
 ```
 
 Firewall Manager owns only the dedicated `inet claw_agent` table and never
@@ -514,13 +514,13 @@ managed rules after reboot. Mutations require `net.firewall:manage`.
 ## User Manager
 
 ```bash
-cos app user-manager status
-cos app user-manager create-user alice --full-name "Alice" --groups sudo
-cos app user-manager set-password alice default/alice-password
-cos app user-manager add-to-group alice docker
-cos app user-manager lock-user alice
-cos app user-manager delete-user alice --confirm
-cos app user-manager restore <backup-token> --confirm
+yu app user-manager status
+yu app user-manager create-user alice --full-name "Alice" --groups sudo
+yu app user-manager set-password alice default/alice-password
+yu app user-manager add-to-group alice docker
+yu app user-manager lock-user alice
+yu app user-manager delete-user alice --confirm
+yu app user-manager restore <backup-token> --confirm
 ```
 
 User Manager only mutates regular UID/GID ranges and refuses root/system
@@ -534,11 +534,11 @@ UID/GID, and supplementary memberships are included in rollback.
 ## Printer Manager
 
 ```bash
-cos app printer-manager status
-cos app printer-manager capabilities office
-cos app printer-manager jobs office
-cos app printer-manager print office /home/cos/document.pdf --copies 2 --sides two-sided-long-edge
-cos app printer-manager cancel office-42 --confirm
+yu app printer-manager status
+yu app printer-manager capabilities office
+yu app printer-manager jobs office
+yu app printer-manager print office /home/cos/document.pdf --copies 2 --sides two-sided-long-edge
+yu app printer-manager cancel office-42 --confirm
 ```
 
 Printer Manager talks to CUPS as the requesting user. The broker opens the
@@ -551,11 +551,11 @@ by the requesting CUPS username.
 ## Clipboard Manager
 
 ```bash
-cos app clipboard-manager status
-cos app clipboard-manager types
-cos app clipboard-manager read text/plain
-cos app clipboard-manager write /home/cos/note.txt text/plain
-cos app clipboard-manager clear --confirm
+yu app clipboard-manager status
+yu app clipboard-manager types
+yu app clipboard-manager read text/plain
+yu app clipboard-manager write /home/cos/note.txt text/plain
+yu app clipboard-manager clear --confirm
 ```
 
 Clipboard contents are treated as sensitive: read/type operations require
@@ -570,8 +570,8 @@ sessions; normal COSMIC desktop access uses the installed Wayland data-control
 ## Camera Manager
 
 ```bash
-cos app camera-manager status
-cos app camera-manager capture 42 100 /home/cos/Pictures/capture.png png 1920 1080
+yu app camera-manager status
+yu app camera-manager capture 42 100 /home/cos/Pictures/capture.png png 1920 1080
 ```
 
 Camera discovery reads only PipeWire `Video/Source` nodes. Capture requires
@@ -585,11 +585,11 @@ this host-level manager uses the approved PipeWire node directly.
 ## Accessibility Manager
 
 ```bash
-cos app accessibility-manager status
-cos app accessibility-manager screen-reader on
-cos app accessibility-manager magnifier on
-cos app accessibility-manager invert on
-cos app accessibility-manager filter deuteranopia
+yu app accessibility-manager status
+yu app accessibility-manager screen-reader on
+yu app accessibility-manager magnifier on
+yu app accessibility-manager invert on
+yu app accessibility-manager filter deuteranopia
 ```
 
 Screen-reader control updates both `org.a11y.Status.IsEnabled` and
@@ -601,14 +601,14 @@ reporting success. Mutations require `ui.accessibility:control`.
 ## Display Manager
 
 ```bash
-cos app display-manager status
-cos app display-manager scale eDP-1 1.25
-cos app display-manager position HDMI-A-1 1920 0
-cos app display-manager mode HDMI-A-1 2560 1440 --refresh 144 --transform normal
-cos app display-manager mirror HDMI-A-1 eDP-1
-cos app display-manager brightness intel_backlight 70
-cos app display-manager apply-layout /home/cos/layout.kdl --confirm
-cos app display-manager restore <backup-token> --confirm
+yu app display-manager status
+yu app display-manager scale eDP-1 1.25
+yu app display-manager position HDMI-A-1 1920 0
+yu app display-manager mode HDMI-A-1 2560 1440 --refresh 144 --transform normal
+yu app display-manager mirror HDMI-A-1 eDP-1
+yu app display-manager brightness intel_backlight 70
+yu app display-manager apply-layout /home/cos/layout.kdl --confirm
+yu app display-manager restore <backup-token> --confirm
 ```
 
 Display Manager uses the installed cosmic-randr protocol client and parses its
@@ -621,13 +621,13 @@ backlight values. Restore refuses newer changes. Mutations require
 ## USB Guard
 
 ```bash
-cos app usb-guard status
-cos app usb-guard authorize 1-2 on
-cos app usb-guard authorize 1-2 off --confirm
-cos app usb-guard block 1-2 --confirm
-cos app usb-guard unblock <rule-id> --confirm
-cos app usb-guard eject 1-2 --confirm
-cos app usb-guard restore <backup-token> --confirm
+yu app usb-guard status
+yu app usb-guard authorize 1-2 on
+yu app usb-guard authorize 1-2 off --confirm
+yu app usb-guard block 1-2 --confirm
+yu app usb-guard unblock <rule-id> --confirm
+yu app usb-guard eject 1-2 --confirm
+yu app usb-guard restore <backup-token> --confirm
 ```
 
 USB Guard lists physical sysfs devices and mapped block nodes. Current
@@ -649,9 +649,9 @@ zero-enumeration trust boundary is required.
 ## Location Manager
 
 ```bash
-cos app location-manager locate
-cos app location-manager locate exact
-cos app location-manager timezone city
+yu app location-manager locate
+yu app location-manager locate exact
+yu app location-manager timezone city
 ```
 
 Location Manager requests a fix from the system GeoClue broker as the
@@ -667,14 +667,14 @@ session capability approval is the built-in authorization mechanism.
 ## Package Management
 
 ```bash
-cos app pkg need python3-pymupdf
-cos app pkg has ripgrep
-cos app pkg list
-cos app pkg update
-cos app pkg upgrade curl
-cos app pkg install-version curl 8.0.1-1
-cos app pkg hold curl
-cos app pkg remove curl
+yu app pkg need python3-pymupdf
+yu app pkg has ripgrep
+yu app pkg list
+yu app pkg update
+yu app pkg upgrade curl
+yu app pkg install-version curl 8.0.1-1
+yu app pkg hold curl
+yu app pkg remove curl
 ```
 
 Single-package install, upgrade, remove, and hold changes record the previous
@@ -688,10 +688,10 @@ Use the `systemd` app for native systemd units. This is distinct from the
 `cos_service` tool, which manages Claw-defined service manifests.
 
 ```bash
-cos app systemd status ssh.service
-cos app systemd restart ssh.service
-cos app systemd enable ssh.service
-cos app systemd disable ssh.service
+yu app systemd status ssh.service
+yu app systemd restart ssh.service
+yu app systemd enable ssh.service
+yu app systemd disable ssh.service
 ```
 
 Status requires `sys.observe:<unit>`. Lifecycle changes require the exact
@@ -702,10 +702,10 @@ for rollback.
 ## System Recovery Points
 
 ```bash
-cos app system-snapshot status
-cos app system-snapshot create "before distribution upgrade"
-cos app system-snapshot list
-cos app system-snapshot rollback snap_<id> --confirm
+yu app system-snapshot status
+yu app system-snapshot create "before distribution upgrade"
+yu app system-snapshot list
+yu app system-snapshot rollback snap_<id> --confirm
 ```
 
 The broker prefers a configured Snapper root profile, otherwise uses direct

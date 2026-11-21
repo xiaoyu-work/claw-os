@@ -16,7 +16,7 @@ from zoneinfo import available_timezones
 
 SHELL = "/usr/bin/quickshell"
 CONFIG = "/usr/share/claw-os/oobe/shell.qml"
-COS = "/usr/local/bin/cos"
+COS = "/usr/local/bin/yu"
 DRIVERS = Path("/var/lib/cos/driver-setup/status.json")
 
 

@@ -199,7 +199,7 @@ fn require_review(pending: &Pending) -> Result<(), String> {
 fn require_publishable(package: &PackageRef) -> Result<(), String> {
     if let Some(current) = read_pending(&package.id)? {
         if matches!(current.phase, Phase::Publishing | Phase::Indeterminate) {
-            return Err(format!("An earlier publication has an unchecked outcome; publication cannot be replayed. Use `cos app install --recover {}`", package.id));
+            return Err(format!("An earlier publication has an unchecked outcome; publication cannot be replayed. Use `yu app install --recover {}`", package.id));
         }
         if current.phase != Phase::Installed && current.package != *package {
             return Err("Pending pre-publication retirement belongs to another package".into());
@@ -497,7 +497,7 @@ async fn publish_request(
 
 fn publication_error(app: &str, error: &str) -> BrokerError {
     BrokerError::indeterminate(format!(
-        "Root directory installation is not confirmed: {error}; check the outcome with `cos app install --recover {app}`, never replay uncertain publication"
+        "Root directory installation is not confirmed: {error}; check the outcome with `yu app install --recover {app}`, never replay uncertain publication"
     ))
 }
 

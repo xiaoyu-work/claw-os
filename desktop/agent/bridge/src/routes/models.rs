@@ -57,7 +57,7 @@ pub async fn list(State(_state): State<AppState>) -> Result<Json<ModelsResponse>
 }
 
 async fn run_json<T: DeserializeOwned>(args: &[&str]) -> Result<T, ApiError> {
-    let binary = std::env::var("COS_BIN").unwrap_or_else(|_| "cos".to_string());
+    let binary = std::env::var("COS_BIN").unwrap_or_else(|_| "yu".to_string());
     let mut command = Command::new(binary);
     command
         .args(args)
@@ -67,7 +67,7 @@ async fn run_json<T: DeserializeOwned>(args: &[&str]) -> Result<T, ApiError> {
         .kill_on_drop(true);
     let mut child = command
         .spawn()
-        .map_err(|error| ApiError::service_unavailable(format!("failed to run cos: {error}")))?;
+        .map_err(|error| ApiError::service_unavailable(format!("failed to run yu: {error}")))?;
     let stdout = child.stdout.take().ok_or_else(|| {
         ApiError::new(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,

@@ -56,7 +56,7 @@ pub enum LlmError {
 
     #[error(
         "credential store error for `{credential}` in namespace `agent`: {source}. \
-         Repair or replace it with `cos credential revoke {credential} --namespace agent`, \
+         Repair or replace it with `yu credential revoke {credential} --namespace agent`, \
          then configure the credential again"
     )]
     CredentialStore {

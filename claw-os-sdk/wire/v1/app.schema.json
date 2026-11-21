@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/app.schema.json",
   "title": "App-verb invocation reply",
-  "description": "Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places the operation-specific object under the wire envelope's `data` field.",
+  "description": "Success data for `yu --wire=1 app <id> <verb> [args]`. The kernel places the operation-specific object under the wire envelope's `data` field.",
   "type": "object",
   "additionalProperties": true,
   "properties": {

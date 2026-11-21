@@ -345,7 +345,7 @@ impl App {
         if !app.info.provider_ready {
             app.push_system(
                 "Text provider setup is incomplete. Local sessions, tasks, approvals, \
-                 notifications, and Activities remain available; run `cos agent setup text` \
+                 notifications, and Activities remain available; run `yu agent setup text` \
                  before submitting model work.",
             );
         }

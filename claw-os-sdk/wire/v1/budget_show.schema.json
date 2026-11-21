@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/budget_show.schema.json",
   "title": "AI budget show reply",
-  "description": "Shape returned by `cos agent budget show <app>`.",
+  "description": "Shape returned by `yu agent budget show <app>`.",
   "type": "object",
   "required": ["app", "period", "units_used"],
   "additionalProperties": false,

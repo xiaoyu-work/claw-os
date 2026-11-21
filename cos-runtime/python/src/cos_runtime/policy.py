@@ -198,9 +198,9 @@ def _cos_binary() -> str:
     override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
-    found = shutil.which("cos")
+    found = shutil.which("yu")
     if found is None:
         raise PolicyUnavailable(
-            "the `cos` binary is not on PATH; cannot enforce permissions"
+            "the `yu` binary is not on PATH; cannot enforce permissions"
         )
     return found

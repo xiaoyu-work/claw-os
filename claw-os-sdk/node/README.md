@@ -20,9 +20,9 @@ npm install \
 | Module       | What                                                          | Equivalent CLI                       |
 |--------------|---------------------------------------------------------------|--------------------------------------|
 | `mcp`        | Manifest-bound MCP App service runtime over private stdio      | launched by the Claw App Host        |
-| `ai`         | Stable gated `chat` / `chat-untrusted` access                 | `cos ai chat --app <id>`             |
-| `tools`      | Call catalog tools the model proposes (`call`, `catalog`)      | `cos ai tool <name> --app <id>`      |
-| `gui`        | Desktop GUI bootstrap (kernel context, agent overlay)          | launched via `cos app <id> --gui`    |
+| `ai`         | Stable gated `chat` / `chat-untrusted` access                 | `yu ai chat --app <id>`             |
+| `tools`      | Call catalog tools the model proposes (`call`, `catalog`)      | `yu ai tool <name> --app <id>`      |
+| `gui`        | Desktop GUI bootstrap (kernel context, agent overlay)          | launched via `yu app <id> --gui`    |
 | `objects`    | Pure canonical App object identifiers                        | No transport or dispatch           |
 | `transport`  | The subprocess transport + error types (advanced)              | —                                    |
 | (root)       | Typed structs generated from `wire/v1/*.schema.json`           | —                                    |
@@ -96,11 +96,11 @@ published as placeholder APIs.
 - **Name a verb or pick a model.** You describe what you want; the gate
   picks the caps verb, and the machine owner configures the one
   provider/model in `/etc/cos/agent.toml`.
-- **Import a provider SDK** (`openai`, `@anthropic-ai/sdk`, …). `cos app
+- **Import a provider SDK** (`openai`, `@anthropic-ai/sdk`, …). `yu app
   lint` refuses apps that do; this module is the only sanctioned route
   to a model.
-- **Call `cos agent`.** That is the kernel's own Agent product. Apps use
-  `cos ai` (the App-facing primitive) — which is what this SDK wraps.
+- **Call `yu agent`.** That is the kernel's own Agent product. Apps use
+  `yu ai` (the App-facing primitive) — which is what this SDK wraps.
 
 ## Errors
 

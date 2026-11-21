@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // claw-os: Recoll-backed document full-text search plugin.
 //
-// Shells out to `cos app docs search --query <q> --max-results 10`
+// Shells out to `yu app docs search --query <q> --max-results 10`
 // — the same backend that powers the AI Assist drawer in the Files
 // app — so launcher and Files share one index, one capability gate
 // and one audit trail. Matches are limited to the top 10 to keep
@@ -217,7 +217,7 @@ impl SearchContext {
 }
 
 async fn run_query(query: &str) -> Result<SearchEnvelope, String> {
-    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
+    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "yu".into());
     let mut cmd = Command::new(&bin);
     cmd.args([
         "app",
@@ -282,7 +282,7 @@ fn decode_search_output(
     if trimmed.is_empty() {
         return Err("cos produced no output".to_string());
     }
-    serde_json::from_str::<SearchEnvelope>(trimmed).map_err(|e| format!("bad JSON from cos: {}", e))
+    serde_json::from_str::<SearchEnvelope>(trimmed).map_err(|e| format!("bad JSON from yu: {}", e))
 }
 
 #[cfg(test)]

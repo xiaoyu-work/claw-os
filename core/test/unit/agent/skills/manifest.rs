@@ -240,7 +240,7 @@ fn legacy_signature_frontmatter_is_refused_not_ignored() {
     );
     let err = parse(&raw).unwrap_err();
     assert!(matches!(err, ManifestError::LegacySignatureBlock), "{err}");
-    assert!(format!("{err}").contains("cos provenance sign"));
+    assert!(format!("{err}").contains("yu provenance sign"));
 }
 
 #[test]

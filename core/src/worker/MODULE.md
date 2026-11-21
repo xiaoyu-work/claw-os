@@ -202,7 +202,7 @@ the real OS Host cleanup implementation. It is authenticated peer testimony,
 not independent cryptographic Host attestation. These fixtures do not replace
 native GUI/panel acceptance or coordinate independent CLI/rollback/APT paths.
 
-`cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`.
+`yu app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`.
 The Mail compatibility executable retains its protected launcher/interpreter/
 Thunderbird-parent checks but runs its App child through this same worker.
 The OS-owned mailbox multiplexer remains outside App code and accepts only
@@ -375,7 +375,7 @@ private newly created file and mandatory directory sync; an old predictable
 Two owner-private stores stay outside on purpose and are reached through
 the broker instead of a bind:
 
-- the cross-App **agent memory** database. `cos __memory` inside a
+- the cross-App **agent memory** database. `yu __memory` inside a
   sandbox forwards to the launch endpoint, which re-parses the call with
   the bridge's own typed argument handling and decides it from the
   launch's live capability set, so `memory.write` still has to be scoped
@@ -495,7 +495,7 @@ per-launch broker endpoint bind-mounted at that path, which:
   capability set — a controlled task host queries the root grant; ordinary
   launchers read their routed registry row. Thus a
   transient capability set for one MCP tool call appears and disappears
-  with that call — which is what `cos __policy check`, and therefore
+  with that call — which is what `yu __policy check`, and therefore
   `cos_runtime.policy`, needs inside the sandbox;
 - refuses identity, consent, journal and scheduler routes outright;
 - refuses every route with no admission rule, and prechecks the rest

@@ -94,7 +94,7 @@ A root contributes nothing unless it *and every ancestor up to `/`* is
 a non-symlink directory owned by the required uid and free of group and
 world write bits. A shared ancestor is accepted only when it carries
 the sticky bit. A rejected root is reported as a diagnostic
-(`cos provenance trust list`), never skipped silently.
+(`yu provenance trust list`), never skipped silently.
 
 The per-user roots resolve from the **passwd home of the effective
 uid**, not from `HOME` or `COS_USER_CONFIG_DIR`. There is deliberately
@@ -105,7 +105,7 @@ surface that can add one.
 The vendor and operator roots share `/etc/cos/trust/state.json`. Agent package
 configuration records the system generation after installing vendor keys,
 before starting the broker. After intentionally changing operator publisher
-files, an administrator must run `sudo cos provenance trust record-system`.
+files, an administrator must run `sudo yu provenance trust record-system`.
 An unrecorded change to either root fails the system domain closed.
 
 ### Key ids, usage constraints, rotation and revocation
@@ -139,7 +139,7 @@ change moves the store's *generation* digest, which invalidates every
 cached verification, so a revocation takes effect for the next launch,
 disclosure or attach without restarting.
 
-`cos provenance trust revoke` writes to the caller's own trust root —
+`yu provenance trust revoke` writes to the caller's own trust root —
 the uid comes from `geteuid`, the directory from that uid's verified
 passwd home — so one user can never revoke, or restore, another user's
 trust. System-wide roots under `/etc/cos` and `/usr/lib/cos` are
@@ -165,8 +165,8 @@ connection. Results distinguish `policy_withdrawn` from
 checked retirement receipt. Status and recovery use the returned opaque ID:
 
 ```bash
-cos provenance trust status <request-id>
-cos provenance trust recover <request-id>
+yu provenance trust status <request-id>
+yu provenance trust recover <request-id>
 ```
 
 `policy_scope` names the effective UID's private file, not global trust.
@@ -455,7 +455,7 @@ keep honouring trust that was withdrawn while it was running.
 
 ## Install pipeline
 
-`cos app install`, `cos agent skills install` and adapter installation
+`yu app install`, `yu agent skills install` and adapter installation
 all follow the same shape:
 
 1. Read the bundle as untrusted bytes. Archive extraction is bounded on
@@ -600,7 +600,7 @@ when the package is signed.
 A structurally valid extension whose provenance fails is **quarantined**
 rather than dropped:
 
-- `cos app` lists it with `"trust": "quarantined"`, `"runnable": false`
+- `yu app` lists it with `"trust": "quarantined"`, `"runnable": false`
   and the reason.
 - Capability derivation, AI policy resolution, session binding and
   command dispatch all refuse it.
@@ -613,34 +613,34 @@ rather than dropped:
 
 ```bash
 # One-time: create a signing key. Never commit this file.
-cos provenance keygen --out ~/.secrets/claw-release.json --comment "release 2026"
+yu provenance keygen --out ~/.secrets/claw-release.json --comment "release 2026"
 
 # Publish the printed `trust_entry` object into a trust root:
 #   packaging/deb/claw-os-agent/trust/publishers.d/<name>.json  (vendor)
 #   /etc/cos/trust/publishers.d/<name>.json                     (operator)
-#   cos provenance trust add --file <entry.json>                (per-user)
+#   yu provenance trust add --file <entry.json>                (per-user)
 
 # Sign a package tree.
-cos provenance sign \
+yu provenance sign \
   --kind app --id notes --version 1.2.0 \
   --path ./notes --key ~/.secrets/claw-release.json \
   --entrypoint main.py
 
 # Confirm it authenticates against the active trust store.
-cos provenance verify --kind app --path ./notes --id notes
+yu provenance verify --kind app --path ./notes --id notes
 ```
 
 ### Operator
 
 ```bash
-cos provenance trust list            # keys, revocations, grants, diagnostics
-cos provenance trust roots           # the compiled-in root list
-cos provenance trust add --file entry.json
-sudo cos provenance trust record-system # after reviewing changes to system publisher files
-cos provenance trust revoke --key-id sha256:…
-cos provenance trust revoke --digest sha256:…
-cos provenance artifacts --kind app --id notes
-cos provenance rollback --kind app --id notes \
+yu provenance trust list            # keys, revocations, grants, diagnostics
+yu provenance trust roots           # the compiled-in root list
+yu provenance trust add --file entry.json
+sudo yu provenance trust record-system # after reviewing changes to system publisher files
+yu provenance trust revoke --key-id sha256:…
+yu provenance trust revoke --digest sha256:…
+yu provenance artifacts --kind app --id notes
+yu provenance rollback --kind app --id notes \
     --digest sha256:… --dest /usr/lib/cos/apps/notes
 ```
 
@@ -649,7 +649,7 @@ can only ever land on content that passed verification and has not been
 revoked. The `--digest` argument accepts the full `sha256:<64 hex>`
 value or an unambiguous prefix of it (artifact directories are named
 with a shortened digest, so the value copied out of
-`cos provenance artifacts` resolves). An ambiguous prefix lists the
+`yu provenance artifacts` resolves). An ambiguous prefix lists the
 candidates instead of guessing.
 
 For **Apps**, use this public CLI as a direct Root operator on Linux. The
@@ -669,7 +669,7 @@ App rollback preserves installed identity, data and permission state; it
 does not grant trust, capabilities or AI consent and does not restore data
 snapshots or synthesize missing retained artifacts. After an uncertain
 publication, do not replay rollback, even for the same digest. Use
-`cos app install --recover <app-id>` for the existing read-only exact-outcome
+`yu app install --recover <app-id>` for the existing read-only exact-outcome
 check; mismatched bytes or transaction scratch keep admission blocked.
 APT-managed App rollback and coordination of independent trust/OS-package
 mutations remain separate work. Other provenance kinds retain their existing
@@ -682,13 +682,13 @@ Unsigned development content is permitted only through an explicit
 **human** decision recorded in the segregated developer root:
 
 ```bash
-cos provenance dev-trust --kind app --id scratch --path ./apps/scratch
+yu provenance dev-trust --kind app --id scratch --path ./apps/scratch
 # Blocked pending genuinely quarantined Root publication:
-cos app install ./apps/scratch --dev-trust
-cos provenance dev-untrust --kind app --id scratch
+yu app install ./apps/scratch --dev-trust
+yu provenance dev-untrust --kind app --id scratch
 ```
 
-Standalone `cos provenance dev-trust` still demands, in order:
+Standalone `yu provenance dev-trust` still demands, in order:
 
 1. a real controlling terminal on stdin **and** stderr — no pipes, no
    `nohup`, no CI runner, no agent subprocess;
@@ -719,7 +719,7 @@ A developer grant:
 - lands in `TrustTier::Developer` and inherits the capability ceiling
   above;
 - is recorded in the provenance audit log and listed by
-  `cos provenance trust list`.
+  `yu provenance trust list`.
 
 Running developer packages retain the supporting canonical path and digest.
 Liveness requires that exact kind/ID/path/digest grant in the retained
@@ -738,12 +738,12 @@ There is no ambient environment flag. The former
 `COS_SKILLS_REQUIRE_SIGNATURE` / `COS_SKILLS_TRUSTED_KEYS` opt-in has
 been removed: signature verification is mandatory, and a `signature:`
 block in SKILL.md frontmatter is now a hard parse error pointing at
-`cos provenance sign` (that scheme authenticated the frontmatter but
+`yu provenance sign` (that scheme authenticated the frontmatter but
 neither the instruction body nor the skill's scripts).
 
 ### Platform support
 
-`cos provenance` refuses to run on a non-Unix host rather than returning
+`yu provenance` refuses to run on a non-Unix host rather than returning
 a hollow success. Package verification rests on POSIX ownership and mode
 checks, `openat`-based reads and durable renames; a platform that cannot
 provide them gets an explicit refusal, not an advisory result.

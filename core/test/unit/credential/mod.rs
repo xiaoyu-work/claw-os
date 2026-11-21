@@ -453,7 +453,7 @@ fn store_with_refresh_cmd() {
         "--ttl".into(),
         "3600".into(),
         "--refresh-cmd".into(),
-        "cos credential load test".into(),
+        "yu credential load test".into(),
     ])
     .unwrap();
     assert_eq!(r["stored"], name);
@@ -464,7 +464,7 @@ fn store_with_refresh_cmd() {
     let cred: StoredCredential = serde_json::from_str(&data).unwrap();
     assert_eq!(
         cred.refresh_cmd.as_deref(),
-        Some("cos credential load test")
+        Some("yu credential load test")
     );
 }
 
@@ -480,7 +480,7 @@ fn store_rejects_non_cos_refresh_cmd() {
         "echo evil".into(),
     ]);
     assert!(r.is_err());
-    assert!(r.unwrap_err().contains("must be a cos command"));
+    assert!(r.unwrap_err().contains("must be a yu command"));
 }
 
 #[test]
@@ -488,7 +488,7 @@ fn execute_refresh_rejects_non_cos() {
     perms_init();
     let r = execute_refresh("rm -rf /");
     assert!(r.is_err());
-    assert!(r.unwrap_err().contains("must be a cos command"));
+    assert!(r.unwrap_err().contains("must be a yu command"));
 }
 
 #[test]
@@ -516,9 +516,9 @@ fn load_auto_refresh_on_expiry() {
         stored_at,
         stored_by: None,
         expires_at,
-        // Use a cos command with nonexistent subcommand that will exit non-zero.
-        // "cos nonexistent-subcommand-xyz" will fail because the subcommand is unknown.
-        refresh_cmd: Some("cos nonexistent-subcommand-xyz".into()),
+        // Use a yu command with nonexistent subcommand that will exit non-zero.
+        // An unknown subcommand fails in the compiled CLI.
+        refresh_cmd: Some("yu nonexistent-subcommand-xyz".into()),
     };
     let path = dir.join(format!("{name}.json"));
     let data = serde_json::to_string_pretty(&cred).unwrap();
@@ -526,7 +526,7 @@ fn load_auto_refresh_on_expiry() {
 
     // Load should attempt auto-refresh but fail
     let r = cmd_load(&[name.clone()]);
-    // The cos binary may or may not be in PATH, but either way the refresh should fail:
+    // The yu binary may or may not be in PATH, but either way the refresh should fail:
     // - If cos is not in PATH: "failed to execute refresh command"
     // - If cos is in PATH but exits non-zero: "refresh command failed"
     // - If cos is in PATH and exits 0 with error JSON: we get a JSON string as value
@@ -616,14 +616,14 @@ fn oauth_refresh_missing_provider() {
 fn broker_oauth_refresh_accepts_only_matching_builtin_command() {
     assert_eq!(
         broker_oauth_provider(
-            "cos credential oauth-refresh google --namespace default",
+            "yu credential oauth-refresh google --namespace default",
             "default"
         ),
         Some("google")
     );
     assert_eq!(
         broker_oauth_provider(
-            "cos credential oauth-refresh microsoft --namespace other",
+            "yu credential oauth-refresh microsoft --namespace other",
             "default"
         ),
         None

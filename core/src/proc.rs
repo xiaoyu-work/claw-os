@@ -73,7 +73,7 @@ pub struct SessionInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
     /// Capability set the session may exercise. Populated by `--role`
-    /// or `--caps` on `cos proc spawn`. The kernel caps gate (see
+    /// or `--caps` on `yu proc spawn`. The kernel caps gate (see
     /// `caps::require`) consults this field to authorise gated
     /// operations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1054,7 +1054,7 @@ fn session_not_found(identifier: &str) -> String {
     if !identifier.is_empty() && identifier.bytes().all(|byte| byte.is_ascii_digit()) {
         return format!(
             "session not found: {identifier}. `{identifier}` looks like an OS PID, but cos_proc \
-             commands operate on registered cos session ids. Inspect the PID with cos_sysinfo \
+             commands operate on registered yu session ids. Inspect the PID with cos_sysinfo \
              command `process` and args [`{identifier}`]."
         );
     }
@@ -1529,7 +1529,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let sid = args.first().ok_or("usage: cos proc status <session-id>")?;
+    let sid = args.first().ok_or("usage: yu proc status <session-id>")?;
     let mut reg = load_registry();
     let idx = reg
         .sessions
@@ -1590,7 +1590,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 
 fn cmd_output(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let sid = args.first().ok_or("usage: cos proc output <session-id>")?;
+    let sid = args.first().ok_or("usage: yu proc output <session-id>")?;
     let mut tail_lines: Option<usize> = None;
     let mut stream = "both".to_string();
     let mut follow = false;
@@ -1752,7 +1752,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         return Ok(resp);
     }
 
-    let sid = args.first().ok_or("usage: cos proc kill <session-id>")?;
+    let sid = args.first().ok_or("usage: yu proc kill <session-id>")?;
     let reg = load_registry();
     let info = reg
         .sessions
@@ -1911,7 +1911,7 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
             .ok_or_else(|| session_not_found(sid))?;
         vec![(info.session_id.clone(), info.pid)]
     } else {
-        return Err("usage: cos proc wait <session-id> [--timeout N] or --group <name>".into());
+        return Err("usage: yu proc wait <session-id> [--timeout N] or --group <name>".into());
     };
 
     drop(reg);
@@ -2000,7 +2000,7 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
 fn cmd_signal(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     if args.len() < 2 {
-        return Err("usage: cos proc signal <session-id> <signal-name>".into());
+        return Err("usage: yu proc signal <session-id> <signal-name>".into());
     }
     let sid = &args[0];
     let signal_name = args[1].to_uppercase();
@@ -2060,7 +2060,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
 
 fn cmd_result(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let sid = args.first().ok_or("usage: cos proc result <session-id>")?;
+    let sid = args.first().ok_or("usage: yu proc result <session-id>")?;
     let mut reg = load_registry();
     let idx = reg
         .sessions
@@ -2149,10 +2149,10 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
 /// Get resource usage stats for a process session.
 ///
 /// Reads from /proc/<pid>/stat and /proc/<pid>/status on Linux.
-/// Usage: cos proc stats <session-id>
+/// Usage: yu proc stats <session-id>
 fn cmd_stats(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let sid = args.first().ok_or("usage: cos proc stats <session-id>")?;
+    let sid = args.first().ok_or("usage: yu proc stats <session-id>")?;
 
     let reg = load_registry();
     let info = reg
@@ -2256,7 +2256,7 @@ fn cmd_stats(args: &[String]) -> Result<Value, String> {
 
 /// Change the priority of a running process session.
 ///
-/// Usage: cos proc renice <session-id> --priority low|normal|high|realtime
+/// Usage: yu proc renice <session-id> --priority low|normal|high|realtime
 fn cmd_renice(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
 
@@ -2283,7 +2283,7 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let sid = session_id.ok_or("usage: cos proc renice <session-id> --priority <level>")?;
+    let sid = session_id.ok_or("usage: yu proc renice <session-id> --priority <level>")?;
     let prio = priority.ok_or("--priority is required")?;
 
     let reg = load_registry();

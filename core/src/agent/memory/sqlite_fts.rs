@@ -207,7 +207,7 @@ pub struct PurgeStats {
 }
 
 /// Aggregate health/usage view returned by [`MemoryDb::stats`].
-/// Powers `cos agent sessions stats` and is structured so the doctor
+/// Powers `yu agent sessions stats` and is structured so the doctor
 /// command can re-use it later. Recency buckets are caller-provided
 /// (via `now_ms`) so the database does not implicitly pull from the
 /// system clock.
@@ -395,7 +395,7 @@ impl MemoryDb {
         let issues = recovery::runtime_schema_issues(&conn)?;
         if !issues.is_empty() {
             return Err(MemoryError::Integrity(format!(
-                "{}; run `cos agent sessions repair --dry-run`",
+                "{}; run `yu agent sessions repair --dry-run`",
                 issues.join("; ")
             )));
         }

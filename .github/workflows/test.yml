@@ -114,7 +114,7 @@ jobs:
       - name: Run privileged extension boundaries
         run: bash scripts/ci/test-boundaries.sh extensions
 
-      - name: Run cos tests
+      - name: Run Yu OS core tests
         # `--test-threads=1` because many tests in `cos` mutate process-wide
         # env vars (`COS_DATA_DIR`, `COS_SESSION`, `COS_PERMS_MODE`, …).
         # Each module guards its own state with a per-module `Mutex<()>`,
@@ -184,7 +184,7 @@ jobs:
           root = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
           selected = set()
           helpers = {
-              "cos", "claw-agentd", "claw-extension-host", "claw-app-runner",
+              "yu", "claw-agentd", "claw-extension-host", "claw-app-runner",
               "claw-app-apt-hook", "claw-file-manager",
               "extension_host_boundary", "agentd_process_boundary",
           }

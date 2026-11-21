@@ -7,15 +7,15 @@ a filesystem working directory or a new Agent daemon.
 ## Owner controls
 
 ```bash
-cos workspace create "Research" --description "Shared research background"
-cos workspace list
-cos workspace show WORKSPACE_UUID
-cos workspace tag WORKSPACE_UUID /home/example/Documents/research --revision 1
-cos workspace note WORKSPACE_UUID "Audience" --content "Explain terms for beginners." --revision 2
-cos workspace attach WORKSPACE_UUID ACTIVITY_UUID --revision 3
-cos workspace archive WORKSPACE_UUID --revision 4
-cos workspace restore WORKSPACE_UUID --revision 5
-cos workspace delete WORKSPACE_UUID --revision 6 --confirm
+yu workspace create "Research" --description "Shared research background"
+yu workspace list
+yu workspace show WORKSPACE_UUID
+yu workspace tag WORKSPACE_UUID /home/example/Documents/research --revision 1
+yu workspace note WORKSPACE_UUID "Audience" --content "Explain terms for beginners." --revision 2
+yu workspace attach WORKSPACE_UUID ACTIVITY_UUID --revision 3
+yu workspace archive WORKSPACE_UUID --revision 4
+yu workspace restore WORKSPACE_UUID --revision 5
+yu workspace delete WORKSPACE_UUID --revision 6 --confirm
 ```
 
 Replace identifiers and paths with values from the local system. Every mutation
@@ -43,9 +43,9 @@ The existing filesystem `task.workspace.resolve`, TUI `/directory`, and
 select this context domain. Use the separate semantic selector:
 
 ```bash
-cos agent ask "Explain the shared sources" --space WORKSPACE_UUID
-cos agent chat --space WORKSPACE_UUID
-cos agent service submit "Prepare an outline" --workspace-id WORKSPACE_UUID
+yu agent ask "Explain the shared sources" --space WORKSPACE_UUID
+yu agent chat --space WORKSPACE_UUID
+yu agent service submit "Prepare an outline" --workspace-id WORKSPACE_UUID
 ```
 
 Canonical conversations and Root-created Jobs retain an optional Workspace ID.
@@ -72,12 +72,12 @@ memory are unavailable to Workspace work; automatic global curation is disabled.
 Owner Memory inspection remains all-owner and preserves canonical evidence.
 
 ```bash
-cos workspace context WORKSPACE_UUID
-cos workspace read-note WORKSPACE_UUID NOTE_UUID
-cos workspace index WORKSPACE_UUID
-cos workspace index-source WORKSPACE_UUID TAG_UUID --revision 3
-cos workspace search WORKSPACE_UUID "related research" --limit 10
-cos workspace read WORKSPACE_UUID /home/example/Documents/note.md --max-chars 4096
+yu workspace context WORKSPACE_UUID
+yu workspace read-note WORKSPACE_UUID NOTE_UUID
+yu workspace index WORKSPACE_UUID
+yu workspace index-source WORKSPACE_UUID TAG_UUID --revision 3
+yu workspace search WORKSPACE_UUID "related research" --limit 10
+yu workspace read WORKSPACE_UUID /home/example/Documents/note.md --max-chars 4096
 ```
 
 For another page, pass its `next_offset` as `--offset` and its digest as
@@ -104,22 +104,22 @@ files under selected tag IDs, a current Job or canonical conversation, and an
 expiry within 24 hours:
 
 ```bash
-cos workspace read-link DESTINATION_UUID --revision 4 \
+yu workspace read-link DESTINATION_UUID --revision 4 \
   --source-space SOURCE_UUID --conversation ses_001953abcdef0_123456789abc \
   --notes '["NOTE_UUID"]' --sources '[]' \
   --expires "$(date --utc --date='+1 hour' --iso-8601=seconds)"
-cos workspace revoke DESTINATION_UUID LINK_UUID --revision 5
+yu workspace revoke DESTINATION_UUID LINK_UUID --revision 5
 ```
 
 Human previews carry both the selected link and its exact saved target. For a
 Job selection:
 
 ```bash
-cos workspace read-note DESTINATION_UUID NOTE_UUID --link LINK_UUID --job JOB_UUID
-cos workspace read DESTINATION_UUID /home/example/Documents/source.txt \
+yu workspace read-note DESTINATION_UUID NOTE_UUID --link LINK_UUID --job JOB_UUID
+yu workspace read DESTINATION_UUID /home/example/Documents/source.txt \
   --link LINK_UUID --job JOB_UUID --max-chars 20
 # Keep both selectors when continuing the displayed source revision:
-cos workspace read DESTINATION_UUID /home/example/Documents/source.txt \
+yu workspace read DESTINATION_UUID /home/example/Documents/source.txt \
   --link LINK_UUID --job JOB_UUID --offset NEXT_OFFSET \
   --source-revision DISPLAYED_DIGEST --max-chars 20
 ```
@@ -165,7 +165,7 @@ same-account programs, unmanaged App internals or manual terminal edits.
 
 ## Human presentations
 
-- **CLI:** `cos workspace` uses the shared owner broker and exact revisions.
+- **CLI:** `yu workspace` uses the shared owner broker and exact revisions.
 - **Claw TUI:** `/workspace` is the only name for the model-independent center.
   Its picker, context/notes, tags, local search/readiness and Activity assignment
   use owned asynchronous requests. Enter starts another bound conversation.

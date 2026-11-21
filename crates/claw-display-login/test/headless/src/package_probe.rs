@@ -24,7 +24,7 @@ fn intent(mode: &str, id: &str, targets: &[&str]) -> Result<serde_json::Value, c
         "__package_intent".to_string(), "--retained".into(), mode.into(), id.into(), "install".into(),
     ];
     arguments.extend(targets.iter().map(|name| (*name).to_string()));
-    claw_os_sdk::cos_call_json_with_binary("/usr/local/bin/cos", "package", "intent", arguments)
+    claw_os_sdk::cos_call_json_with_binary("/usr/local/bin/yu", "package", "intent", arguments)
 }
 
 pub(super) fn run() {
@@ -36,7 +36,7 @@ pub(super) fn run() {
     assert_eq!(ungranted, vec![0, 1, 2, 3]);
     for package in [SUPPORT, EFFECT] {
         let denied = claw_os_sdk::cos_call_json_with_binary(
-            "/usr/local/bin/cos", "policy", "check",
+            "/usr/local/bin/yu", "policy", "check",
             ["__policy", "check", "sys.package", "--name", package],
         ).unwrap();
         assert_ne!(denied["decision"], "allow", "GUI inherited Critical authority");

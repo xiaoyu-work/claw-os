@@ -13,8 +13,8 @@
 //!
 //! ## Why a separate stream from `audit.rs`?
 //!
-//! `audit.rs` logs ONE record per `cos <app> <cmd>` invocation. A
-//! single `cos agent ask` invocation can produce many AI calls (one
+//! `audit.rs` logs ONE record per `yu <app> <cmd>` invocation. A
+//! single `yu agent ask` invocation can produce many AI calls (one
 //! per turn). Operators need granular per-call records to diagnose
 //! "this answer was bad" issues — knowing the exact engine version
 //! that produced any given answer is essential for reproducibility.
@@ -236,7 +236,7 @@ impl LlmRunRecord {
     ///
     /// `denial_reason` is the stable token (see the field doc above);
     /// `error` is the human-readable explanation. The provider name
-    /// is `"gate"` to make it obvious in `cos agent run-log` reports
+    /// is `"gate"` to make it obvious in `yu agent run-log` reports
     /// that the line was emitted by the gate, not by a real upstream.
     /// `model` is the model the caller asked for (or `""` if the call
     /// was rejected before model resolution).
@@ -273,7 +273,7 @@ impl LlmRunRecord {
     }
 
     /// Build a record for a kernel-mediated **Tool** invocation
-    /// (`cos ai tool <name>`). Tools have no model and no provider in
+    /// (`yu ai tool <name>`). Tools have no model and no provider in
     /// the LLM sense, but they share the same audit stream so
     /// operators can grep one file for everything an App did under
     /// the AI surface.
@@ -322,7 +322,7 @@ impl LlmRunRecord {
     }
 
     /// Attach an explicit `app_id` to this record. Used by the
-    /// App-gated path (`cos ai chat --app <id>`) so allowed calls
+    /// App-gated path (`yu ai chat --app <id>`) so allowed calls
     /// are attributed to the requesting app, not just the provider.
     pub fn with_app(mut self, app_id: &str) -> Self {
         self.app_id = nonempty(Some(app_id));

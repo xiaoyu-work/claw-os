@@ -1,6 +1,6 @@
 //! Stream-download to a temp file with on-the-fly SHA-256 hashing.
 //!
-//! Used by `cos engine update` (and any other engine_pkg consumer) to
+//! Used by `yu engine update` (and any other engine_pkg consumer) to
 //! fetch a release archive from a URL into a `NamedTempFile` that
 //! `install_local::install_from_archive` can then unpack atomically.
 //!

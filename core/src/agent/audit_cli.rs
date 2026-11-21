@@ -1,8 +1,8 @@
-//! `cos agent audit` — query the agent audit log.
+//! `yu agent audit` — query the agent audit log.
 //!
 //! [`AuditHook`](super::runtime::hooks::AuditHook) writes JSONL to
 //! `<log_dir>/agent.jsonl` for every turn and tool dispatch when
-//! enabled (`cos agent hooks enable audit`). [`CheckpointHook`](
+//! enabled (`yu agent hooks enable audit`). [`CheckpointHook`](
 //! super::runtime::hooks::CheckpointHook) writes
 //! `pre_tool_checkpoint` events to the same file. This module makes
 //! that JSONL queryable from the CLI without a `cat | jq` round-trip.
@@ -47,7 +47,7 @@ use serde_json::{json, Value};
 
 const SUMMARY_VERIFY_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Top-level dispatcher for `cos agent audit <subcmd>`.
+/// Top-level dispatcher for `yu agent audit <subcmd>`.
 pub fn audit_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("summary");
     let rest = if args.is_empty() { &[][..] } else { &args[1..] };

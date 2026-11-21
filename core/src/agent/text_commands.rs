@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-/// `cos agent prompt [show|build] [--extra <path>] [--raw]`
+/// `yu agent prompt [show|build] [--extra <path>] [--raw]`
 ///
 /// Inspect the canonical system-prompt candidate frozen for a new session.
 /// Existing sessions restore their persisted snapshot instead of rebuilding.
@@ -191,9 +191,9 @@ fn prompt_provenance(extra: Option<&std::path::Path>) -> Value {
     })
 }
 
-/// `cos agent think-scrub <text> [--check] [--strict]`
-/// `cos agent think-scrub --file <path> [--check]`
-/// `cos agent think-scrub --stdin [--check]`
+/// `yu agent think-scrub <text> [--check] [--strict]`
+/// `yu agent think-scrub --file <path> [--check]`
+/// `yu agent think-scrub --stdin [--check]`
 ///
 /// Standalone interface to
 /// [`crate::agent::context::think_scrub::ThinkScrubber`]. Strips
@@ -228,9 +228,9 @@ pub(super) fn think_scrub_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent tokens <text>`
-/// `cos agent tokens --file <path>`
-/// `cos agent tokens --stdin`
+/// `yu agent tokens <text>`
+/// `yu agent tokens --file <path>`
+/// `yu agent tokens --stdin`
 ///
 /// Crude token estimate (chars / 4) as used by
 /// [`crate::agent::context::compressor::estimate_text_tokens`].
@@ -265,7 +265,7 @@ pub(super) fn tokens_cmd(args: &[String]) -> Result<Value, String> {
 ///   * `--file <path>` — read file content.
 ///   * `--stdin` — read all of stdin.
 ///   * positional args — joined with spaces (so the shell-natural
-///     `cos agent tokens hello world` works without quoting).
+///     `yu agent tokens hello world` works without quoting).
 ///
 /// `--check` is honoured by callers that have a "detect-only" mode;
 /// `tokens_cmd` ignores it.
@@ -310,7 +310,7 @@ fn read_text_input(args: &[String], cmd: &str) -> Result<(String, bool), String>
         std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?
     } else if positional.is_empty() {
         return Err(format!(
-            "usage: cos agent {cmd} <text> | --file <path> | --stdin"
+            "usage: yu agent {cmd} <text> | --file <path> | --stdin"
         ));
     } else {
         positional.join(" ")
@@ -318,7 +318,7 @@ fn read_text_input(args: &[String], cmd: &str) -> Result<(String, bool), String>
     Ok((input, check))
 }
 
-/// `cos agent title <text> | --file <path> | --stdin [--check] [--llm]`
+/// `yu agent title <text> | --file <path> | --stdin [--check] [--llm]`
 /// — heuristic-only by default. Strips a leading slash-command verb
 /// (so `/ask hello` becomes `hello`), takes the first non-empty
 /// line, and clamps to `MAX_TITLE_CHARS`. Pure function, no LLM
@@ -393,7 +393,7 @@ fn title_heuristic_payload(input: &str) -> Value {
     })
 }
 
-/// `cos agent summarise <text> | --file <path> | --stdin [--max N]`
+/// `yu agent summarise <text> | --file <path> | --stdin [--max N]`
 /// — heuristic-only summary: take the first sentence (terminated by
 /// `.`/`!`/`?` followed by whitespace or EOS) and clamp to `--max`
 /// chars (default 200, matching the runtime's compressor default).
@@ -402,7 +402,7 @@ fn title_heuristic_payload(input: &str) -> Value {
 /// runtime when an auxiliary client is configured; this CLI surfaces
 /// the deterministic fallback for testing or for cheap one-offs.
 ///
-/// Aliased as `cos agent summarize` (US spelling) so muscle memory
+/// Aliased as `yu agent summarize` (US spelling) so muscle memory
 /// from either spelling works.
 pub(super) fn summarise_cmd(args: &[String]) -> Result<Value, String> {
     let mut max_chars: usize = 200;
@@ -489,7 +489,7 @@ fn summarise_heuristic_payload(input: &str, max_chars: usize) -> Value {
     })
 }
 
-/// `cos agent classify <reply> --labels <a,b,c> | --file <path> | --stdin`
+/// `yu agent classify <reply> --labels <a,b,c> | --file <path> | --stdin`
 /// — match a (typically LLM-generated) reply string against a label
 /// set using `match_label`'s case-insensitive + punctuation-tolerant
 /// rules. Returns `{matched: <label> | null, labels: [...], reply}`.
@@ -514,7 +514,7 @@ pub(super) fn classify_cmd(args: &[String]) -> Result<Value, String> {
         }
     }
     let labels_str = labels_raw
-        .ok_or_else(|| "usage: cos agent classify <reply> --labels <a,b,c>".to_string())?;
+        .ok_or_else(|| "usage: yu agent classify <reply> --labels <a,b,c>".to_string())?;
     let labels: Vec<String> = labels_str
         .split(',')
         .map(|s| s.trim().to_string())

@@ -527,7 +527,7 @@ impl TrustStore {
                     // closed instead, and says how to fix it.
                     self.note(format!(
                         "trust domain `{key}` fails closed: {} trust file(s) are present but \
-                         `{}` is missing; re-run a `cos provenance trust` command to \
+                         `{}` is missing; re-run a `yu provenance trust` command to \
                          re-record the domain's generation",
                         observed.len(),
                         state::TRUST_STATE_FILE
@@ -539,7 +539,7 @@ impl TrustStore {
             if fingerprint != recorded.fingerprint {
                 self.note(format!(
                     "trust domain `{key}` fails closed: recorded fingerprint does not match \
-                     the trust files on disk (generation {}); re-run a `cos provenance trust` \
+                     the trust files on disk (generation {}); re-run a `yu provenance trust` \
                      command to re-record it",
                     recorded.generation
                 ));

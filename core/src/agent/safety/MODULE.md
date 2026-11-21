@@ -29,5 +29,5 @@ allow decision.
 ## Tests
 
 ```bash
-cargo test -p cos agent::safety:: -- --test-threads=1
+cargo test -p yu agent::safety:: -- --test-threads=1
 ```

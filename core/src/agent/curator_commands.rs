@@ -1,15 +1,15 @@
 use super::{curator_drafts, llm, memory};
 use serde_json::{json, Value};
 
-/// `cos agent curator propose <session_id> [--accept] [--limit <n>]`
+/// `yu agent curator propose <session_id> [--accept] [--limit <n>]`
 /// `[--no-require-acceptance] [--min-tools <n>] [--min-turns <n>]`
 /// `[--no-save]`
 ///
-/// `cos agent curator drafts list [--status proposed|accepted|rejected]`
-/// `cos agent curator drafts show <draft_id>`
-/// `cos agent curator drafts accept <draft_id> [--note "<text>"]`
-/// `cos agent curator drafts reject <draft_id> [--note "<text>"]`
-/// `cos agent curator drafts delete <draft_id>`
+/// `yu agent curator drafts list [--status proposed|accepted|rejected]`
+/// `yu agent curator drafts show <draft_id>`
+/// `yu agent curator drafts accept <draft_id> [--note "<text>"]`
+/// `yu agent curator drafts reject <draft_id> [--note "<text>"]`
+/// `yu agent curator drafts delete <draft_id>`
 pub(super) fn curator_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::curator::{
         looks_like_acceptance, message_to_turn, ConversationTurn, Curator, CuratorConfig,
@@ -31,7 +31,7 @@ pub(super) fn curator_cmd(args: &[String]) -> Result<Value, String> {
         .get(1)
         .cloned()
         .filter(|s| !s.is_empty() && !s.starts_with("--"))
-        .ok_or_else(|| "usage: cos agent curator propose <session_id> [flags]".to_string())?;
+        .ok_or_else(|| "usage: yu agent curator propose <session_id> [flags]".to_string())?;
 
     let mut limit: usize = 200;
     let mut force_accept = false;
@@ -144,7 +144,7 @@ pub(super) fn curator_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent curator drafts ...` dispatcher. Pulled into its own
+/// `yu agent curator drafts ...` dispatcher. Pulled into its own
 /// helper so the propose path stays readable.
 fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
     use curator_drafts::{DraftStatus, DraftStore};
@@ -195,7 +195,7 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .cloned()
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "usage: cos agent curator drafts show <id>".to_string())?;
+                .ok_or_else(|| "usage: yu agent curator drafts show <id>".to_string())?;
             let store = DraftStore::open_default()?;
             let rec = store
                 .get(&id)
@@ -207,7 +207,7 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .cloned()
                 .filter(|s| !s.is_empty() && !s.starts_with("--"))
-                .ok_or_else(|| format!("usage: cos agent curator drafts {sub} <id> [--note ...]"))?;
+                .ok_or_else(|| format!("usage: yu agent curator drafts {sub} <id> [--note ...]"))?;
             let mut note: Option<String> = None;
             let mut i = 2usize;
             while i < args.len() {
@@ -244,7 +244,7 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .cloned()
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "usage: cos agent curator drafts delete <id>".to_string())?;
+                .ok_or_else(|| "usage: yu agent curator drafts delete <id>".to_string())?;
             let mut store = DraftStore::open_default()?;
             store.delete(&id)?;
             Ok(json!({"id": id, "deleted": true}))
@@ -255,14 +255,14 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
                 .cloned()
                 .filter(|s| !s.is_empty() && !s.starts_with("--"))
                 .ok_or_else(|| {
-                    "usage: cos agent curator drafts retitle <id> \"<new title>\"".to_string()
+                    "usage: yu agent curator drafts retitle <id> \"<new title>\"".to_string()
                 })?;
             let title = args
                 .get(2)
                 .cloned()
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| {
-                    "usage: cos agent curator drafts retitle <id> \"<new title>\"".to_string()
+                    "usage: yu agent curator drafts retitle <id> \"<new title>\"".to_string()
                 })?;
             let mut store = DraftStore::open_default()?;
             store.set_title(&id, &title)?;
@@ -275,7 +275,7 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
             }))
         }
         "auto-title" => {
-            // `cos agent curator drafts auto-title <id> [--seed description|title|both] [--dry-run]`
+            // `yu agent curator drafts auto-title <id> [--seed description|title|both] [--dry-run]`
             // Re-runs `agent::title::generate_title` against the draft's
             // text via the auxiliary client and (unless --dry-run) writes
             // the result back via `set_title`. Uses the same fallback
@@ -287,7 +287,7 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
                 .cloned()
                 .filter(|s| !s.is_empty() && !s.starts_with("--"))
                 .ok_or_else(|| {
-                    "usage: cos agent curator drafts auto-title <id> [--seed description|title|both] [--dry-run]"
+                    "usage: yu agent curator drafts auto-title <id> [--seed description|title|both] [--dry-run]"
                         .to_string()
                 })?;
             let mut seed_kind = "description".to_string();
@@ -385,7 +385,7 @@ fn parse_draft_status(s: &str) -> Result<curator_drafts::DraftStatus, String> {
     }
 }
 
-/// `cos agent curator author <draft_id> [--model <name>] [--write] [--out <path>]`
+/// `yu agent curator author <draft_id> [--model <name>] [--write] [--out <path>]`
 ///
 /// Drives the [`crate::agent::curator_author::author`] LLM pass:
 /// looks up the draft in the persistent draft store, replays the
@@ -417,7 +417,7 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
         .first()
         .cloned()
         .filter(|s| !s.is_empty() && !s.starts_with("--"))
-        .ok_or_else(|| "usage: cos agent curator author <draft_id> [flags]".to_string())?;
+        .ok_or_else(|| "usage: yu agent curator author <draft_id> [flags]".to_string())?;
 
     let mut model_override: Option<String> = None;
     let mut write_to_disk = false;
@@ -472,7 +472,7 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
     // Resolve the draft.
     let store = DraftStore::open_default().map_err(|e| format!("draft store: {e}"))?;
     let entry = store.get(&draft_id).ok_or_else(|| {
-        format!("no draft with id '{draft_id}' (try `cos agent curator drafts list`)")
+        format!("no draft with id '{draft_id}' (try `yu agent curator drafts list`)")
     })?;
 
     // Replay the session's recorded turns. If the session is gone
@@ -583,7 +583,7 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
     Ok(payload)
 }
 
-/// `cos agent curator scan [flags]` — batch-propose drafts across
+/// `yu agent curator scan [flags]` — batch-propose drafts across
 /// recent sessions.
 ///
 /// Walks the most recent N sessions in the memory DB, runs the

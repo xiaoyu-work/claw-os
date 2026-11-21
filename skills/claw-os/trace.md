@@ -1,6 +1,6 @@
 # Execution Tracing
 
-Call the `cos_trace` tool — **not the shell** — to record a tree-structured journal of what you did and why. There is no user-facing `cos trace` CLI command.
+Call the `cos_trace` tool — **not the shell** — to record a tree-structured journal of what you did and why. There is no user-facing `yu trace` CLI command.
 
 ## Tool shape
 

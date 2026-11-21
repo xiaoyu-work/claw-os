@@ -1,15 +1,15 @@
 //! Durable-session lifecycle CLI verbs.
 //!
-//! These wrap [`crate::session`] for the user-facing `cos agent`
+//! These wrap [`crate::session`] for the user-facing `yu agent`
 //! command surface. The point of Phase 5 is that the word
-//! "session" never appears in `cos --help`; users think in terms of
+//! "session" never appears in `yu --help`; users think in terms of
 //! "agent tasks". So the verbs here are:
 //!
-//! - `cos agent ls` — list every durable session on disk
-//! - `cos agent show <sid>` — full detail for one session
-//! - `cos agent stop <sid>` — politely tell the holder to wind down
-//! - `cos agent undo <sid>` — replay the inverse mutation log
-//! - `cos agent resume <sid>` — flip a paused session back to
+//! - `yu agent ls` — list every durable session on disk
+//! - `yu agent show <sid>` — full detail for one session
+//! - `yu agent stop <sid>` — politely tell the holder to wind down
+//! - `yu agent undo <sid>` — replay the inverse mutation log
+//! - `yu agent resume <sid>` — flip a paused session back to
 //!   pending so a fresh runtime can attach
 //!
 //! Stop / resume are deliberately cooperative. We do not race against
@@ -178,7 +178,7 @@ fn stop_impl(args: &[String], owner_uid: Option<u32>) -> Result<Value, String> {
 
     // Hold a flock spanning the `current_lease` check and the
     // `update_meta(Paused)` rewrite below. Without this lock, two
-    // concurrent `cos agent stop` calls (or a `stop` racing a
+    // concurrent `yu agent stop` calls (or a `stop` racing a
     // `resume`) could both observe "no lease, status active" and
     // both write a meta — the later writer's status wins for the
     // wrong reason. The sentinel is sibling to the session dir so
@@ -192,7 +192,7 @@ fn stop_impl(args: &[String], owner_uid: Option<u32>) -> Result<Value, String> {
     let lease = current_lease(&sid).ok().flatten();
 
     // No live holder + the session is still active — flip the meta
-    // ourselves so `cos agent ls` shows it as Paused immediately.
+    // ourselves so `yu agent ls` shows it as Paused immediately.
     if lease.is_none() && meta.status.is_active() && meta.status != Status::Paused {
         crate::session::update_meta(&sid, |m| {
             m.status = Status::Paused;
@@ -329,7 +329,7 @@ fn resume_impl(args: &[String], owner_uid: Option<u32>) -> Result<Value, String>
     Ok(json!({
         "id": sid.as_str(),
         "status": Status::Pending,
-        "hint": "task is ready for re-attachment by a runtime (e.g. `cos agent chat --session <id>`)",
+        "hint": "task is ready for re-attachment by a runtime (e.g. `yu agent chat --session <id>`)",
     }))
 }
 
@@ -373,7 +373,7 @@ fn parse_sid(args: &[String], verb: &str) -> Result<SessionId, String> {
     let raw = args
         .iter()
         .find(|a| !a.starts_with("--"))
-        .ok_or_else(|| format!("usage: cos agent {verb} <task-id>  (or --session <id>)"))?;
+        .ok_or_else(|| format!("usage: yu agent {verb} <task-id>  (or --session <id>)"))?;
     raw.parse()
         .map_err(|e: crate::session::InvalidSessionId| e.to_string())
 }

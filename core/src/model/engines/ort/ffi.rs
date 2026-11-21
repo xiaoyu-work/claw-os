@@ -1,6 +1,6 @@
 //! Hand-written FFI for the ONNX Runtime entry point.
 //!
-//! As of P2.3 the cos binary no longer statically links `libonnxruntime`.
+//! As of P2.3 the yu binary no longer statically links `libonnxruntime`.
 //! The engine package manager installs a prebuilt onnxruntime release
 //! into `<engines_dir>/ort/<version>/{bin,lib}/` and we resolve the
 //! shared library at runtime via `libloading`.
@@ -61,7 +61,7 @@ impl OrtSyms {
     /// an upstream onnxruntime build. The C ABI signature of the
     /// resolved symbol must match the declaration above. Both
     /// invariants are honored by the official onnxruntime prebuilt
-    /// releases that `cos engine` consumes.
+    /// releases that `yu engine` consumes.
     pub unsafe fn resolve(lib: &Library) -> Result<Self, libloading::Error> {
         let get_api_base: libloading::Symbol<unsafe extern "system" fn() -> *const c_void> =
             lib.get(b"OrtGetApiBase\0")?;

@@ -521,7 +521,7 @@ impl Hook for LoggingHook {
 /// ```
 ///
 /// Audit writes are best-effort and never abort the agent loop. Failures are
-/// traced. Each event is chained under an exclusive file lock so `cos agent
+/// traced. Each event is chained under an exclusive file lock so `yu agent
 /// audit verify` can detect accidental or naive edits, gaps, malformed tails,
 /// and archive changes. The chain is unkeyed; it is not a signature against an
 /// attacker who can rewrite the complete log and head.

@@ -198,7 +198,7 @@ struct TurnConflict {
 }
 
 fn require_chat_setup(config: &crate::config::AgentConfig) -> Result<(), String> {
-    let hint = "Open Settings > Text to configure a model and its credentials, or sign in with GitHub Copilot. You can also run `cos agent setup text`.";
+    let hint = "Open Settings > Text to configure a model and its credentials, or sign in with GitHub Copilot. You can also run `yu agent setup text`.";
     if config.model.trim().is_empty()
         && config
             .provider_fallbacks

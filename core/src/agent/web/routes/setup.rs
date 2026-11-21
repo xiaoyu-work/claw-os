@@ -1,4 +1,4 @@
-//! `cos agent setup` endpoints — surfaces the same modality status /
+//! `yu agent setup` endpoints — surfaces the same modality status /
 //! provider catalogue / apply / test commands the CLI wizard uses, so
 //! the web UI can be a first-class onboarding surface (the SSE chat
 //! route deliberately *doesn't* gate on `is_ready`, see `web::mod`).

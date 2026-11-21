@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn stdio_discovery_explains_the_human_host_transport_without_exposing_a_tool() {
     let schema = parse(CosHelp.exec(json!({"path": ["app", "stdio"]})).await);
-    assert_eq!(schema["command"], "cos app stdio");
+    assert_eq!(schema["command"], "yu app stdio");
     assert_eq!(schema["model_callable"], false);
     assert!(schema["model_tool"].is_null());
     assert_eq!(schema["output_format"], "opaque");
@@ -39,7 +39,7 @@ async fn walks_root_to_agent_usage_without_executing_a_command() {
 
     let usage = parse(tool.exec(json!({"path": ["agent", "usage"]})).await);
     assert_eq!(usage["kind"], "namespace");
-    assert_eq!(usage["command"], "cos agent usage");
+    assert_eq!(usage["command"], "yu agent usage");
     assert_eq!(usage["model_tool"], "cos_usage");
 }
 
@@ -128,7 +128,7 @@ async fn discovers_namespaced_app_operation() {
             .await,
     );
     assert_eq!(result["found"], true);
-    assert_eq!(result["command"], "cos app notes notes.create");
+    assert_eq!(result["command"], "yu app notes notes.create");
     assert_eq!(result["model_callable"], false);
     assert!(result["model_tool"].is_null());
 }
@@ -144,7 +144,7 @@ async fn recursively_discovers_nested_agent_commands() {
         .contains(&json!("usage")));
 
     let legacy_usage = parse(tool.exec(json!({"path": ["agent", "dev", "usage"]})).await);
-    assert_eq!(legacy_usage["canonical_command"], "cos agent usage");
+    assert_eq!(legacy_usage["canonical_command"], "yu agent usage");
     assert_eq!(legacy_usage["model_tool"], "cos_usage");
 
     let setup = parse(
@@ -152,7 +152,7 @@ async fn recursively_discovers_nested_agent_commands() {
             .await,
     );
     assert_eq!(setup["found"], true);
-    assert_eq!(setup["command"], "cos agent setup text providers");
+    assert_eq!(setup["command"], "yu agent setup text providers");
 
     let budget = parse(tool.exec(json!({"path": ["agent", "budget"]})).await);
     assert_eq!(budget["kind"], "namespace");
@@ -165,7 +165,7 @@ async fn recursively_discovers_nested_agent_commands() {
         tool.exec(json!({"path": ["agent", "budget", "user", "show"]}))
             .await,
     );
-    assert_eq!(show["command"], "cos agent budget user show");
+    assert_eq!(show["command"], "yu agent budget user show");
 
     let provider = parse(
         tool.exec(json!({"path": ["agent", "usage", "provider"]}))
@@ -177,7 +177,7 @@ async fn recursively_discovers_nested_agent_commands() {
         tool.exec(json!({"path": ["agent", "skills", "usage", "stats"]}))
             .await,
     );
-    assert_eq!(skill_stats["command"], "cos agent skills usage stats");
+    assert_eq!(skill_stats["command"], "yu agent skills usage stats");
 }
 
 #[tokio::test]
@@ -197,7 +197,7 @@ async fn distinguishes_app_management_from_installed_apps() {
         tool.exec(json!({"path": ["app", "consent", "grant"]}))
             .await,
     );
-    assert_eq!(grant["command"], "cos app consent grant");
+    assert_eq!(grant["command"], "yu app consent grant");
     assert_eq!(grant["model_callable"], false);
 }
 

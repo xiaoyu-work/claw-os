@@ -63,7 +63,7 @@ struct ServiceDef {
     #[serde(default)]
     depends_on: Vec<String>,
     /// Credential names to inject as environment variables on start.
-    /// Values are loaded from `cos credential` store at start time.
+    /// Values are loaded from `yu credential` store at start time.
     #[serde(default)]
     credentials: Vec<String>,
     #[serde(default)]
@@ -227,7 +227,7 @@ fn parse_pid_file_contents(raw: &str) -> Option<(u32, Option<u64>)> {
 
 /// Persist the running service's identity. We embed the kernel's
 /// `starttime` (clock ticks since boot, field 22 of
-/// `/proc/<pid>/stat`) alongside the pid so a later `cos service
+/// `/proc/<pid>/stat`) alongside the pid so a later `yu service
 /// stop` can detect pid-recycling: if the file says
 /// `12345:6789012` but the pid currently has a different starttime,
 /// some unrelated process now owns 12345 and we must NOT signal it.
@@ -735,14 +735,14 @@ fn require_service(name: &str) -> Result<(), String> {
 /// Start a service by name.
 /// Sequence: pre_start → spawn → health-wait → post_start
 fn cmd_start(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos service start <name>")?;
+    let name = args.first().ok_or("usage: yu service start <name>")?;
     require_service(name)?;
     let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
     cmd_start_locked(args)
 }
 
 fn cmd_start_locked(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos service start <name>")?;
+    let name = args.first().ok_or("usage: yu service start <name>")?;
     let def = find_service(name)?;
 
     // Check if already running. Use the start-time-qualified
@@ -944,14 +944,14 @@ fn cmd_start_locked(args: &[String]) -> Result<Value, String> {
 /// is later reused. Legacy pid files without start-time identity are
 /// refused rather than signalled.
 fn cmd_stop(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos service stop <name>")?;
+    let name = args.first().ok_or("usage: yu service stop <name>")?;
     require_service(name)?;
     let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
     cmd_stop_locked(args)
 }
 
 fn cmd_stop_locked(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos service stop <name>")?;
+    let name = args.first().ok_or("usage: yu service stop <name>")?;
 
     let (pid, recorded_start) = read_pid(name)
         .ok_or_else(|| format!("service {name} is not running (no PID file)"))?;
@@ -1093,7 +1093,7 @@ fn cmd_stop_locked(args: &[String]) -> Result<Value, String> {
 
 /// Restart a service (stop then start).
 fn cmd_restart(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos service restart <name>")?;
+    let name = args.first().ok_or("usage: yu service restart <name>")?;
     require_service(name)?;
     let _lifecycle_lock = ServiceLifecycleLock::acquire(name)?;
 
@@ -1187,7 +1187,7 @@ fn reverse_dependency_order(services: &BTreeMap<String, ServiceDef>) -> Vec<Stri
 
 /// Show detailed status for a service.
 fn cmd_status(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos service status <name>")?;
+    let name = args.first().ok_or("usage: yu service status <name>")?;
     require_service(name)?;
     let def = find_service(name)?;
 
@@ -1223,7 +1223,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 
 /// Health check a service, optionally auto-restarting if unhealthy.
 fn cmd_health(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos service health <name>")?;
+    let name = args.first().ok_or("usage: yu service health <name>")?;
     require_service(name)?;
     let def = find_service(name)?;
     let auto_restart = !args.contains(&"--no-restart".to_string());
@@ -1252,7 +1252,7 @@ fn cmd_health(args: &[String]) -> Result<Value, String> {
     Ok(json!({
         "name": name,
         "healthy": false,
-        "hint": format!("Run: cos service restart {name}"),
+        "hint": format!("Run: yu service restart {name}"),
     }))
 }
 
@@ -1300,7 +1300,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
     let name = args
         .first()
-        .ok_or("usage: cos service logs <name> [--tail N]")?;
+        .ok_or("usage: yu service logs <name> [--tail N]")?;
     require_service(name)?;
 
     let mut tail_n = DEFAULT_LOG_TAIL;

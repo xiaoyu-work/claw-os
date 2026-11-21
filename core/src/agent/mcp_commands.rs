@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 /// Apply ad-hoc `--allow` / `--deny` overrides to a base
 /// [`AgentConfig`] for one-shot scoping (currently used by
-/// `cos agent mcp serve`). Returns the merged config without
+/// `yu agent mcp serve`). Returns the merged config without
 /// mutating the input. Extracted so the merge logic can be tested
 /// independently of the blocking server entry point.
 fn merge_mcp_overrides(
@@ -22,7 +22,7 @@ fn merge_mcp_overrides(
     out
 }
 
-/// `cos agent mcp [serve|status]` — MCP (Model Context Protocol)
+/// `yu agent mcp [serve|status]` — MCP (Model Context Protocol)
 /// server that exposes the agent's tool registry to external clients
 /// over newline-delimited JSON-RPC on stdio. `serve` runs in the
 /// foreground until stdin closes; `status` reports the catalog
@@ -67,7 +67,7 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
             }))
         }
         "servers" => {
-            // `cos agent mcp servers [--probe]` — list configured
+            // `yu agent mcp servers [--probe]` — list configured
             // external MCP servers. With `--probe`, attempt to attach
             // each enabled one and report tool counts (does not
             // mutate global state; the runtime registry is built

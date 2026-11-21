@@ -1,7 +1,7 @@
 //! The App–AI Gate. Single entry point Apps use to reach a model.
 //!
 //! ```text
-//!     cos ai chat --app …       claw-os-sdk/python/src/claw_os_sdk/ai.py
+//!     yu ai chat --app …       claw-os-sdk/python/src/claw_os_sdk/ai.py
 //!          │                          │
 //!          ▼                          ▼
 //!   ai::gate::chat_blocking ─── caps::require(ai.*, name(model))
@@ -60,7 +60,7 @@
 //! Above and orthogonal to overrides, the kernel requires a fresh
 //! [`crate::ai::consent`] record — a JSON snapshot of the App's
 //! manifest AI block that the user has explicitly approved (via
-//! `cos app consent grant <id>` or the equivalent UI). A missing
+//! `yu app consent grant <id>` or the equivalent UI). A missing
 //! record denies with `consent_required`; a drifted snapshot denies
 //! with `consent_stale`. Consent tracks the manifest, not the
 //! override, so a developer pushing a looser update always forces a
@@ -170,7 +170,7 @@ pub struct ChatResult {
     /// Tool calls the model proposed. Empty when no tools were
     /// requested or when the model produced no tool calls. The gate
     /// **never** executes these — Apps inspect them and re-call the
-    /// kernel via `cos ai tool <name>` for whichever they choose.
+    /// kernel via `yu ai tool <name>` for whichever they choose.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ProposedToolCall>,
 }
@@ -390,14 +390,14 @@ pub enum AiError {
     BadOverride { app: String, detail: String },
 
     #[error(
-        "app `{app}` has not been approved yet — run `cos app consent grant {app}` \
+        "app `{app}` has not been approved yet — run `yu app consent grant {app}` \
          to review its AI policy and approve"
     )]
     ConsentRequired { app: String },
 
     #[error(
         "consent for app `{app}` is stale (changed: {changed:?}) — \
-         run `cos app consent grant {app}` to review the new AI policy and re-approve"
+         run `yu app consent grant {app}` to review the new AI policy and re-approve"
     )]
     ConsentStale { app: String, changed: Vec<String> },
 
@@ -1251,8 +1251,8 @@ fn _ensure_arc_send<T: ?Sized + Send + Sync>(_: &Arc<T>) {}
 // ---------------------------------------------------------------------------
 // System-agent provider wrapper.
 //
-// The kernel-resident agent (everything reachable via `cos agent ask`,
-// `cos agent chat`, the cos-agent-bridge HTTP service, the doctor,
+// The kernel-resident agent (everything reachable via `yu agent ask`,
+// `yu agent chat`, the cos-agent-bridge HTTP service, the doctor,
 // the vision/author/delegate paths, …) is NOT an installed app — it
 // has no manifest, no `ai` block, no per-app allowlist. But it still
 // spends real tokens against real providers, so it deserves the same
@@ -1271,7 +1271,7 @@ fn _ensure_arc_send<T: ?Sized + Send + Sync>(_: &Arc<T>) {}
 // ---------------------------------------------------------------------------
 
 /// Stable pseudo-app id under which the system agent's AI usage is
-/// rolled up. Surfaces alongside real apps in `cos agent budget show`.
+/// rolled up. Surfaces alongside real apps in `yu agent budget show`.
 pub const SYSTEM_AGENT_BUCKET: &str = "system.agent";
 
 /// Wrap an LLM provider so the kernel-resident agent reaches the

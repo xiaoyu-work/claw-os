@@ -36,7 +36,7 @@ editing additional surfaces.
 
 | Task | Start here | Commonly coupled files |
 | --- | --- | --- |
-| `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
+| `yu` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
 | Model-visible content or prompt-injection containment | `core/src/agent/trust/` | `agent/prompt/`, `agent/safety/untrusted.rs`, the ingestion adapter, `test/unit/agent/trust/` |
 | Activity goal/lifecycle or presentation | `core/src/activities/`, `core/src/clawd/activities.rs`, `docs/activities.md` | `core/src/activity.rs`, task/session associations, Agent Web, `desktop/agent/`; one shared backend for headless and desktop |
 | Activity execution limits or attempt accounting | `core/src/activities/execution_limits.rs`, `core/src/agent/service/execution_limits.rs`, `docs/activity-execution-limits.md` | Root claim reservations, actual turn ceiling, supervisor/standalone expiry and revocation, CLI/Web/native; constraints never grant capabilities |
@@ -241,7 +241,7 @@ protocol, authorization or other platform contract actually changes.
 2. Implement or change the declared entrypoint's handler.
 3. Validate untrusted args before the policy check.
 4. Update the App's behavior tests (`test_main.py` or explicitly declared tests).
-5. Run `cos app lint <id>` when the binary is available.
+5. Run `yu app lint <id>` when the binary is available.
 
 Permission-related changes must also remain visible in the OS-generated
 installation review, including conditional needs, argument constraints, AI

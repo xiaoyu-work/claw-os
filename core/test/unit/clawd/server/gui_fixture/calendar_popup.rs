@@ -120,7 +120,7 @@ impl Fixture {
     ) -> Result<(), String> {
         let instance = claw_display_control::Epoch(retained.instance.0).label();
         let guest = PathBuf::from(format!("/proc/{}/root", process.identity.pid()));
-        assert!(guest.join("usr/local/bin/cos").is_file());
+        assert!(guest.join("usr/local/bin/yu").is_file());
         for path in [
             self.database.strip_prefix("/").unwrap(),
             Path::new("run/user/62050/bus"),
@@ -457,7 +457,7 @@ pub(super) async fn run(
         control, pam, retained, process, session, Instant::now() + Duration::from_secs(25),
     );
     let guest_root = PathBuf::from(format!("/proc/{}/root", process.identity.pid()));
-    match std::fs::metadata(guest_root.join("usr/local/bin/cos")) {
+    match std::fs::metadata(guest_root.join("usr/local/bin/yu")) {
         Ok(metadata) if metadata.is_file() && metadata.mode() & 0o111 != 0 => {}
         result => driver
             .fail(&format!(

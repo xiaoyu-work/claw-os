@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn calendar_scope_is_named_not_wildcard() {
-    let mut command = Command::new("cos");
+    let mut command = Command::new("yu");
     Scope::Name("calendar").append_args(&mut command);
     assert_eq!(
         command.as_std().get_args().collect::<Vec<_>>(),

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/tool_catalog.schema.json",
   "title": "Catalog tool list reply",
-  "description": "Shape returned by `cos ai tools`.",
+  "description": "Shape returned by `yu ai tools`.",
   "type": "object",
   "required": ["tools"],
   "additionalProperties": true,

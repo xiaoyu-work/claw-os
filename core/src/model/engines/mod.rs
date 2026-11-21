@@ -28,7 +28,7 @@ pub enum EngineError {
     #[error("engine not linked: {0}")]
     NotLinked(&'static str),
     /// The engine's runtime files aren't on disk. Hint: install via
-    /// `cos engine update <name>`.
+    /// `yu engine update <name>`.
     #[error("engine not installed: {0}")]
     NotInstalled(String),
     /// The runtime was found but the OS loader rejected it. Likely a
@@ -66,7 +66,7 @@ pub trait Engine: Send + Sync {
 /// Names of every engine whose runtime is currently installed and
 /// loadable. Replaces the old compile-time `IS_LINKED` check — engine
 /// availability is now a property of the host's `<engines_dir>` state,
-/// not the cos build. `cos agent status` and the agent provider
+/// not the cos build. `yu agent status` and the agent provider
 /// registry use this to decide whether local inference is available.
 ///
 /// Order is stable (alphabetical by name) so callers can rely on it

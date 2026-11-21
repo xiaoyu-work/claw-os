@@ -10,7 +10,7 @@
 //! [`crate::agent::memory::semantic::SemanticStore`] (vector) stores;
 //! it does not introduce a new physical storage. Every app-emitted
 //! row is namespaced so the user can later inspect or forget it
-//! per-app from `cos agent memory`.
+//! per-app from `yu agent memory`.
 //!
 //! ## Namespacing
 //!
@@ -101,7 +101,7 @@ pub struct AppMemoryEntry {
     /// Optional "open this in the source app" handle. Stored as a
     /// shell command line the agent (or the user) can run to inspect
     /// the underlying record (e.g.
-    /// `cos app expense-tracker show 42`).
+    /// `yu app expense-tracker show 42`).
     pub link: Option<String>,
 }
 
@@ -223,7 +223,7 @@ pub fn semantic_namespace_for(source: &str) -> String {
 ///
 /// Semantic indexing is awaited (we don't `spawn_index` here)
 /// because:
-/// 1. The bridge runs as a one-shot `cos __memory remember`
+/// 1. The bridge runs as a one-shot `yu __memory remember`
 ///    subprocess and would otherwise exit before the background
 ///    embed finishes.
 /// 2. Apps already block on `policy.require` / `snapshot.write` so
@@ -309,7 +309,7 @@ pub enum RememberError {
 // ---------------------------------------------------------------------------
 // Read side: list / show / search / forget.
 //
-// Used by the user-facing `cos agent memory` CLI to inspect or
+// Used by the user-facing `yu agent memory` CLI to inspect or
 // redact what apps have pushed.
 // ---------------------------------------------------------------------------
 

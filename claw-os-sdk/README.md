@@ -15,7 +15,7 @@ libraries; `tools.call` addresses the fixed AI primitive catalog, not App MCP.
 
 An App may declare separate signed GUI executables in optional
 `desktop.entries`, without another installed identity or renderer unification.
-`cos app <id> --gui:<name> [literal args...]` selects one declared entry;
+`yu app <id> --gui:<name> [literal args...]` selects one declared entry;
 each supplies its own localized name, literal selector and capability needs.
 Optional `desktop.entry` and `desktop.needs` affect only the default GUI.
 An explicit empty needs array means none, while omission preserves the legacy
@@ -49,7 +49,7 @@ claw-os-sdk/
 │   │   ├── envelope.schema.json    common envelope shape
 │   │   ├── perms.schema.json       capability decision envelope
 │   │   ├── ai.schema.json          AI wire schema (kernel protocol)
-│   │   ├── budget_show.schema.json cos agent budget show reply
+│   │   ├── budget_show.schema.json yu agent budget show reply
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── tool_catalog.schema.json catalog tool list
 │   │   ├── mcp_call_context.schema.json authenticated App-call identity
@@ -57,7 +57,7 @@ claw-os-sdk/
 │   │   ├── object-references.md    canonical URI and manifest semantics
 │   │   ├── file_change_plan.schema.json bounded App-reported proposal
 │   │   ├── contract.json           validators + stable error codes
-│   │   ├── app.schema.json         cos app <id> <verb>
+│   │   ├── app.schema.json         yu app <id> <verb>
 │   │   └── manifest.schema.json    app.json schema
 │   └── codegen.py        reads wire/v1 schemas + contract → emits
 │                         typed validators into rust/python/node/go
@@ -129,7 +129,7 @@ arguments.
 │  - typed structs (generated from wire/v1/*.schema.json)  │
 │  - language-idiomatic API surface                        │
 └──────────┬───────────────────────────────────────────────┘
-           │ subprocess: cos ai chat --app <id> --prompt-file <0600 temp>
+           │ subprocess: yu ai chat --app <id> --prompt-file <0600 temp>
            ▼
 ┌──────────────────────────────────────────────────────────┐
 │  cos                  (Rust binary, in /usr/local/bin)   │
@@ -224,8 +224,8 @@ four language bindings and the Rust SDK's MCP constants.
   envelope-breaking changes.
 - **SDK bindings** share one SemVer and are released together so Python, Node,
   Rust, and Go always target the same generated wire contract.
-- All SDKs handshake on start-up: each library calls `cos --version` and
-  refuses to operate against a `cos` binary that's older than the
+- All SDKs handshake on start-up: each library calls `yu --version` and
+  refuses to operate against a `yu` binary that's older than the
   minimum wire-version it requires.
 
 ## Compatibility

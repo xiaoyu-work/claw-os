@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Shared read-only `cos agent ls` adapter. Task mutation and Agent UI stay separate.
+//! Shared read-only `yu agent ls` adapter. Task mutation and Agent UI stay separate.
 
 use serde::Deserialize;
 use std::{process::Command, time::Duration};
@@ -43,7 +43,7 @@ pub fn load_tasks() -> Result<Vec<Task>, LoadError> {
     let output = Command::new(crate::command::cos_binary())
         .args(["agent", "ls"])
         .output()
-        .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
+        .map_err(|e| LoadError(format!("spawn yu: {e}")))?;
     parse_tasks_output(output)
 }
 
@@ -56,7 +56,7 @@ pub async fn load_tasks_async() -> Result<Vec<Task>, LoadError> {
         Duration::from_secs(3),
     )
     .await
-    .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
+    .map_err(|e| LoadError(format!("spawn yu: {e}")))?;
     parse_tasks_output(output)
 }
 
@@ -69,16 +69,16 @@ fn parse_tasks_output(output: std::process::Output) -> Result<Vec<Task>, LoadErr
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(LoadError(if err.is_empty() {
-            format!("cos agent ls exited with {}", output.status)
+            format!("yu agent ls exited with {}", output.status)
         } else {
             err
         }));
     }
     let envelope: LsEnvelope = serde_json::from_slice(&output.stdout)
-        .map_err(|e| LoadError(format!("parse cos agent ls output: {e}")))?;
+        .map_err(|e| LoadError(format!("parse yu agent ls output: {e}")))?;
     if envelope.n != envelope.tasks.len() {
         return Err(LoadError(
-            "cos agent ls returned an inconsistent task count".into(),
+            "yu agent ls returned an inconsistent task count".into(),
         ));
     }
     Ok(envelope.tasks)

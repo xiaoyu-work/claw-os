@@ -269,7 +269,7 @@ impl Fixture {
         std::fs::set_permissions("/run/lock", std::fs::Permissions::from_mode(0o1777)).unwrap();
         std::fs::write("/var/lib/dpkg/status", "").unwrap();
         std::fs::write("/var/lib/dpkg/lock", "").unwrap();
-        copy_executable(&cos, Path::new("/usr/local/bin/cos"));
+        copy_executable(&cos, Path::new("/usr/local/bin/yu"));
         copy_executable(&runner, Path::new("/usr/local/bin/claw-app-runner"));
         copy_executable(&actor, &Path::new(BASE).join("actor"));
         synthetic_accounts();
@@ -473,7 +473,7 @@ impl Actor {
             .env("COS_DATA_DIR", paths.control_dir.join("data"))
             .env("COS_LOG_DIR", paths.control_dir.join("log"))
             .env("COS_CACHE_DIR", paths.control_dir.join("cache"))
-            .env("COS_BIN", "/usr/local/bin/cos")
+            .env("COS_BIN", "/usr/local/bin/yu")
             .env("COS_USER_DATA_DIR", format!("{BASE}/data"))
             .env("COS_APPS_DIR", format!("{BASE}/apps"))
             .env("COS_PROC_DATA_DIR", format!("/run/cos/caps/{OWNER}"))

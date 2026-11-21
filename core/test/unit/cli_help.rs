@@ -67,7 +67,7 @@ fn activity_capability_policy_commands_have_explicit_non_model_schemas() {
             .unwrap();
         assert!(schema
             .example
-            .starts_with(&format!("cos activity {command} ")));
+            .starts_with(&format!("yu activity {command} ")));
         let help = command_schema_value("activity", command).unwrap();
         assert_eq!(help["model_callable"], false);
         assert!(help["model_tool"].is_null());

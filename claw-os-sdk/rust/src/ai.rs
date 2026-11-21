@@ -1,6 +1,6 @@
 //! AI helper for the stable `chat` / `chat-untrusted` surface.
 //!
-//! [`chat`] shells out to `cos ai chat --app <id>`. Passing
+//! [`chat`] shells out to `yu ai chat --app <id>`. Passing
 //! `origin("external-content")` makes the kernel select
 //! `ai.chat.untrusted`.
 //!
@@ -59,7 +59,7 @@ pub struct ProposedToolCall {
     pub input: serde_json::Value,
 }
 
-/// Parsed reply from `cos ai chat`. See `wire/v1/ai.schema.json`.
+/// Parsed reply from `yu ai chat`. See `wire/v1/ai.schema.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiResponse {
     pub text: String,

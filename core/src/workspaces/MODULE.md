@@ -18,7 +18,7 @@ not task working directories, App private stores, or execution grants.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | Workspace service definition and shared client DTO exports |
-| `cli.rs` | Human `cos workspace` commands |
+| `cli.rs` | Human `yu workspace` commands |
 | `association.rs` | Optional Root conversation/Job domains, pre-effect admission and live claim checks |
 | `context_access.rs` | Non-portable visibility epochs and closed temporary-context replay constraints; original evidence remains |
 | `boundary.rs` | Read-source constraints carried through worker gates and attenuated Root App grants |

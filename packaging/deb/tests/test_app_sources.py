@@ -644,7 +644,7 @@ def apt_selection(tmp_path, monkeypatch):
     }))
     monkeypatch.setattr(packages, "ROOT", root)
     configuration = {"headless_set": "claw-apps-agent", "desktop_extras": ["claw-app-mail-desktop"]}
-    runtime = "claw-os-app-runtime-v1 (>= 0.2.1)"
+    runtime = "yuos-app-runtime-v1 (>= 0.2.1)"
     records = [
         {"Package": "claw-apps-agent", "Version": "0.2.1", "Depends": "claw-app-alpha, claw-cap-beta"},
         {"Package": "claw-apps-desktop", "Version": "0.2.1", "Depends": "claw-apps-agent, claw-app-native-desktop"},
@@ -675,7 +675,7 @@ def test_official_package_selection_resolves_one_library_owner_without_a_desktop
     with pytest.raises(ValueError, match="Missing"):
         packages.selection([record for record in records if record["Package"] != "claw-cap-beta"],
                            "agent", configuration)
-    records[3]["Depends"] = "claw-os-app-runtime-v1, claw-app-support-v1"
+    records[3]["Depends"] = "yuos-app-runtime-v1, claw-app-support-v1"
     with pytest.raises(ValueError, match="runtime floor"):
         packages.selection(records, "agent", configuration)
 
@@ -802,7 +802,7 @@ def test_official_package_bytes_have_one_dpkg_owner_and_never_own_the_os_sdk(tmp
     with pytest.raises(ValueError, match="OS-owned SDK"):
         packages.verify_packages(tmp_path, [sdk])
     authority = build("claw-app-bad-abi", "usr/share/clawos-fixture/not-an-authority",
-                      "claw-os-app-runtime-v1 (= 0.2.1)")
+                      "yuos-app-runtime-v1 (= 0.2.1)")
     with pytest.raises(ValueError, match="cannot provide"):
         packages.verify_packages(tmp_path, [authority])
     (archives / (first["Package"] + ".deb")).write_bytes(b"changed")
@@ -824,7 +824,7 @@ def test_runtime_provides_uses_the_platform_implementation_version(tmp_path):
         "MIN_BASE_VERSION": "1:0.2.0", "MIN_DESKTOP_VERSION": "1:0.2.0",
     })
     control = packages.fields(rendered.read_text())
-    assert "claw-os-app-runtime-v1 (= 0.2.1)" in control["Provides"]
+    assert "yuos-app-runtime-v1 (= 0.2.1)" in control["Provides"]
     assert "claw-os-launcher-backend-v1 (= 1)" in control["Provides"]
     assert "claw-apps-agent" in control["Recommends"]
     assert "claw-app-support" not in control["Depends"]
@@ -832,7 +832,7 @@ def test_runtime_provides_uses_the_platform_implementation_version(tmp_path):
     assert control["Replaces"] == "claw-os-desktop (<< 1:0.2.1)"
     desktop = (ROOT / "packaging/deb/claw-os-desktop/control").read_text()
     desktop = desktop.replace("__APP_RUNTIME_VERSION__", packages.platform()["version"])
-    assert "claw-os-app-runtime-v1 (>= 0.2.1)" in packages.fields(desktop)["Depends"]
+    assert "yuos-app-runtime-v1 (>= 0.2.1)" in packages.fields(desktop)["Depends"]
 
     spec = importlib.util.spec_from_file_location(
         "native_runtime_assets", ROOT / "packaging/deb/native_runtime_assets.py",
@@ -931,7 +931,7 @@ def _assert_summarize_public_wire(app, python, root):
     scenario = root / "scenario.json"
     scenario.write_text("{}")
     log = root / "wire.jsonl"
-    peer = root / "cos"
+    peer = root / "yu"
     peer.write_text(
         f"#!{sys.executable}\n"
         "import json, os, sys\n"
@@ -1119,7 +1119,7 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     )
     document = tmp_path / "synthetic.txt"
     document.write_text("immutable capability in the real Agent composition")
-    policy = tmp_path / "cos"
+    policy = tmp_path / "yu"
     policy.write_text(
         '#!/bin/sh\n'
         'test "$1:$2:$3" = "--wire=1:__policy:check" || exit 99\n'

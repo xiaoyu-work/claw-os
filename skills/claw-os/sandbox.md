@@ -1,6 +1,6 @@
 # Sandboxed Execution
 
-Use the `cos_sandbox` tool — **not the shell** — to run any model-generated, user-supplied, or otherwise untrusted code. It is the only operation in this skill set that requires the dedicated tool; there is no `cos sandbox` CLI command.
+Use the `cos_sandbox` tool — **not the shell** — to run any model-generated, user-supplied, or otherwise untrusted code. It is the only operation in this skill set that requires the dedicated tool; there is no `yu sandbox` CLI command.
 
 ## When to use
 
@@ -13,7 +13,7 @@ For trusted long-running processes, use the `cos_proc` tool (`spawn`) instead �
 
 ## Tool shape
 
-`cos_sandbox` exposes one command: `exec`. Call it like every other cos primitive proxy — a `command` field plus an `args` array of positional flags and the command to run.
+`cos_sandbox` exposes one command: `exec`. Call it like every other yu primitive proxy — a `command` field plus an `args` array of positional flags and the command to run.
 
 ```json
 {

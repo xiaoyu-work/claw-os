@@ -26,7 +26,7 @@ required=()
 case "$component" in
     agent)
         required=(
-            usr/local/bin/cos
+            usr/local/bin/yu
             usr/local/bin/clawd
             usr/local/bin/claw-agentd
             usr/local/bin/claw-extension-host
@@ -84,11 +84,11 @@ case "$component" in
         test "$(stat -c '%a' "$extract/payload/usr/lib/cos/skills/claw-os")" = "755"
         test "$(stat -c '%a' "$extract/payload/usr/lib/cos/skills/claw-os/SKILL.md")" = "644"
         runtime_version="$(python3 scripts/app_packages.py runtime-version)"
-        dpkg-deb -f "$deb" Provides | grep -Fq "claw-os-app-runtime-v1 (= $runtime_version)"
+        dpkg-deb -f "$deb" Provides | grep -Fq "yuos-app-runtime-v1 (= $runtime_version)"
         ;;
     base)
         required=(usr/local/bin/cos-init usr/lib/systemd/system/cos-home-setup.service)
-        if grep -Fxq './usr/local/bin/cos' "$files" \
+        if grep -Fxq './usr/local/bin/yu' "$files" \
             || grep -q '/usr/lib/cos/apps/' "$files"; then
             echo "error: Base contains Agent-owned binaries or Apps" >&2
             exit 1

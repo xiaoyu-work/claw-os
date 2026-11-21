@@ -126,9 +126,9 @@ enforced by `authority_modules_do_not_read_trust_labels`.
 ## Tests
 
 ```bash
-cargo test -p cos agent::trust -- --test-threads=1
-cargo test -p cos agent::trust::adversarial_tests -- --test-threads=1
-cargo test -p cos agent::trust::projection_tests -- --test-threads=1
+cargo test -p yu agent::trust -- --test-threads=1
+cargo test -p yu agent::trust::adversarial_tests -- --test-threads=1
+cargo test -p yu agent::trust::projection_tests -- --test-threads=1
 ```
 
 ## Change Together

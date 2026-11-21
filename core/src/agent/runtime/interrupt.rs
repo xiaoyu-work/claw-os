@@ -10,7 +10,7 @@
 //!
 //! In production we routinely run multiple concurrent agent sessions
 //! in the same process — gateway adapters spawn one session per chat
-//! channel, the IPC `cos agent service` worker runs one session per
+//! channel, the IPC `yu agent service` worker runs one session per
 //! `submit`. A naive process-wide kill switch would tear them all
 //! down at once. Each session registers under its own
 //! [`Handle::session_id`]; signaling one is a no-op for the rest.
@@ -25,7 +25,7 @@
 //!    map entry still points at this handle's own flag** — see the
 //!    re-register hazard discussion below.
 //!
-//! External signalers (e.g. a `cos agent interrupt <session-id>`
+//! External signalers (e.g. a `yu agent interrupt <session-id>`
 //! command, a Ctrl-C handler installed by the CLI) call [`signal`]
 //! with the target session id. Returns `true` if a session was
 //! found, `false` otherwise — useful for distinguishing "session
@@ -211,7 +211,7 @@ pub fn signal(session_id: &str) -> bool {
 }
 
 /// Snapshot of currently-registered session ids. Useful for the CLI's
-/// `cos agent interrupt --list` surface.
+/// `yu agent interrupt --list` surface.
 pub fn registered_sessions() -> Vec<String> {
     registry()
         .lock()

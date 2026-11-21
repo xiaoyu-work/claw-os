@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 /// Tasks registered via [`spawn`] survive the foreground future
 /// returning and are awaited by [`drain`]. This is the exact
-/// pattern `cos agent ask` relies on for the auto-curator.
+/// pattern `yu agent ask` relies on for the auto-curator.
 #[test]
 fn drain_awaits_registered_tasks() {
     let runtime = tokio::runtime::Builder::new_current_thread()

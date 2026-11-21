@@ -60,5 +60,5 @@ approval prompt at execution time.
 ## Tests
 
 ```bash
-cargo test -p cos session:: -- --test-threads=1
+cargo test -p yu session:: -- --test-threads=1
 ```

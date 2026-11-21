@@ -4,7 +4,7 @@
 //! model maintains an explicit, structured list of subtasks for the
 //! current session, marking items as it works through them. The list
 //! lives in `<data_dir>/agent/todos/<session_id>.json` so it survives
-//! `cos agent ask` invocation boundaries within the same session.
+//! `yu agent ask` invocation boundaries within the same session.
 //!
 //! Why an explicit todo tool instead of just letting the model
 //! free-form plan in chat:
@@ -131,7 +131,7 @@ impl TodoList {
 /// caller's update. We hold a per-session `Mutex` across the RMW so
 /// each `set_status` is serial against itself within one process.
 /// Cross-process serialisation would need a real lock file; in
-/// practice each `cos agent` invocation owns a session id, so the
+/// practice each `yu agent` invocation owns a session id, so the
 /// in-process lock is sufficient.
 pub struct TodoStore {
     root: PathBuf,

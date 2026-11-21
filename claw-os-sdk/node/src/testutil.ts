@@ -1,4 +1,4 @@
-// Test-only helper: installs a fake `cos` binary so transport tests
+// Test-only helper: installs a fake `yu` binary so transport tests
 // run without a real kernel. Not part of the published package
 // (excluded from the build tsconfig).
 
@@ -26,14 +26,14 @@ export function wireError(error: string, code: string): string {
 }
 
 /**
- * Write a fake `cos` executable that prints `stdout` and exits with
+ * Write a fake `yu` executable that prints `stdout` and exits with
  * `exitCode`, recording the argv it received to a sidecar file. The
  * script is a Node program with a shebang so spawnSync can exec it
  * directly on Linux.
  */
 export function installFakeCos(stdout: string, exitCode = 0): FakeCos {
   const dir = mkdtempSync(join(tmpdir(), "claw-fakecos-"));
-  const bin = join(dir, "cos");
+  const bin = join(dir, "yu");
   const argvOut = join(dir, "argv.txt");
   const script = `#!/usr/bin/env node
 const fs = require("fs");

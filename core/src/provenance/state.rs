@@ -67,7 +67,7 @@
 //!   generation is whatever the old state said — and nothing local can
 //!   tell it apart from the present. For the owner domain that means
 //!   the owner (or same-user malware); for the system domain it means
-//!   root, who can already replace the `cos` binary.
+//!   root, who can already replace the `yu` binary.
 //!
 //! Detecting a *coordinated* rollback would need a monotonic anchor
 //! outside the domain — a TPM counter, a remote attestation service, or

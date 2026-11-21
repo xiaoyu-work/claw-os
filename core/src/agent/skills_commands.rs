@@ -1,7 +1,7 @@
 use super::skills;
 use serde_json::{json, Value};
 
-/// `cos agent skills [list|info <id>|disabled|errors|root]` — exposes
+/// `yu agent skills [list|info <id>|disabled|errors|root]` — exposes
 /// the on-disk skill registry under `data_dir/agent/skills/`.
 pub(super) fn skills_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
@@ -27,7 +27,7 @@ pub(super) fn skills_cmd(args: &[String]) -> Result<Value, String> {
         "info" => {
             let id = args.get(1).cloned().unwrap_or_default();
             if id.is_empty() {
-                return Err("usage: cos agent skills info <id>".into());
+                return Err("usage: yu agent skills info <id>".into());
             }
             let res = skills::loader::load_default();
             if let Some(s) = res.skills.get(&id) {
@@ -81,7 +81,7 @@ pub(super) fn skills_cmd(args: &[String]) -> Result<Value, String> {
             let archive = args.get(1).cloned().unwrap_or_default();
             if archive.is_empty() {
                 return Err(
-                    "usage: cos agent skills install <archive.zip> [--force]".into(),
+                    "usage: yu agent skills install <archive.zip> [--force]".into(),
                 );
             }
             let force = args.iter().any(|a| a == "--force" || a == "-f");
@@ -107,7 +107,7 @@ pub(super) fn skills_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent skills usage <stats|record|path|clear>`
+/// `yu agent skills usage <stats|record|path|clear>`
 ///
 /// Read/write surface over the skill-invocation JSONL log
 /// ([`crate::agent::skills::provenance::UsageStore`]). Lives at
@@ -125,7 +125,7 @@ pub(super) fn skills_cmd(args: &[String]) -> Result<Value, String> {
 ///   or pipe into their own analysis tooling.
 /// * `clear` — truncate the log. Refuses without `--yes` so a
 ///   mistyped command can't wipe weeks of telemetry.
-/// `cos agent skills guard <id> [--provenance <p>] [--require-allowed-tools] [--max-file-bytes N] [--ignore-trust]`
+/// `yu agent skills guard <id> [--provenance <p>] [--require-allowed-tools] [--max-file-bytes N] [--ignore-trust]`
 ///
 /// Run [`crate::agent::skills::provenance::Guard`] against an
 /// installed skill loaded by [`crate::agent::skills::loader::load_default`]
@@ -217,7 +217,7 @@ fn skills_guard_cmd_against(
         }
     }
 
-    let id = id.ok_or_else(|| "usage: cos agent skills guard <id>".to_string())?;
+    let id = id.ok_or_else(|| "usage: yu agent skills guard <id>".to_string())?;
 
     let skill = skills
         .get(&id)
@@ -297,7 +297,7 @@ fn skills_usage_cmd_at(args: &[String], path: &std::path::Path) -> Result<Value,
                 .cloned()
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| {
-                    "usage: cos agent skills usage record <id> --duration-ms N [--ok|--error] [--by <caller>]"
+                    "usage: yu agent skills usage record <id> --duration-ms N [--ok|--error] [--by <caller>]"
                         .to_string()
                 })?;
             let mut duration_ms: Option<u64> = None;
@@ -379,7 +379,7 @@ fn skills_usage_cmd_at(args: &[String], path: &std::path::Path) -> Result<Value,
     }
 }
 
-/// `cos agent skills hub <list|show|install> <owner/repo> [<id>] [--force]`
+/// `yu agent skills hub <list|show|install> <owner/repo> [<id>] [--force]`
 ///
 /// Talks to a GitHub Releases-based skills hub
 /// ([`crate::agent::skills::hub`]). `list` fetches the catalogue
@@ -399,7 +399,7 @@ fn skills_hub_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::skills::hub::{HubConfig, SkillsHub};
 
     let sub = args.first().map(|s| s.as_str()).ok_or_else(|| {
-        "usage: cos agent skills hub <list|show|install> <owner/repo> [<id>] [--force]".to_string()
+        "usage: yu agent skills hub <list|show|install> <owner/repo> [<id>] [--force]".to_string()
     })?;
 
     let spec = args
@@ -407,7 +407,7 @@ fn skills_hub_cmd(args: &[String]) -> Result<Value, String> {
         .cloned()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            format!("usage: cos agent skills hub {sub} <owner/repo> [<id>] [--force]")
+            format!("usage: yu agent skills hub {sub} <owner/repo> [<id>] [--force]")
         })?;
     let (owner, repo) = parse_owner_repo(&spec)?;
 
@@ -459,7 +459,7 @@ fn skills_hub_cmd(args: &[String]) -> Result<Value, String> {
                 .cloned()
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| {
-                    "usage: cos agent skills hub show <owner/repo> <id>".to_string()
+                    "usage: yu agent skills hub show <owner/repo> <id>".to_string()
                 })?;
             let resolved = runtime
                 .block_on(hub.resolve(&id))
@@ -481,7 +481,7 @@ fn skills_hub_cmd(args: &[String]) -> Result<Value, String> {
                 .cloned()
                 .filter(|s| !s.is_empty() && !s.starts_with("--"))
                 .ok_or_else(|| {
-                    "usage: cos agent skills hub install <owner/repo> <id> [--force]"
+                    "usage: yu agent skills hub install <owner/repo> <id> [--force]"
                         .to_string()
                 })?;
             let force = args.iter().any(|a| a == "--force" || a == "-f");

@@ -1,6 +1,6 @@
 # Process Sessions
 
-Call the `cos_proc` tool — **not the shell** — to spawn, query, and control long-running processes registered with cos. There is no user-facing `cos proc` CLI command.
+Call the `cos_proc` tool — **not the shell** — to spawn, query, and control long-running processes registered with cos. There is no user-facing `yu proc` CLI command.
 
 ## Tool shape
 

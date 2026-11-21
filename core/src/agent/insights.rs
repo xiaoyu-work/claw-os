@@ -1,5 +1,5 @@
 //! LLM usage insights — aggregate the JSONL run-record stream into
-//! human-readable summaries for `cos agent status`, periodic
+//! human-readable summaries for `yu agent status`, periodic
 //! reports, and budget enforcement decisions.
 //!
 //! Reads from `paths::ai_run_log_path()` (or any path the caller
@@ -84,7 +84,7 @@ impl InsightsReport {
 
     pub fn from_path_filtered(path: &Path, filter: &InsightsFilter) -> Self {
         // Stream the JSONL log line-by-line so a multi-GB run log
-        // doesn't blow the heap during `cos agent status` or budget
+        // doesn't blow the heap during `yu agent status` or budget
         // enforcement. A missing file yields an empty report.
         let Ok(file) = File::open(path) else {
             return Self::default();
@@ -172,7 +172,7 @@ impl InsightsReport {
     }
 
     /// Return the most recent `n` records as parsed structs (newest
-    /// last). Useful for `cos agent status --tail 5`-style readouts.
+    /// last). Useful for `yu agent status --tail 5`-style readouts.
     pub fn recent(path: &Path, n: usize) -> Vec<LlmRunRecord> {
         Self::recent_filtered(path, n, &InsightsFilter::default())
     }

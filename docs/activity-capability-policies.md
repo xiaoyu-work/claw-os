@@ -9,7 +9,7 @@ ordinary permission checks.** Activity goals and free-text planning boundaries
 are still untrusted context, not policy enforcement. These controls are separate
 from [finite execution limits](activity-execution-limits.md).
 They also do not replace protected owner App review or the App-service admission
-gate. `cos review` and the native OS review presenter remain the review surfaces;
+gate. `yu review` and the native OS review presenter remain the review surfaces;
 an Activity policy is not an App confirmation or a background-service grant.
 
 ## Rule meanings
@@ -85,10 +85,10 @@ boundary. The TUI never retries a stale revision or treats a policy as a grant.
 ```bash
 activity_id="00000000-0000-4000-8000-000000000001" # replace with your Activity ID
 
-cos activity capability-policy "$activity_id"
+yu activity capability-policy "$activity_id"
 
 # Initial creation: omit --expected-revision only when no policy exists.
-cos activity set-capability-policy "$activity_id" --policy '{
+yu activity set-capability-policy "$activity_id" --policy '{
   "rules": [
     {"verb":"fs.read","mode":"normal","scopes":[
       {"kind":"path","value":"/home/user/project/**"}
@@ -105,13 +105,13 @@ The initial policy is revision 1 and enabled. Read the current policy before
 each subsequent mutation, and use its returned revision:
 
 ```bash
-cos activity capability-policy "$activity_id"
+yu activity capability-policy "$activity_id"
 
 # These numbers assume no intervening policy changes.
-cos activity disable-capability-policy "$activity_id" --expected-revision 1
-cos activity set-capability-policy "$activity_id" --expected-revision 2 \
+yu activity disable-capability-policy "$activity_id" --expected-revision 1
+yu activity set-capability-policy "$activity_id" --expected-revision 2 \
   --policy '{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}]}'
-cos activity enable-capability-policy "$activity_id" --expected-revision 3
+yu activity enable-capability-policy "$activity_id" --expected-revision 3
 ```
 
 `set-capability-policy` replaces the rule list, not just one row. Updating an
@@ -121,7 +121,7 @@ of overwriting a newer edit. Read and review the new policy before explicitly
 resubmitting; never automatically retry with a newer revision.
 
 These commands support normal JSON output and the existing
-`cos activity --help` and `cos activity <command> --schema` discovery.
+`yu activity --help` and `yu activity <command> --schema` discovery.
 `--policy` takes bounded draft JSON, not a filename or executable expression.
 
 ## Disabled is a stop boundary, not unrestricted access

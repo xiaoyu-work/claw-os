@@ -32,7 +32,7 @@
 //! # No CLI writer
 //!
 //! The kernel does **not** ship a write surface for this file. The
-//! UI is the sole writer. A read-only `cos agent override show <app>`
+//! UI is the sole writer. A read-only `yu agent override show <app>`
 //! exists for debugging.
 
 use std::fs;

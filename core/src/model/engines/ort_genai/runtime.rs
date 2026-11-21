@@ -27,7 +27,7 @@ impl OrtGenaiRuntime {
     pub fn load(lib_path: &Path) -> Result<Self, EngineError> {
         if !lib_path.is_file() {
             return Err(EngineError::NotInstalled(format!(
-                "expected ort-genai runtime at {} — run `cos engine update ort-genai` or check `cos engine list`",
+                "expected ort-genai runtime at {} — run `yu engine update ort-genai` or check `yu engine list`",
                 lib_path.display()
             )));
         }
@@ -71,7 +71,7 @@ impl OrtGenaiRuntime {
             crate::engine_pkg::active_library_path(super::PKG_ENGINE_NAME, super::LIB_BASENAME)
                 .ok_or_else(|| {
                     EngineError::NotInstalled(
-                        "no active ort-genai engine — run `cos engine update ort-genai` to install"
+                        "no active ort-genai engine — run `yu engine update ort-genai` to install"
                             .into(),
                     )
                 })?;

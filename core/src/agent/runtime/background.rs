@@ -2,9 +2,9 @@
 //!
 //! The auto-curator and the semantic indexer both `tokio::spawn` LLM /
 //! DB work after a turn produces a final answer. In interactive
-//! (`cos agent chat`) mode this is harmless — the tokio runtime stays
+//! (`yu agent chat`) mode this is harmless — the tokio runtime stays
 //! alive across turns and the spawned tasks eventually finish on
-//! their own. In one-shot (`cos agent ask`) mode the CLI builds a
+//! their own. In one-shot (`yu agent ask`) mode the CLI builds a
 //! current-thread runtime, `block_on`s the ask future, and then drops
 //! the runtime. Dropping a tokio runtime **cancels every spawned
 //! task immediately** (only `spawn_blocking` work is given a chance
@@ -39,7 +39,7 @@ static PENDING: LazyLock<Mutex<Vec<JoinHandle<()>>>> = LazyLock::new(|| Mutex::n
 /// panics — except the handle is also tracked.
 ///
 /// Opportunistically prunes any already-finished handles from the
-/// registry on every call so an interactive `cos agent chat` session
+/// registry on every call so an interactive `yu agent chat` session
 /// doesn't accumulate stale entries across turns. (`JoinHandle`'s
 /// `Drop` is silent — it doesn't itself abort a finished task, so
 /// this is purely a memory hygiene step.)

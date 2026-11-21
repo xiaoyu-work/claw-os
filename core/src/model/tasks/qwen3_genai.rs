@@ -339,13 +339,13 @@ pub fn build_from_config(cfg: &crate::config::EmbedConfig) -> Qwen3GenaiEmbedder
 }
 
 /// Sanity-check the runtime / model dir without actually loading the
-/// model. Used by `cos agent semantic status` to give a useful error
+/// model. Used by `yu agent semantic status` to give a useful error
 /// when the local embedder is configured but the engine isn't.
 pub fn precheck(cfg: &crate::config::EmbedConfig) -> Result<(), String> {
     let dir = resolve_model_dir(cfg);
     if !dir.exists() {
         return Err(format!(
-            "model dir does not exist: {} (run `cos model import <olive-export-dir> --as qwen3-embedding-0.6b`)",
+            "model dir does not exist: {} (run `yu model import <olive-export-dir> --as qwen3-embedding-0.6b`)",
             dir.display()
         ));
     }
@@ -356,10 +356,10 @@ pub fn precheck(cfg: &crate::config::EmbedConfig) -> Result<(), String> {
         ));
     }
     if !crate::model::engines::ort::is_installed() {
-        return Err("ONNX Runtime dependency is not installed; run `cos engine update ort`".into());
+        return Err("ONNX Runtime dependency is not installed; run `yu engine update ort`".into());
     }
     if !crate::model::engines::ort_genai::is_installed() {
-        return Err("ort-genai engine is not installed; run `cos engine update ort-genai`".into());
+        return Err("ort-genai engine is not installed; run `yu engine update ort-genai`".into());
     }
     Ok(())
 }

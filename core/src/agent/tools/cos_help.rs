@@ -1,4 +1,4 @@
-//! Progressive, read-only discovery of the public `cos` command tree.
+//! Progressive, read-only discovery of the public `yu` command tree.
 //!
 //! The tool consumes the same command catalogue as terminal help, but accepts
 //! only structural path segments. It cannot express flags, operands, hidden
@@ -20,7 +20,7 @@ impl Tool for CosHelp {
     }
 
     fn description(&self) -> &str {
-        "Progressively explore the machine-readable `cos` CLI command tree \
+        "Progressively explore the machine-readable `yu` CLI command tree \
          without running commands. Start with path=[]; follow a returned \
          namespace with path=[\"agent\"], then inspect a command with \
          path=[\"agent\",\"usage\"]. Path `[\"app\"]` describes the human CLI; \
@@ -229,7 +229,7 @@ fn discover_app(app_id: &str) -> Value {
             "found": true,
             "path": ["app", app_id],
             "kind": if subcommands.is_empty() { "command" } else { "namespace" },
-            "command": format!("cos app {app_id}"),
+            "command": format!("yu app {app_id}"),
             "description": description,
             "subcommands": subcommands,
             "model_callable": false,
@@ -281,7 +281,7 @@ fn discover_app_command(app_id: &str, command: &str) -> Value {
             "found": true,
             "path": ["app", app_id, command],
             "kind": "command",
-            "command": format!("cos app {app_id} {command}"),
+            "command": format!("yu app {app_id} {command}"),
             "description": description,
             "model_callable": false,
             "model_tool": Value::Null,
@@ -307,7 +307,7 @@ fn discover_app_command(app_id: &str, command: &str) -> Value {
         "found": true,
         "path": ["app", app_id, command],
         "kind": "command",
-        "command": format!("cos app {app_id} {command}"),
+        "command": format!("yu app {app_id} {command}"),
         "description": operation.summary.current(),
         "parameters": schema["parameters"],
         "stdin": schema["stdin"],
@@ -338,12 +338,12 @@ fn discover_agent_dev_command(command: &str) -> Value {
             "available": subcommands,
         });
     }
-    let canonical = (command == "usage").then_some("cos agent usage");
+    let canonical = (command == "usage").then_some("yu agent usage");
     json!({
         "found": true,
         "path": ["agent", "dev", command],
         "kind": "command",
-        "command": format!("cos agent dev {command}"),
+        "command": format!("yu agent dev {command}"),
         "canonical_command": canonical,
         "stability": "internal",
         "model_callable": command == "usage",
@@ -366,7 +366,7 @@ fn discover_agent_setup_node(node: &str) -> Value {
             "found": true,
             "path": ["agent", "setup", node],
             "kind": "namespace",
-            "command": format!("cos agent setup {node}"),
+            "command": format!("yu agent setup {node}"),
             "description": description,
             "subcommands": help["subcommands"],
             "flags": help["flags"],
@@ -378,7 +378,7 @@ fn discover_agent_setup_node(node: &str) -> Value {
             "found": true,
             "path": ["agent", "setup", node],
             "kind": "command",
-            "command": format!("cos agent setup {node}"),
+            "command": format!("yu agent setup {node}"),
             "description": description,
             "model_callable": false,
         });
@@ -413,7 +413,7 @@ fn discover_agent_setup_subcommand(modality: &str, subcommand: &str) -> Value {
         "found": true,
         "path": ["agent", "setup", modality, subcommand],
         "kind": "command",
-        "command": format!("cos agent setup {modality} {subcommand}"),
+        "command": format!("yu agent setup {modality} {subcommand}"),
         "description": description,
         "flags": help["flags"],
         "model_callable": false,
@@ -428,7 +428,7 @@ fn discover_nested_builtin(path: &[String]) -> Option<Value> {
             "found": true,
             "path": path,
             "kind": "namespace",
-            "command": format!("cos {}", path.join(" ")),
+            "command": format!("yu {}", path.join(" ")),
             "subcommands": children
                 .into_iter()
                 .map(|(name, description)| json!({
@@ -462,7 +462,7 @@ fn discover_nested_builtin(path: &[String]) -> Option<Value> {
         "found": true,
         "path": path,
         "kind": "command",
-        "command": format!("cos {}", path.join(" ")),
+        "command": format!("yu {}", path.join(" ")),
         "description": description,
         "model_callable": usage_scope,
         "model_tool": usage_scope.then_some("cos_usage"),

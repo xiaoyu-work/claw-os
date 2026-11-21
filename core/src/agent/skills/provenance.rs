@@ -5,7 +5,7 @@
 //!
 //!   * [`Provenance`] — where this skill came from (vendor / hub /
 //!     user / local). Used by the guard layer (untrusted sources
-//!     get stricter checks) and by `cos agent status` to display
+//!     get stricter checks) and by `yu agent status` to display
 //!     a sourcecode hint per skill.
 //!   * [`UsageStore`] — JSONL append-only log of skill invocations
 //!     with bounded in-memory aggregation. Survives restarts via
@@ -288,7 +288,7 @@ fn manifest_allowed_tools_empty(m: &SkillManifest) -> bool {
 // [`crate::provenance::PackageKind::Skill`]. Verification is
 // mandatory, trust roots are root-owned system stores plus the
 // owner's per-user store, and unsigned local development needs an
-// explicit `cos provenance dev-trust` decision.
+// explicit `yu provenance dev-trust` decision.
 
 /// Walk the skill dir recursively (bounded by [`MAX_GUARD_WALK_FILES`]
 /// and [`MAX_GUARD_WALK_DEPTH`]) and return the first sibling file

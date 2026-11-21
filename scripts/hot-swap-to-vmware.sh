@@ -7,7 +7,7 @@
 #   scripts/hot-swap-to-vmware.sh [options] TARGET [TARGET ...]
 #
 # TARGETs (default install path /usr/bin/<name>):
-#   cos                    — workspace root,        target/release/cos
+#   cos                    — workspace root,        target/release/yu
 #   cos-agent-ui           — desktop/agent,         target/release/cos-agent-ui
 #   cos-agent-bridge       — desktop/agent,         target/release/cos-agent-bridge
 #   cosmic-files           — build/native-apps/cosmic-files, target/release/cosmic-files
@@ -75,7 +75,7 @@ target_spec() {
       echo "Media Player requires its signed manifest and claw-os-media-player-v1; update paired Agent/Desktop packages, not only the binary." >&2
       return 1
       ;;
-    cos)                   echo ".|cos|/usr/bin/cos" ;;
+    yu)                    echo ".|yu|/usr/bin/yu" ;;
     cos-agent-ui)          echo "desktop/agent|cos-agent-ui|/usr/bin/cos-agent-ui" ;;
     cos-agent-bridge)      echo "desktop/agent|cos-agent-bridge|/usr/bin/cos-agent-bridge" ;;
     cosmic-files)          echo "build/native-apps/cosmic-files|cosmic-files|/usr/bin/cosmic-files" ;;

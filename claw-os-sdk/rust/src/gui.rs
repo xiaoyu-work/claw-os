@@ -10,8 +10,8 @@
 //!
 //! # How a GUI app is launched
 //!
-//! When an app declares a `desktop` block in `app.json`, `cos app
-//! install` writes a launcher whose `Exec` is `cos app <id> --gui`.
+//! When an app declares a `desktop` block in `app.json`, `yu app
+//! install` writes a launcher whose `Exec` is `yu app <id> --gui`.
 //! Activating it routes the launch back through the kernel, which spawns
 //! the app with `COS_APP_GUI=1` and `COS_APP_ID` set, so identity,
 //! audit, and consent apply to the GUI exactly as to the headless path.

@@ -213,7 +213,7 @@ impl Drop for McpServerHandle {
             let _ = child.start_kill();
             // Reap in a detached task so a zombie doesn't linger.
             // This requires a tokio runtime to be present; if Drop
-            // fires outside one (the cos binary doesn't construct
+            // fires outside one (the yu binary doesn't construct
             // these handles outside an agent run), the spawn silently
             // fails and the OS reaps on parent exit, which is fine.
             if let Ok(handle) = tokio::runtime::Handle::try_current() {

@@ -84,5 +84,5 @@ Credential unit tests live under `core/test/unit/credential/`. Run combined
 tests serially because they share process-global environment variables:
 
 ```bash
-cargo test -p cos credential:: -- --test-threads=1
+cargo test -p yu credential:: -- --test-threads=1
 ```

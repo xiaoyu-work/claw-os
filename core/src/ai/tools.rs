@@ -1,4 +1,4 @@
-//! `cos ai tool` — App-facing Tool catalog and executor.
+//! `yu ai tool` — App-facing Tool catalog and executor.
 //!
 //! A **Tool** is a single, narrowly-scoped, capability-guarded action
 //! that the kernel exposes to App-level AI workflows. Tools are the
@@ -9,11 +9,11 @@
 //! ----------------------
 //!
 //! - Regular Apps use the kernel's capability system directly (their
-//!   own UI shells out to `cos fs ls`, opens files, etc).
+//!   own UI shells out to `yu fs ls`, opens files, etc).
 //! - When an App routes *AI-driven* actions to the system, every such
 //!   action goes through one of these Tools. The App declares which
 //!   Tools it wants in its manifest (`ai.tools = ["fs.read_text", ...]`);
-//!   the user grants them at install time via `cos app consent grant`.
+//!   the user grants them at install time via `yu app consent grant`.
 //!
 //! Why a Tool registry rather than re-using the verb registry directly?
 //! -------------------------------------------------------------------
@@ -32,7 +32,7 @@
 //!
 //! Every successful or denied Tool call appends one row to
 //! `<log_dir>/ai.jsonl` with `verb = "ai.tool.<name>"`, sharing the
-//! same `LlmRunRecord` shape that `cos ai chat` already uses. The
+//! same `LlmRunRecord` shape that `yu ai chat` already uses. The
 //! kernel-side identity check (`enforce_identity_for`, see
 //! `core/src/ai/chat.rs`) is shared so impersonation is impossible.
 //!
@@ -274,9 +274,9 @@ impl std::error::Error for ToolExecutionError {}
 /// is then consumed. This prevents a mutable pathname from being swapped
 /// between the capability decision and the operation.
 ///
-/// Identity enforcement is the caller's responsibility — `cos ai tool`
+/// Identity enforcement is the caller's responsibility — `yu ai tool`
 /// validates the env claim, registered App session, and process ancestry
-/// before reaching this function, sharing the gate with `cos ai chat`.
+/// before reaching this function, sharing the gate with `yu ai chat`.
 pub(super) fn execute(
     tool_name: &str,
     app_id: &str,
@@ -330,7 +330,7 @@ pub(super) fn execute(
 /// Resolve `app_id` to its installed manifest and require `tool_name`
 /// to appear in the manifest's `ai.tools[]` allowlist. The kernel
 /// uses `COS_APPS_DIR` (default `/usr/lib/cos/apps`) to discover
-/// installed Apps — same convention `cos ai chat` uses.
+/// installed Apps — same convention `yu ai chat` uses.
 ///
 /// Errors remain typed through audit and wire serialization so callers
 /// never infer authorization state from human-readable text.
@@ -346,7 +346,7 @@ fn require_tool_in_app_policy(app_id: &str, tool_name: &str) -> Result<(), ToolE
         return Err(ToolExecutionError::PermissionDenied {
             message: format!(
                 "no ai policy: app `{app_id}` has no `ai` block in its manifest — \
-                 it cannot use `cos ai tool`. Add an `ai.tools[]` allowlist and re-install."
+                 it cannot use `yu ai tool`. Add an `ai.tools[]` allowlist and re-install."
             ),
             detail: None,
             reason: "no_ai_policy",

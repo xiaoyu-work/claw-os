@@ -2,7 +2,7 @@
 //
 // Apps that want to fulfil a model-proposed tool call (returned in
 // AiResponse.ToolCalls after Chat(..., ChatOptions{Tools: ...})) shell
-// out through this file to `cos ai tool <name> --app <id> --args
+// out through this file to `yu ai tool <name> --app <id> --args
 // <json>`. The kernel resolves the name against the catalog, derives
 // the caps verb + scope, runs caps::require under the app's own grants,
 // executes the implementation, and writes an audit row.
@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-// ToolUnavailableError: the `cos` binary could not be invoked or
+// ToolUnavailableError: the `yu` binary could not be invoked or
 // returned garbage (transport failure).
 type ToolUnavailableError struct{ Msg string }
 
@@ -42,7 +42,7 @@ type ToolResult struct {
 	Raw    map[string]any
 }
 
-// CatalogEntry is one row from `cos ai tools`.
+// CatalogEntry is one row from `yu ai tools`.
 type CatalogEntry struct {
 	Name          string
 	Summary       string
@@ -73,7 +73,7 @@ func CallTool(name string, args any, appID string) (*ToolResult, error) {
 		return nil, &ToolUnavailableError{Msg: "Tool: could not encode args: " + err.Error()}
 	}
 
-	out, err := cosCallJSON("cos ai tool "+name, []string{"ai", "tool", name, "--app", app, "--args", string(payload)})
+	out, err := cosCallJSON("yu ai tool "+name, []string{"ai", "tool", name, "--app", app, "--args", string(payload)})
 	if err != nil {
 		if denied, ok := err.(*DeniedError); ok {
 			return nil, &ToolDeniedError{Payload: denied.Payload}
@@ -96,11 +96,11 @@ func CallTool(name string, args any, appID string) (*ToolResult, error) {
 	}, nil
 }
 
-// Catalog returns the live tool catalog as exposed by `cos ai tools`.
+// Catalog returns the live tool catalog as exposed by `yu ai tools`.
 // Apps shouldn't hard-code tool names without consulting this list; the
 // catalog evolves and a tool can be deprecated or renamed.
 func Catalog() ([]CatalogEntry, error) {
-	out, err := cosCallJSON("cos ai tools", []string{"ai", "tools"})
+	out, err := cosCallJSON("yu ai tools", []string{"ai", "tools"})
 	if err != nil {
 		if denied, ok := err.(*DeniedError); ok {
 			return nil, &ToolDeniedError{Payload: denied.Payload}

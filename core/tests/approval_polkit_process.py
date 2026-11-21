@@ -538,7 +538,7 @@ def run(args):
                 "auth required pam_unix.so\naccount required pam_unix.so\nsession required pam_permit.so\n"
             )
             for source, destination in (
-                (args.helper, HELPER), (args.cos, Path("/usr/local/bin/cos")),
+                (args.helper, HELPER), (args.cos, Path("/usr/local/bin/yu")),
             ):
                 shutil.copyfile(source, destination)
                 destination.chmod(0o755)
@@ -735,7 +735,7 @@ def run(args):
                     "session": "tui-approval-fixture", "reason": "TUI authentication fixture",
                 }, uid)["result"]
                 with contextlib.closing(Terminal(
-                    ["/usr/local/bin/cos", "agent", "chat", "--tui"], uid, uid, home,
+                    ["/usr/local/bin/yu", "agent", "chat", "--tui"], uid, uid, home,
                 )) as terminal:
                     terminal.expect(b"New Claw conversation")
                     offset = len(terminal.output)

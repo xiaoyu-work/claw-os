@@ -544,7 +544,7 @@ class Session:
     ) -> int:
         """For ops the kernel can't safely undo automatically.
 
-        `cos agent undo` will surface these as `Skipped` so a human can
+        `yu agent undo` will surface these as `Skipped` so a human can
         decide what to do; we still record them for the audit trail.
         """
         return self._record(

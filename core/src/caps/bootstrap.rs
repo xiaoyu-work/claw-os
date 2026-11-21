@@ -1,13 +1,13 @@
 //! Auto-bootstrap a user-CLI session when `cos` is invoked from a
-//! terminal, or as the non-interactive `cos app ...` desktop launcher,
+//! terminal, or as the non-interactive `yu app ...` desktop launcher,
 //! without an upstream `COS_SESSION`.
 //!
 //! ## Why
 //!
 //! Strict-mode caps enforcement requires every gated call to come from
 //! a known session in the proc registry. The canonical session-creation
-//! path is `cos proc spawn`, which sets `COS_SESSION` for its child.
-//! But when a real human runs `cos agent setup` or `cos agent chat`
+//! path is `yu proc spawn`, which sets `COS_SESSION` for its child.
+//! But when a real human runs `yu agent setup` or `yu agent chat`
 //! from a shell, there is no upstream session: the user just typed the
 //! command at a TTY. Without a fix every gated call would deny with
 //! "Permission denied (no active session)".
@@ -27,7 +27,7 @@
 //!    inherit the env) pick it up.
 //! 4. Returns a [`SessionGuard`] whose `Drop` impl removes the row
 //!    from the registry on clean exit. Crashes leave a ghost row;
-//!    `cos proc list` GCs stale entries via `is_alive(pid)`, so this
+//!    `yu proc list` GCs stale entries via `is_alive(pid)`, so this
 //!    self-heals over time.
 //!
 //! ## Failure handling (fail-closed)
@@ -119,7 +119,7 @@ fn bootstrap_user_cli_session_impl(
     let info = SessionInfo {
         session_id: session_id.clone(),
         pid,
-        command: std::iter::once(env::args().next().unwrap_or_else(|| "cos".to_string()))
+        command: std::iter::once(env::args().next().unwrap_or_else(|| "yu".to_string()))
             .chain(args.iter().cloned())
             .collect(),
         started_at: now_rfc3339(),

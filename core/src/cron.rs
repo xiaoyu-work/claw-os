@@ -484,8 +484,8 @@ fn create_job(job: &CronJob) -> Result<(), String> {
 }
 
 /// Atomic read-modify-write on a single cron job file. Eliminates
-/// the lost-update race between concurrent `cos cron run X` and
-/// `cos cron tick` invocations (the prior load_job + mutate +
+/// the lost-update race between concurrent `yu cron run X` and
+/// `yu cron tick` invocations (the prior load_job + mutate +
 /// save_job pattern would clobber whichever path finished writing
 /// second).
 fn update_job<F>(id: &str, transform: F) -> Result<CronJob, String>
@@ -1234,7 +1234,7 @@ fn set_nonblocking_fd(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
 /// Whether the job's last-recorded run is still active.
 ///
 /// Returns true only when the recorded pid is still alive. Crashes
-/// of the cos process while a run was marked `running` would
+/// of the yu process while a run was marked `running` would
 /// otherwise leave `last_run.status == "running"` on disk forever
 /// — blocking every subsequent tick under the default Skip policy.
 fn is_running(job: &CronJob) -> bool {
@@ -1486,12 +1486,12 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
 /// Register a new cron job.
 ///
-/// Usage: cos cron add <id> --schedule "*/5 * * * *" --command "..." [options]
+/// Usage: yu cron add <id> --schedule "*/5 * * * *" --command "..." [options]
 fn cmd_add(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args.first().ok_or(
-        "usage: cos cron add <id> --schedule \"EXPR\" --command \"CMD\" [--description TEXT] \
+        "usage: yu cron add <id> --schedule \"EXPR\" --command \"CMD\" [--description TEXT] \
          [--tier N] [--scope PATH] [--credentials k1,k2] [--overlap skip|queue|kill|allow] \
          [--timeout SECS]",
     )?;
@@ -1642,7 +1642,7 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
 fn cmd_remove(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
-    let id = args.first().ok_or("usage: cos cron remove <id>")?;
+    let id = args.first().ok_or("usage: yu cron remove <id>")?;
     let owner_uid = current_owner()?.uid;
     let job = load_job(id)?;
     require_job_owner(&job, owner_uid)?;
@@ -1707,7 +1707,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 fn cmd_status(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
-    let id = args.first().ok_or("usage: cos cron status <id>")?;
+    let id = args.first().ok_or("usage: yu cron status <id>")?;
     let job = load_job(id)?;
     require_job_owner(&job, current_owner()?.uid)?;
 
@@ -1718,7 +1718,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 fn cmd_enable(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
-    let id = args.first().ok_or("usage: cos cron enable <id>")?;
+    let id = args.first().ok_or("usage: yu cron enable <id>")?;
     let owner = current_owner()?;
     if !owner.caps.covers(&Cap::new(Verb::PROC_SPAWN, Scope::Wild)) {
         return Err("cron owner lacks proc.spawn:* for shell execution".to_string());
@@ -1759,7 +1759,7 @@ fn cmd_enable(args: &[String]) -> Result<Value, String> {
 fn cmd_disable(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::TIME_CRON, Scope::wild()).map_err(|v| v.to_string())?;
 
-    let id = args.first().ok_or("usage: cos cron disable <id>")?;
+    let id = args.first().ok_or("usage: yu cron disable <id>")?;
     let owner_uid = current_owner()?.uid;
     let job = update_job(id, |mut job| {
         require_job_owner(&job, owner_uid)?;
@@ -1776,13 +1776,13 @@ fn cmd_disable(args: &[String]) -> Result<Value, String> {
 
 /// View execution history for a job.
 ///
-/// Usage: cos cron logs <id> [--limit N]
+/// Usage: yu cron logs <id> [--limit N]
 fn cmd_logs(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     let id = args
         .first()
-        .ok_or("usage: cos cron logs <id> [--limit N]")?;
+        .ok_or("usage: yu cron logs <id> [--limit N]")?;
 
     let job = load_job(id)?;
     require_job_owner(&job, current_owner()?.uid)?;
@@ -1814,7 +1814,7 @@ fn cmd_logs(args: &[String]) -> Result<Value, String> {
 fn cmd_run(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
 
-    let id = args.first().ok_or("usage: cos cron run <id>")?;
+    let id = args.first().ok_or("usage: yu cron run <id>")?;
     let owner_uid = current_owner()?.uid;
 
     // Phase 1: claim the run slot atomically. update_job rejects
@@ -1945,7 +1945,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
 /// Process all due jobs. Called by an external scheduler (e.g., systemd timer)
 /// every minute.
 ///
-/// Usage: cos cron tick
+/// Usage: yu cron tick
 fn cmd_tick(_args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 

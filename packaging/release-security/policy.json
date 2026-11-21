@@ -57,9 +57,9 @@
     },
     {
       "critical": true,
-      "name": "cos",
+      "name": "yu",
       "package": "claw-os-agent",
-      "path": "/usr/local/bin/cos"
+      "path": "/usr/local/bin/yu"
     },
     {
       "critical": false,

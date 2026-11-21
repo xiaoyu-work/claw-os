@@ -65,7 +65,7 @@ pub(super) fn ask_cmd(args: &[String]) -> Result<Value, String> {
     let prompt = positional.first().cloned().unwrap_or_default();
     if prompt.is_empty() {
         return Err(
-            "usage: cos agent ask \"<prompt>\" [--full] [--session <id>] [--timeout-secs <n>]"
+            "usage: yu agent ask \"<prompt>\" [--full] [--session <id>] [--timeout-secs <n>]"
                 .into(),
         );
     }
@@ -156,7 +156,7 @@ impl TerminalOutputState {
     }
 }
 
-/// `cos agent providers [--names <a,b,c>] [--probe-credentials]`
+/// `yu agent providers [--names <a,b,c>] [--probe-credentials]`
 /// — diagnostic snapshot of every linked LLM provider plus the
 /// canonical credential surface that would configure each one.
 ///
@@ -175,10 +175,10 @@ impl TerminalOutputState {
 /// which can be slow on networked storage; the env-var probe is
 /// always cheap and always on.
 /// Internal: single-turn streaming helper. The async core that the
-/// removed `cos agent stream` CLI used to call. Kept as a helper
+/// removed `yu agent stream` CLI used to call. Kept as a helper
 /// so the streaming unit tests still exercise text accumulation,
 /// tool-call surfacing, warnings, etc. on the no-tools / no-memory
-/// path. Not reachable from any CLI today — `cos agent ask
+/// path. Not reachable from any CLI today — `yu agent ask
 /// --stream` uses `live_cmd_async` (the full agent loop) instead.
 async fn stream_cmd_async(
     provider: std::sync::Arc<dyn llm::Provider>,
@@ -312,7 +312,7 @@ async fn stream_cmd_async(
 }
 
 /// Select the Claw-owned full-screen terminal or the compatible line interface.
-/// App-gated requests remain exclusively under `cos ai chat --app`.
+/// App-gated requests remain exclusively under `yu ai chat --app`.
 pub(super) fn chat_cmd(args: &[String]) -> Result<Value, String> {
     let options = super::terminal::ChatOptions::parse(args)?;
     if options.use_tui(
@@ -400,7 +400,7 @@ async fn chat_cmd_async(
         let mut e = stderr.lock();
         let _ = writeln!(
             e,
-            "cos agent chat — provider={} model={} session={} memory={} streaming={} max_turns={} progressive_tools={}",
+            "yu agent chat — provider={} model={} session={} memory={} streaming={} max_turns={} progressive_tools={}",
             cfg.provider,
             cfg.model,
             session_id,

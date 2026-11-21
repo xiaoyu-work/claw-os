@@ -1,7 +1,7 @@
 use super::memory;
 use serde_json::{json, Value};
 
-/// `cos agent recall <query> [limit]` — FTS5 search across all
+/// `yu agent recall <query> [limit]` — FTS5 search across all
 /// recorded conversation messages. `--message <id>` expands one source.
 pub(super) fn recall_cmd(args: &[String]) -> Result<Value, String> {
     if args.first().is_some_and(|argument| argument == "--message") {
@@ -10,7 +10,7 @@ pub(super) fn recall_cmd(args: &[String]) -> Result<Value, String> {
             .filter(|_| args.len() == 2)
             .and_then(|value| value.parse::<i64>().ok())
             .filter(|id| *id > 0)
-            .ok_or_else(|| "usage: cos agent recall --message <positive-id>".to_string())?;
+            .ok_or_else(|| "usage: yu agent recall --message <positive-id>".to_string())?;
         let db = memory::sqlite_fts::MemoryDb::open_default()
             .map_err(|error| format!("memory db unavailable: {error}"))?;
         let mut row = db
@@ -23,7 +23,7 @@ pub(super) fn recall_cmd(args: &[String]) -> Result<Value, String> {
     }
     let query = args.first().cloned().unwrap_or_default();
     if query.is_empty() {
-        return Err("usage: cos agent recall \"<query>\" [limit] | --message <id>".into());
+        return Err("usage: yu agent recall \"<query>\" [limit] | --message <id>".into());
     }
     let limit: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
     let db = memory::sqlite_fts::MemoryDb::open_default()
@@ -53,10 +53,10 @@ pub(super) fn recall_cmd(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// `cos agent sessions [limit]` — recent conversation sessions
+/// `yu agent sessions [limit]` — recent conversation sessions
 /// ordered by most-recent activity.
 pub(super) fn sessions_cmd(args: &[String]) -> Result<Value, String> {
-    // `cos agent sessions [N]` keeps working as the list shortcut
+    // `yu agent sessions [N]` keeps working as the list shortcut
     // when N parses as a number. Otherwise the first arg is treated
     // as a verb: list / title / set-title / count / clear.
     let first = args.first().map(|s| s.as_str()).unwrap_or("list");
@@ -82,7 +82,7 @@ pub(super) fn sessions_cmd(args: &[String]) -> Result<Value, String> {
 
 fn sessions_health(args: &[String]) -> Result<Value, String> {
     if !args.is_empty() {
-        return Err("usage: cos agent sessions health".to_string());
+        return Err("usage: yu agent sessions health".to_string());
     }
     serde_json::to_value(
         memory::recovery::diagnose_default()
@@ -114,7 +114,7 @@ fn parse_repair_options(args: &[String]) -> Result<memory::recovery::RepairOptio
             }
             _ => {
                 return Err(
-                    "usage: cos agent sessions repair --dry-run | [--rebuild-fts] [--quarantine] --yes"
+                    "usage: yu agent sessions repair --dry-run | [--rebuild-fts] [--quarantine] --yes"
                         .to_string(),
                 );
             }
@@ -161,7 +161,7 @@ fn sessions_list_with(db: &memory::sqlite_fts::MemoryDb, limit: usize) -> Result
     }))
 }
 
-/// `cos agent sessions top [N]` — like `sessions list` but ordered
+/// `yu agent sessions top [N]` — like `sessions list` but ordered
 /// by message count desc (with last-activity ts as tiebreaker).
 /// Designed to point at exactly the sessions worth `sessions clear
 /// <id> --yes`-ing when memory.db is fat.
@@ -201,7 +201,7 @@ fn sessions_title(args: &[String]) -> Result<Value, String> {
         .first()
         .cloned()
         .filter(|s| !s.is_empty() && !s.starts_with("--"))
-        .ok_or_else(|| "usage: cos agent sessions title <session_id>".to_string())?;
+        .ok_or_else(|| "usage: yu agent sessions title <session_id>".to_string())?;
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
     sessions_title_with(&db, &id)
@@ -231,7 +231,7 @@ fn parse_set_title_args(args: &[String]) -> Result<(String, String), String> {
         .cloned()
         .filter(|s| !s.is_empty() && !s.starts_with("--"))
         .ok_or_else(|| {
-            "usage: cos agent sessions set-title <session_id> \"<title>\"".to_string()
+            "usage: yu agent sessions set-title <session_id> \"<title>\"".to_string()
         })?;
     let title_parts: Vec<String> = args
         .iter()
@@ -240,7 +240,7 @@ fn parse_set_title_args(args: &[String]) -> Result<(String, String), String> {
         .cloned()
         .collect();
     if title_parts.is_empty() {
-        return Err("usage: cos agent sessions set-title <session_id> \"<title>\"".into());
+        return Err("usage: yu agent sessions set-title <session_id> \"<title>\"".into());
     }
     let title = title_parts.join(" ").trim().to_string();
     if title.is_empty() {
@@ -301,7 +301,7 @@ fn sessions_clear(args: &[String]) -> Result<Value, String> {
         .first()
         .cloned()
         .filter(|s| !s.is_empty() && !s.starts_with("--"))
-        .ok_or_else(|| "usage: cos agent sessions clear <session_id> --yes".to_string())?;
+        .ok_or_else(|| "usage: yu agent sessions clear <session_id> --yes".to_string())?;
     if !args.iter().any(|a| a == "--yes") {
         return Err(format!(
             "refusing to clear session {id} without --yes (would drop all recorded messages for this session)"
@@ -323,7 +323,7 @@ fn sessions_clear_with(db: &memory::sqlite_fts::MemoryDb, id: &str) -> Result<Va
     }))
 }
 
-/// `cos agent sessions purge --older-than <days> [--dry-run] [--yes]`
+/// `yu agent sessions purge --older-than <days> [--dry-run] [--yes]`
 /// — bulk-delete every message older than the threshold. Implements
 /// the convention from `sessions clear`: destructive operations
 /// require an explicit `--yes`, with `--dry-run` reporting the
@@ -357,7 +357,7 @@ fn sessions_purge(args: &[String]) -> Result<Value, String> {
         }
     }
     let days = older_than_days.ok_or_else(|| {
-        "missing --older-than <days>. usage: cos agent sessions purge --older-than <days> [--dry-run] [--yes]"
+        "missing --older-than <days>. usage: yu agent sessions purge --older-than <days> [--dry-run] [--yes]"
             .to_string()
     })?;
     if !dry_run && !yes {
@@ -400,7 +400,7 @@ fn sessions_purge_with(
     }))
 }
 
-/// `cos agent sessions stats [--session <id>]` — read-only aggregate
+/// `yu agent sessions stats [--session <id>]` — read-only aggregate
 /// over the memory.db (pairs naturally with `sessions purge` so users
 /// can see what a given `--older-than <days>` would actually delete).
 /// With `--session <id>` the result is scoped to one conversation.
@@ -423,7 +423,7 @@ fn sessions_stats(args: &[String]) -> Result<Value, String> {
             }
             other => {
                 return Err(format!(
-                    "sessions stats: unexpected argument '{other}'. usage: cos agent sessions stats [--session <id>]"
+                    "sessions stats: unexpected argument '{other}'. usage: yu agent sessions stats [--session <id>]"
                 ));
             }
         }

@@ -247,7 +247,7 @@ fn classify_http_error(status: u16, bytes: &[u8]) -> TtsError {
 // Edge TTS adapter
 //
 // `agent::media::tts_edge::EdgeTtsProvider` is the canonical Edge
-// implementation (used by the agent's media registry). The `cos model
+// implementation (used by the agent's media registry). The `yu model
 // speak` CLI plumbs through this `TextToSpeech` trait, so we wrap the
 // canonical provider in a thin adapter that translates the request /
 // response / error types.

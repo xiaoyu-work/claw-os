@@ -93,12 +93,12 @@
         <figure class="window">
           <div class="window-titlebar">
             <div class="window-dots"><i></i><i></i><i></i></div>
-            <div class="window-address mono">cos · agent ask</div>
+            <div class="window-address mono">yu · agent ask</div>
             <div class="window-meta mono"><span class="dot-live"></span>live</div>
           </div>
           <div class="window-body terminal" id="heroTerminal">
             <div class="t-line">
-              <span class="t-prompt">cos</span>
+              <span class="t-prompt">yu</span>
               <span class="t-cmd"><span class="t-typing" data-typing>agent ask "draft a reply to mom's latest email"</span><span class="t-caret" aria-hidden="true"></span></span>
             </div>
 
@@ -123,7 +123,7 @@
             </div>
 
             <div class="t-line t-out t-delay-2"><span class="t-tag t-tag-ok">drafted</span> 1 reply · saved to <code>inbox/drafts</code></div>
-            <div class="t-line t-out t-delay-3"><span class="t-tag t-tag-undo">audit</span> <code>cos agent show $task</code> — every call is in the journal</div>
+            <div class="t-line t-out t-delay-3"><span class="t-tag t-tag-undo">audit</span> <code>yu agent show $task</code> — every call is in the journal</div>
           </div>
         </figure>
       </div>
@@ -201,63 +201,63 @@
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
           <h3>agent</h3>
           <p>Built-in system agent — cross-app sessions, persistent memory, tools, skills, providers.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> agent ask "<em>find the largest files and tell me why</em>"</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> agent ask "<em>find the largest files and tell me why</em>"</pre>
         </article>
 
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.5" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="1" fill="currentColor"/></svg></div>
           <h3>service</h3>
           <p>Lifecycle hooks, credential injection, dependency ordering, graceful drain.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> service start clawd
-<span class="t-prompt">cos</span> service health --no-restart</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> service start clawd
+<span class="t-prompt">yu</span> service health --no-restart</pre>
         </article>
 
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" stroke="currentColor" stroke-width="1.6"/></svg></div>
           <h3>sys</h3>
           <p>Structured <code>/proc</code>, mounts, network sockets, cgroup&nbsp;v2 limits and usage.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> sys proc
-<span class="t-prompt">cos</span> sys cgroup</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> sys proc
+<span class="t-prompt">yu</span> sys cgroup</pre>
         </article>
 
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="4" y="9" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M8 9V6a4 4 0 1 1 8 0v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
           <h3>credential</h3>
           <p>Encrypted store with tier-based access, namespaces, TTL, OAuth refresh, bundles.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> credential store openai_key --tier 2 --ttl 3600
-<span class="t-prompt">cos</span> credential bundle --keys openai_key,db_url</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> credential store openai_key --tier 2 --ttl 3600
+<span class="t-prompt">yu</span> credential bundle --keys openai_key,db_url</pre>
         </article>
 
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
           <h3>cron</h3>
           <p>Agent-aware scheduler — execution context, result capture, overlap protection.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> cron add --schedule "*/5 * * * *" \
-  --command "cos agent ask 'triage inbox'"</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> cron add --schedule "*/5 * * * *" \
+  --command "yu agent ask 'triage inbox'"</pre>
         </article>
 
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="var(--bg)" stroke="currentColor" stroke-width="1.6"/><circle cx="16" cy="12" r="2" fill="var(--bg)" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18" r="2" fill="var(--bg)" stroke="currentColor" stroke-width="1.6"/></svg></div>
           <h3>model</h3>
           <p>Local model registry — import ONNX / GGUF, load, infer, benchmark; routes calls to a runtime daemon.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> model import ./qwen3.gguf --as qwen3 --task llm
-<span class="t-prompt">cos</span> model load qwen3</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> model import ./qwen3.gguf --as qwen3 --task llm
+<span class="t-prompt">yu</span> model load qwen3</pre>
         </article>
 
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M3 12l4-4 4 4-4 4-4-4zM13 12l4-4 4 4-4 4-4-4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
           <h3>engine</h3>
           <p>Native inference engine package manager — install, activate, rollback llama.cpp / ort / ort-genai side-by-side.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> engine update llama-cpp --accelerator cuda
-<span class="t-prompt">cos</span> engine activate llama-cpp@b4321</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> engine update llama-cpp --accelerator cuda
+<span class="t-prompt">yu</span> engine activate llama-cpp@b4321</pre>
         </article>
 
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="12" r="3.4" stroke="currentColor" stroke-width="1.6"/></svg></div>
           <h3>ai</h3>
           <p>Shared local or cloud model gate for every app — chat, embed, image, audio, video, tools.</p>
-          <pre class="prim-code mono"><span class="t-prompt">cos</span> ai chat --app notes --prompt "summarize today"
-<span class="t-prompt">cos</span> ai tool web.read --app notes --args '{"url":"…"}'</pre>
+          <pre class="prim-code mono"><span class="t-prompt">yu</span> ai chat --app notes --prompt "summarize today"
+<span class="t-prompt">yu</span> ai tool web.read --app notes --args '{"url":"…"}'</pre>
         </article>
 
       </div>
@@ -315,10 +315,10 @@
       <div class="stack">
         <div class="stack-layer stack-layer-agent">
           <div class="stack-name mono">agent runtime</div>
-          <div class="stack-detail">Sessions, memory, app tools, providers · <code>cos agent</code></div>
+          <div class="stack-detail">Sessions, memory, app tools, providers · <code>yu agent</code></div>
         </div>
-        <div class="stack-layer stack-layer-cos">
-          <div class="stack-name mono">cos · user-mode primitives</div>
+        <div class="stack-layer stack-layer-yu">
+          <div class="stack-name mono">yu · user-mode primitives</div>
           <div class="stack-detail">sys · service · credential · cron · app · ai · agent · model · engine</div>
         </div>
         <div class="stack-layer stack-layer-clawd">
@@ -340,7 +340,7 @@
       <p class="section-lede">
         Run Yu OS where you already work: install it as a WSL distro on
         Windows, or as a Docker container on macOS or Linux. The
-        <code>cos</code> / <code>clawd</code> agent stack is the same inside
+        <code>yu</code> / <code>clawd</code> agent stack is the same inside
         either.
       </p>
 
@@ -376,8 +376,9 @@
 
       <div class="install-after mono">
         <span class="install-after-prompt">first run</span>
-        <code>cos agent setup all &amp;&amp; cos agent ask "show me what you can do"</code>
+        <code>yu agent setup all &amp;&amp; yu agent ask "show me what you can do"</code>
       </div>
+      <p class="muted">These commands use the Yu OS source build. The downloads above are from before the rename.</p>
     </div>
   </section>
 
@@ -406,10 +407,10 @@
         </details>
         <details class="faq-item">
           <summary>How does it work with my existing models / providers?</summary>
-          <p><code>cos agent setup</code> configures cloud providers (OpenAI,
+          <p><code>yu agent setup</code> configures cloud providers (OpenAI,
           Anthropic, Azure, Google…) and local engines (llama.cpp, ort,
-          ort-genai) side-by-side. <code>cos model import</code> registers
-          local files; <code>cos engine</code> manages native runtimes with
+          ort-genai) side-by-side. <code>yu model import</code> registers
+          local files; <code>yu engine</code> manages native runtimes with
           per-version pinning and rollback.</p>
         </details>
         <details class="faq-item">
@@ -424,7 +425,7 @@
           <summary>What stops the agent from breaking my machine?</summary>
           <p>Every risky scope goes through <code>caps::require</code>, lands
           at an approval gate, and is consumed once on success. If something
-          still goes sideways, <code>cos agent undo &lt;task&gt;</code>
+          still goes sideways, <code>yu agent undo &lt;task&gt;</code>
           reverses what that task did and the audit journal shows exactly
           which calls were made.</p>
         </details>
@@ -433,7 +434,7 @@
           <p>On disk, inside the WSL distro or Docker volume. State under
           <code>/var/lib/cos</code>, logs under <code>/var/log/cos</code>, the
           clawd socket at <code>/run/cos/clawd.sock</code>. Cloud providers are
-          opt-in and credentialed through <code>cos credential</code>.</p>
+          opt-in and credentialed through <code>yu credential</code>.</p>
         </details>
         <details class="faq-item">
           <summary>Is it open source?</summary>

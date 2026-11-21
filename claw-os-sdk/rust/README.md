@@ -7,10 +7,10 @@ The official Rust SDK for Claw OS. Use this crate to talk to the
 
 | Module      | Purpose                                                                         |
 |-------------|---------------------------------------------------------------------------------|
-| `ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.                  |
+| `ai`        | Stable `chat` / `chat-untrusted` access through `yu ai chat`.                  |
 | `mcp`       | Manifest-bound App MCP runtime, call context, and stdio transport.                |
 | `applet`    | Versioned OS Calendar/task/telemetry client and separate history-permission preflight. |
-| `tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.                 |
+| `tools`     | `yu ai tool <name>` — fulfil catalog tools the model proposed.                 |
 | `gui`       | Desktop GUI bootstrap and kernel-provided launch context.                       |
 | `objects`   | Pure, canonical references to App-owned objects; no discovery or dispatch.      |
 | `envelope`  | Wire-v1 envelope adapter; SDKs handle the migration to native v1 transparently. |
@@ -186,12 +186,12 @@ modalities are not published as placeholder APIs.
 
 | Env var          | Effect                                                                |
 |------------------|-----------------------------------------------------------------------|
-| `CLAW_COS_BIN`   | Path to the `cos` binary. Defaults to looking up `cos` in `$PATH`.    |
+| `CLAW_COS_BIN`   | Path to the `yu` binary. Defaults to looking up `cos` in `$PATH`.    |
 | `COS_APP_ID`     | App id, required for `ai::chat` and `tools::call` unless passed via `.app(...)`. |
 | `COS_APP_MANIFEST` | Authoritative manifest path used by `mcp::App::from_environment()`. |
 
 Installed native clients whose launcher sanitizes `PATH` can call
-`cos_call_json_with_binary("/usr/local/bin/cos", family, verb, args)`.
+`cos_call_json_with_binary("/usr/local/bin/yu", family, verb, args)`.
 This explicit-binary primitive transport ignores `CLAW_COS_BIN`, changes no
 process environment, and shares the ordinary wire/error decoder. Generic SDK
 calls retain their existing override/PATH behavior. Neither transport supplies

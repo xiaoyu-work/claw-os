@@ -35,7 +35,7 @@ class NetworkDiagnosticsBridgeTests(unittest.TestCase):
             process.communicate.side_effect = communicate
             return process
 
-        with mock.patch.dict(os.environ, {"CLAW_COS_BIN": "/usr/local/bin/cos"}):
+        with mock.patch.dict(os.environ, {"CLAW_COS_BIN": "/usr/local/bin/yu"}):
             with mock.patch("subprocess.Popen", side_effect=fake_popen):
                 result = network_diagnostics.request(
                     "tcp",
@@ -48,7 +48,7 @@ class NetworkDiagnosticsBridgeTests(unittest.TestCase):
         self.assertEqual(
             captured["command"],
             [
-                "/usr/local/bin/cos",
+                "/usr/local/bin/yu",
                 "--wire=1",
                 "__netdiag",
                 "request",

@@ -298,7 +298,7 @@ where
     Ok(rt.block_on(fut))
 }
 
-/// `cos agent setup oauth-start --provider copilot` → emits the
+/// `yu agent setup oauth-start --provider copilot` → emits the
 /// device-authorization codes the UI shows the user.
 pub(super) fn oauth_start_cmd(provider: Option<&str>) -> Result<Value, String> {
     let provider = require_provider(provider, "oauth-start")?;
@@ -320,7 +320,7 @@ pub(super) fn oauth_start_cmd(provider: Option<&str>) -> Result<Value, String> {
     }))
 }
 
-/// `cos agent setup oauth-poll --provider copilot --device-code <code>`
+/// `yu agent setup oauth-poll --provider copilot --device-code <code>`
 /// → single poll. The UI loops on its own schedule and stops when this
 /// command emits `status: "ok"` (token stored) or a terminal failure.
 pub(super) fn oauth_poll_cmd(
@@ -368,7 +368,7 @@ pub(super) fn oauth_poll_cmd(
     }
 }
 
-/// `cos agent setup models --provider copilot` → fetch the live model
+/// `yu agent setup models --provider copilot` → fetch the live model
 /// catalogue from Copilot's `/models` endpoint using the stored token.
 /// Returns selectable chat models with their negotiated wire protocol.
 /// Embedding, internal, disabled, and unsupported-endpoint entries are

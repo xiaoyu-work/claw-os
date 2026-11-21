@@ -90,7 +90,7 @@ def replace_file(
     *,
     session_id: str | None = None,
 ) -> dict:
-    """Replace one bounded file through ``cos __file replace``.
+    """Replace one bounded file through ``yu __file replace``.
 
     ``expected`` is required: ``None`` means the target must be absent.
     Existing-file fingerprints use full ``st_mode`` and nanosecond timestamps,

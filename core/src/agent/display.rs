@@ -159,7 +159,7 @@ pub fn format_bytes(n: u64) -> String {
     format!("{value:.1} {}", UNITS[idx])
 }
 
-/// Format a usage row for `cos agent status`: aligns provider /
+/// Format a usage row for `yu agent status`: aligns provider /
 /// model / count columns into a single string. Token-only — the
 /// kernel never measures usage in dollars.
 pub fn format_usage_row(provider: &str, model: &str, count: u64) -> String {

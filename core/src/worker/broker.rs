@@ -41,7 +41,7 @@
 //!   bounded number of concurrent connections.
 //! * **Local policy answers.** `worker.policy.check` is answered from
 //!   the same live set without touching `clawd`, which is what
-//!   `cos __policy check` — and therefore `cos_runtime.policy` — needs
+//!   `yu __policy check` — and therefore `cos_runtime.policy` — needs
 //!   inside the sandbox.
 //!
 //! The relay handle never crosses into the sandbox, never appears in a

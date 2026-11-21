@@ -114,7 +114,7 @@ impl ClientIdentity {
     ///
     /// clawd uses this to read `<home>/.config/cos/config.json` for
     /// the requesting user instead of its own root-owned config —
-    /// without it, `cos agent ask` from a non-root user falls back to
+    /// without it, `yu agent ask` from a non-root user falls back to
     /// the empty system default and fails "no LLM provider configured".
     pub fn home_dir(&self) -> Option<PathBuf> {
         let uid = self.uid?;

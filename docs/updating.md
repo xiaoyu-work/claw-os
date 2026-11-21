@@ -16,6 +16,15 @@ This update path applies to:
 
 ## Normal update
 
+### Yu OS command cutover
+
+The Yu OS source builds install `/usr/local/bin/yu`; they do not install a
+`yu` executable or alias. The Apps and signed Desktop Shell for that build
+must also target `yu`. The package consumer rejects Apps targeting the old
+runtime and Shell artifacts from the previous build format. Use a fresh Yu
+OS install once a complete signed release is available; the earlier download
+artifacts do not contain the new command.
+
 ### Coordinated 0.2.1 ownership boundary (source only)
 
 The initial independent App packaging boundary is `1:0.2.1`, not `1:0.3.0`.
@@ -28,8 +37,8 @@ policy stay OS-owned. Identities, installed App paths, data, credentials and
 existing grants do not migrate.
 
 The existing runtime ABI remains 1, but Agent provides
-`claw-os-app-runtime-v1 (= 0.2.1)` from platform metadata, and App packages
-require `claw-os-app-runtime-v1 (>= 0.2.1)`. Old/unversioned Provides cannot
+`yuos-app-runtime-v1 (= 0.2.1)` from platform metadata, and App packages
+require `yuos-app-runtime-v1 (>= 0.2.1)`. Old/unversioned Provides cannot
 satisfy that dependency. Agent recommends only `claw-apps-agent`; native
 packages can be selected independently on Ubuntu/WSL without the full OS
 Desktop. `apt install claw-os-desktop` installs all Claw Apps, including the
@@ -320,7 +329,7 @@ still apply. Policy survives process/daemon restarts and remains bound to the
 exact owner/App/capability generation plus owner/session revocation generations.
 An old receipt cannot undo a later revocation and can never be redeemed as
 ordinary execution authority; ordinary execution-grant expiry remains unchanged.
-The native permission and fixed-launch clients select `/usr/local/bin/cos`
+The native permission and fixed-launch clients select `/usr/local/bin/yu`
 explicitly through the shared SDK transport, so sanitized desktop PATH needs
 no override.
 
@@ -358,7 +367,7 @@ installed, activated or run.
 
 On a running systemd target, `claw-os-agent` reloads systemd and runs
 `try-restart` for `clawd.service` and the opt-in browser service during an
-upgrade. Newly launched `cos` commands use the replaced binary immediately;
+upgrade. Newly launched `yu` commands use the replaced binary immediately;
 the running daemon is restarted automatically. `claw-os-base` separately
 restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed. A Root-managed graphical session is an
@@ -369,12 +378,12 @@ An upgrade does not reset local passwords or enable account creation on
 an installed system. It prepares the bundled Debian locales without
 replacing the configured system language. Until the matching
 Desktop package installs the graphical review presenter, approval remains
-available through the existing `cos review` interface.
+available through the existing `yu review` interface.
 On systems with initramfs-tools, Desktop configuration requests an initramfs
 update so the Claw boot theme is included on the next boot.
 
 The Agent package also installs `pkexec` and its polkit runtime. Protected
-Web/native review decisions and `cos review` use the installed
+Web/native review decisions and `yu review` use the installed
 `claw-approval-helper` through this path, including on headless Ubuntu and WSL.
 Upgrading an installation that lacks `pkexec` pulls it in without changing
 existing approval records. Ordinary attended TUI one-shot approval stays
@@ -387,7 +396,7 @@ This permits authentication, not automatic approval: the helper still binds
 the decision to `PKEXEC_UID`, and the broker rejects another owner's request.
 Authorization is not cached (`auth_self_keep` and unconditional `yes` are not
 used). Web review authentication now appears in a password dialog in the
-page, not the terminal that launched `cos agent serve`. The serving process
+page, not the terminal that launched `yu agent serve`. The serving process
 registers a temporary PID/start-time-bound polkit agent and accepts only its
 own OS identity. Password responses are single-use, same-origin and Web-session
 bound, cleared after forwarding, and never stored in Chat, provider credentials
@@ -490,7 +499,7 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 - In-flight workers are killed when the daemon restarts (`PR_SET_PDEATHSIG`),
   and their tasks are reconciled — retried, or failed once they have used up
   their recovery budget — the next time `clawd` starts.
-- A `cos` binary from before broker protocol v1 fails closed against a new
+- A `yu` binary from before broker protocol v1 fails closed against a new
   `clawd`: the daemon answers one line naming the protocol and closes without
   parsing, authorizing or dispatching anything. There is no compatibility
   listener, so the fix is to finish the upgrade — reinstall `claw-os-agent` and
@@ -525,7 +534,7 @@ The Claw Agent terminal renderer is compiled into `cos`, so upgrading
 `claw-os-agent` replaces the terminal and line interfaces together. It has no
 separate frontend binary, self-updater or compatibility protocol. Canonical
 conversations, credentials and task state remain in their existing stores.
-Reopen running terminals after upgrade; `cos agent chat --plain` remains
+Reopen running terminals after upgrade; `yu agent chat --plain` remains
 available.
 
 An upgrade from the temporary external-frontend package removes its
@@ -539,7 +548,7 @@ Confirm both binaries and the running daemon after an upgrade:
 dpkg-query -L claw-os-agent | grep -E '/(cos|clawd|claw-agentd|claw-extension-host)$'
 getent group cos-extension
 sudo systemctl status clawd
-cos agent service list --status pending
+yu agent service list --status pending
 ```
 
 Check the installed and available versions with:
@@ -554,7 +563,7 @@ After an LLM-provider update, its live connectivity can be retested without
 rerunning the setup wizard:
 
 ```bash
-cos agent setup text --verify-only
+yu agent setup text --verify-only
 ```
 
 ### Summarize source and AI scope binding
@@ -1050,12 +1059,12 @@ the manual release workflow must first publish matching signed artifacts.
 
 Independent App replacement needs an authenticated Root, owner/App-scoped
 retirement barrier and admission fencing, not a display-wide restart. Signed
-standalone `cos app install` now uses a direct Root-peer-only controller with
+standalone `yu app install` now uses a direct Root-peer-only controller with
 the same checked ordinary/GUI/MCP cross-owner retirement and admission fence as
 official APT Store delivery. Root consumes the protected install review inside
 publication and verifies the installed bytes and transaction cleanup. Client
 loss cannot cancel the controller; incomplete/uncertain results durably block
-admission until `cos app install --recover <app-id>` confirms the exact original
+admission until `yu app install --recover <app-id>` confirms the exact original
 installed destination, package/manifest, directory ownership and absent
 transaction scratch. Publication is durably checkpointed before tree writes;
 an unknown/dispatched publication cannot be replayed, even for the same bytes.
@@ -1137,15 +1146,15 @@ an update does not change that:
   [publisher trust roots](extension-provenance.md#trust-roots).
 * User-installed extensions that carry no signature **fail closed** into
   a quarantined state after upgrading. They are listed by
-  `cos app` (and in the skill/MCP discovery diagnostics) with an
+  `yu app` (and in the skill/MCP discovery diagnostics) with an
   actionable reason. Re-install a signed package, or record an explicit
-  developer decision with `cos provenance dev-trust`. Nothing is
+  developer decision with `yu provenance dev-trust`. Nothing is
   silently grandfathered.
 * App **data** lives under `<data_dir>/apps/<id>`, separate from the
   code artifact, so quarantine, re-install and rollback never touch it.
 * Verified artifacts are retained under
   `<data_dir>/provenance/artifacts/`, so
-  `cos provenance rollback --kind app --id <id> --digest sha256:… --dest <dir>`
+  `yu provenance rollback --kind app --id <id> --digest sha256:… --dest <dir>`
   can re-activate a previous version. The artifact is verified again
   before activation, so a rollback can only land on content that passed
   verification and has not been revoked.
@@ -1154,8 +1163,8 @@ Revoking a compromised publisher key or a single artifact digest takes
 effect immediately for later launches, disclosures and attachments:
 
 ```bash
-cos provenance trust revoke --key-id sha256:…
-cos provenance trust revoke --digest sha256:…
+yu provenance trust revoke --key-id sha256:…
+yu provenance trust revoke --digest sha256:…
 ```
 
 ## Downgrade protection
@@ -1496,7 +1505,7 @@ installs that release's floor with it. Nothing inside the replaced filesystem
 can prevent that, and Claw OS does not claim otherwise: verify the artifact you
 are importing, and prefer the APT path for updating a running system. Extension
 provenance is unaffected — user-installed Apps, Skills and MCP packages keep
-their own signature and revocation checks, and a `cos provenance rollback` still
+their own signature and revocation checks, and a `yu provenance rollback` still
 re-verifies the artifact it activates.
 
 ## Agent Web setup and history

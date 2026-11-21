@@ -1,4 +1,4 @@
-//! Engine package management — `cos engine ...`.
+//! Engine package management — `yu engine ...`.
 //!
 //! ClawOS treats native inference runtimes (llama.cpp, onnxruntime,
 //! onnxruntime-genai) as **independently upgradable system components**,
@@ -23,8 +23,8 @@
 //! ## Phases
 //!
 //! - **P2.1 (this module)**: storage + registry + local install + CLI.
-//!   No network. `cos engine install <name>@<ver> --from <archive>`.
-//! - **P2.2**: GitHub Releases adapter — `cos engine update [--check]`.
+//!   No network. `yu engine install <name>@<ver> --from <archive>`.
+//! - **P2.2**: GitHub Releases adapter — `yu engine update [--check]`.
 //! - **P2.3 (now)**: dynamic loading (libloading) replaces compile-time
 //!   linkage. The model engine layer reads [`active_engine_root`] +
 //!   [`active_library_path`] to find the on-disk runtime each process
@@ -188,7 +188,7 @@ pub fn platform_library_filename(basename: &str) -> String {
     }
 }
 
-/// Dispatch a `cos engine <command>` invocation.
+/// Dispatch a `yu engine <command>` invocation.
 ///
 /// **Public surface (5 commands):**
 ///   - `list [<engine>] [--verbose]` — list all installed, or detailed info on one
@@ -217,7 +217,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 // Sub-command handlers
 // =====================================================================
 
-/// `cos engine list [<engine>] [--verbose]`. With no positional arg it
+/// `yu engine list [<engine>] [--verbose]`. With no positional arg it
 /// returns the index summary across all engines. With an engine name
 /// (or `--verbose`), it returns detailed info plus the active
 /// version's manifest. This subsumes the old `info` subcommand.
@@ -259,7 +259,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
     // ambiguous — bail rather than silently dumping the whole index
     // verbosely (the summary view is already complete).
     let name = name.ok_or_else(|| {
-        "usage: cos engine list <engine> [--verbose] (--verbose alone needs an engine name)"
+        "usage: yu engine list <engine> [--verbose] (--verbose alone needs an engine name)"
             .to_string()
     })?;
 
@@ -307,7 +307,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
 fn cmd_activate(args: &[String]) -> Result<Value, String> {
     let arg = args
         .first()
-        .ok_or_else(|| "usage: cos engine activate <engine>@<version>".to_string())?;
+        .ok_or_else(|| "usage: yu engine activate <engine>@<version>".to_string())?;
     let (engine, version) = arg
         .split_once('@')
         .map(|(e, v)| (e.to_string(), v.to_string()))
@@ -325,12 +325,12 @@ fn cmd_activate(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// `cos engine remove <engine>[@<version>] [--keep N]`.
+/// `yu engine remove <engine>[@<version>] [--keep N]`.
 ///
 /// Two modes, distinguished by whether a version is given:
 ///   - `<engine>@<version>` → uninstall that exact version (will error
 ///     if it's the active or previous version — switch first with
-///     `cos engine activate`).
+///     `yu engine activate`).
 ///   - `<engine>` (no version) → garbage-collect, keeping the N most
 ///     recent versions plus active+previous (default `--keep 3`).
 ///
@@ -365,7 +365,7 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
         }
     }
     let positional = positional
-        .ok_or_else(|| "usage: cos engine remove <engine>[@<version>] [--keep N]".to_string())?;
+        .ok_or_else(|| "usage: yu engine remove <engine>[@<version>] [--keep N]".to_string())?;
 
     let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
     if let Some((engine, version)) = positional.split_once('@') {
@@ -424,7 +424,7 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
 fn cmd_unpin(args: &[String]) -> Result<Value, String> {
     let engine = args
         .first()
-        .ok_or_else(|| "usage: cos engine unpin <engine>".to_string())?;
+        .ok_or_else(|| "usage: yu engine unpin <engine>".to_string())?;
     let mut index = registry::EnginesIndex::load_or_default().map_err(|e| e.to_string())?;
     index.set_pinned(engine, false).map_err(|e| e.to_string())?;
     index.save().map_err(|e| e.to_string())?;
@@ -432,7 +432,7 @@ fn cmd_unpin(args: &[String]) -> Result<Value, String> {
 }
 
 // =====================================================================
-// `cos engine update <engine>` — combined offline + online installer.
+// `yu engine update <engine>` — combined offline + online installer.
 //
 // Flags:
 //   --from <archive>            offline install from a local archive (no GitHub)
@@ -522,7 +522,7 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
         }
     }
     let positional = engine.ok_or_else(|| {
-        "usage: cos engine update <engine>[@<version>] [--from <archive>] [--pin] [--check] [--to <tag>] [--force] [--accelerator cpu|cuda|vulkan|...] [--no-activate]"
+        "usage: yu engine update <engine>[@<version>] [--from <archive>] [--pin] [--check] [--to <tag>] [--force] [--accelerator cpu|cuda|vulkan|...] [--no-activate]"
             .to_string()
     })?;
     let (engine, version_in_pos) = match positional.split_once('@') {
@@ -538,7 +538,7 @@ fn cmd_update(args: &[String]) -> Result<Value, String> {
 
     // ---------- Offline path: --from <archive> ----------
     // Skips all GitHub interaction; mutually exclusive with the
-    // network-only flags. This subsumes the old `cos engine install`.
+    // network-only flags. This subsumes the old `yu engine install`.
     if let Some(archive) = from_archive {
         if check_only || to_tag.is_some() || accelerator.is_some() || force {
             return Err(
@@ -730,7 +730,7 @@ async fn run_online_install(
             .any(|v| v.version == release.tag_name)
         {
             return Err(format!(
-                "version \"{}\" already installed for \"{engine}\". use `cos engine activate {engine}@{}` if you want to switch.",
+                "version \"{}\" already installed for \"{engine}\". use `yu engine activate {engine}@{}` if you want to switch.",
                 release.tag_name, release.tag_name
             ));
         }

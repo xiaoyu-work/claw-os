@@ -40,7 +40,7 @@ pub(super) fn status_cmd() -> Result<Value, String> {
             let fix = parsed
                 .get("fix")
                 .cloned()
-                .unwrap_or_else(|| json!("cos agent setup text"));
+                .unwrap_or_else(|| json!("yu agent setup text"));
             (false, error, fix, parsed)
         }
     };
@@ -65,7 +65,7 @@ pub(super) fn status_cmd() -> Result<Value, String> {
         "config_path": setup::config_path().display().to_string(),
         "last_session": last_session,
         "daemon": daemon,
-        "hint": "for the full provider/tools/skills/usage report, run `cos agent doctor`",
+        "hint": "for the full provider/tools/skills/usage report, run `yu agent doctor`",
     }))
 }
 
@@ -216,7 +216,7 @@ fn provider_build_status(
     }
 }
 
-/// `cos agent provider-doctor [--names <a,b,c>] [--probe-network]
+/// `yu agent provider-doctor [--names <a,b,c>] [--probe-network]
 /// [--timeout <secs>]`
 ///
 /// Static config check + optional one-shot live ping of the active
@@ -331,7 +331,7 @@ pub(super) fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
     } else if active_name.is_empty() {
         json!({
             "attempted": false,
-            "reason": "no text-model provider configured — run `cos agent setup text` first (probe needs an active provider)",
+            "reason": "no text-model provider configured — run `yu agent setup text` first (probe needs an active provider)",
         })
     } else if !active_in_scope {
         json!({
@@ -348,7 +348,7 @@ pub(super) fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
     } else if active_name == "llama_local" {
         json!({
             "attempted": false,
-            "reason": "llama_local provider: probe is skipped — would force a GGUF load + RAM allocation, surprising side effect for a doctor command. Use 'cos model load' + 'cos agent ask' to validate end-to-end.",
+            "reason": "llama_local provider: probe is skipped — would force a GGUF load + RAM allocation, surprising side effect for a doctor command. Use 'yu model load' + 'yu agent ask' to validate end-to-end.",
         })
     } else {
         run_active_provider_probe(&active_name, &cfg.agent, timeout_secs)
@@ -405,7 +405,7 @@ pub(super) fn run_active_provider_probe(
     // calling its own LLM stack to confirm the user's freshly-typed
     // configuration works. It is NOT an app-→AI call, so it should
     // not consume the system-agent budget bucket and it must not be
-    // gated by the caps system (`cos agent setup` is typically run
+    // gated by the caps system (`yu agent setup` is typically run
     // from a user TTY with no upstream session, so requiring
     // `COS_SESSION` here would make the post-setup probe always fail
     // with "Permission denied (no active session)").

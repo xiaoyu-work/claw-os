@@ -80,20 +80,20 @@ if [ "${COS_QWEN3_SKIP_ORT_GENAI:-0}" != "1" ]; then
         cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
     fi
 
-    if chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/cos engine list ort \
+    if chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/yu engine list ort \
         | grep -q "\"active\":\"$ORT_TAG\""; then
         echo "  :: ort $ORT_TAG already active"
     else
         echo "  :: installing ort $ORT_TAG"
-        chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/cos engine update ort --to "$ORT_TAG"
+        chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/yu engine update ort --to "$ORT_TAG"
     fi
 
-    if chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/cos engine list ort-genai \
+    if chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/yu engine list ort-genai \
         | grep -q "\"active\":\"$ORT_GENAI_TAG\""; then
         echo "  :: ort-genai $ORT_GENAI_TAG already active"
     else
         echo "  :: installing ort-genai $ORT_GENAI_TAG"
-        chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/cos engine update ort-genai --to "$ORT_GENAI_TAG"
+        chroot "$ROOTFS" /usr/bin/env COS_DATA_DIR=/var/lib/cos /usr/local/bin/yu engine update ort-genai --to "$ORT_GENAI_TAG"
     fi
 
     cleanup_mounts

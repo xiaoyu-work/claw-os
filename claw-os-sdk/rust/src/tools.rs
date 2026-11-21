@@ -1,6 +1,6 @@
 //! Catalog-tool helper — apps that want to fulfil a model-proposed
 //! tool call (returned in [`crate::ai::AiResponse::tool_calls`]) shell
-//! out through this module to `cos ai tool <name> --app <id> --args <json>`.
+//! out through this module to `yu ai tool <name> --app <id> --args <json>`.
 //! Mirrors the Python [`claw_os_sdk.tools`] module.
 //!
 //! The kernel runs the catalog implementation under the app's own
@@ -34,7 +34,7 @@ pub enum ToolError {
     Bridge(#[from] BridgeError),
 }
 
-/// Parsed reply from `cos ai tool`. See `wire/v1/tool.schema.json`.
+/// Parsed reply from `yu ai tool`. See `wire/v1/tool.schema.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool: String,
@@ -44,7 +44,7 @@ pub struct ToolResult {
     pub result: serde_json::Value,
 }
 
-/// One row from the live `cos ai tools` catalog.
+/// One row from the live `yu ai tools` catalog.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogEntry {
     pub name: String,
@@ -100,7 +100,7 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
         .map_err(|e| ToolError::Unavailable(format!("tool result decode failed ({e}): {value}")))
 }
 
-/// Return the live global catalog from the argument-free `cos ai tools`.
+/// Return the live global catalog from the argument-free `yu ai tools`.
 pub fn catalog() -> Result<Vec<CatalogEntry>, ToolError> {
     let argv: Vec<OsString> = vec!["ai".into(), "tools".into()];
     let value = cos_tool_json("catalog", argv)?;

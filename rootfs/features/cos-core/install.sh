@@ -42,7 +42,7 @@ echo "  :: installing $(basename "$AGENT_DEB") + $(basename "$BASE_DEB")"
 # them so the package can take ownership.
 rm -f \
     "$ROOTFS/usr/local/bin/cos-init" \
-    "$ROOTFS/usr/local/bin/cos" \
+    "$ROOTFS/usr/local/bin/yu" \
     "$ROOTFS/usr/lib/cos/init/setup-home.sh" \
     "$ROOTFS/etc/cos/profile.sh"
 rm -rf \

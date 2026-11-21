@@ -1,6 +1,6 @@
 # Claw Agent terminal
 
-`cos agent chat` provides a Claw-owned full-screen terminal UI. Its renderer,
+`yu agent chat` provides a Claw-owned full-screen terminal UI. Its renderer,
 state machine, key handling, broker client and stream projection live under
 `core/src/agent/terminal/` and compile into `cos`. There is no downloaded or
 separately packaged TUI executable, compatibility app server, or second Agent
@@ -11,9 +11,9 @@ backend.
 Run as the ordinary account that configured the Claw Agent:
 
 ```bash
-cos agent chat
-cos agent chat --session <session-id>
-cos agent chat --no-memory --max-turns 8
+yu agent chat
+yu agent chat --session <session-id>
+yu agent chat --no-memory --max-turns 8
 ```
 
 The full-screen UI is selected only when stdin, stdout and stderr are terminals
@@ -23,15 +23,15 @@ cannot submit Agent work on behalf of another account.
 The terminal still opens when text-provider setup is incomplete so local
 sessions, durable tasks, approvals, notifications, and Activities remain
 usable. It shows an explicit setup warning; model work still requires
-`cos agent setup text`. A transient live model-catalogue failure also leaves
+`yu agent setup text`. A transient live model-catalogue failure also leaves
 the configured model available and displays the discovery error instead of
 preventing access to local UI surfaces.
 
 The compatible line interface remains available:
 
 ```bash
-cos agent chat --plain
-printf 'Explain the current task\n/quit\n' | cos agent chat
+yu agent chat --plain
+printf 'Explain the current task\n/quit\n' | yu agent chat
 ```
 
 `--no-stream` and `--show-tools` retain their line-interface behavior. They
@@ -412,12 +412,12 @@ From the repository root in Linux/WSL:
 ```bash
 cargo test -p cos --lib agent::terminal:: -- --test-threads=1
 
-cargo build -p cos --bin cos
+cargo build -p cos --bin yu
 original_namespace="$(readlink /proc/self/ns/mnt)"
 for scenario in complete slow-progress slow-submit slow-review slow-panel cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice approval-external approval-resumed approval-failure approval-narrow attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
-    --cos target/debug/cos \
+    --cos target/debug/yu \
     --case "$scenario" \
     --original-mount-namespace "$original_namespace"
 done
@@ -427,12 +427,12 @@ The real authorization fixture needs `pkexec`, `polkitd`, D-Bus, OpenSSL and
 PAM. From the repository root, after building the binaries:
 
 ```bash
-cargo build -p cos --bin cos --bin clawd --bin claw-approval-helper
+cargo build -p cos --bin yu --bin clawd --bin claw-approval-helper
 original_mount="$(readlink /proc/self/ns/mnt)"
 original_pid="$(readlink /proc/self/ns/pid)"
 sudo unshare --mount --pid --fork --mount-proc --net \
   python3 -B core/tests/approval_polkit_process.py \
-  --cos target/debug/cos \
+  --cos target/debug/yu \
   --clawd target/debug/clawd \
   --helper target/debug/claw-approval-helper \
   --policy rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy \
@@ -448,7 +448,7 @@ and approval state are private to its namespaces; it neither reads real
 password material nor uses a `polkit.Result.YES` override.
 
 Unit tests cover input parsing/editing, redaction, stream projection, approval
-state and ratatui rendering. The PTY fixture drives the real `cos` binary,
+state and ratatui rendering. The PTY fixture drives the real `yu` binary,
 requires an actual canonical task submission, observes streamed output,
 cancels the matching task with `Esc`, resumes by presentation ID through the
 canonical service, verifies rename/fork command routing, preserves bracketed

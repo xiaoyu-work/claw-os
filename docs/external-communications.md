@@ -34,21 +34,21 @@ bot.
 Store the raw bot token in the ClawOS credential store:
 
 ```bash
-cos credential store discord_bot_token "<bot-token>"
+yu credential store discord_bot_token "<bot-token>"
 ```
 
 Persist a fail-closed policy. `users` is mandatory. Guild messages also need
 either a matching `guilds` or `channels` entry:
 
 ```bash
-cos app gateway-discord configure \
+yu app gateway-discord configure \
   "users=123456789012345678 guilds=987654321098765432 require_mention=true rpm=5"
 ```
 
 Multiple IDs are comma-separated:
 
 ```bash
-cos app gateway-discord configure \
+yu app gateway-discord configure \
   "users=111111111111111111,222222222222222222 channels=333333333333333333,444444444444444444"
 ```
 
@@ -89,25 +89,25 @@ Prefer the credential store over `COS_DISCORD_TOKEN`.
 Start in the foreground while testing:
 
 ```bash
-cos app gateway-discord start
+yu app gateway-discord start
 ```
 
 Check or stop it from another terminal:
 
 ```bash
-cos app gateway-discord status
-cos app gateway-discord stop
+yu app gateway-discord status
+yu app gateway-discord stop
 ```
 
 Register it with the ClawOS service manager for a persistent deployment:
 
 ```bash
-cos service register \
+yu service register \
   --name discord-agent \
   --description "ClawOS Discord agent gateway" \
-  --command "cos app gateway-discord start"
-cos service start discord-agent
-cos service logs discord-agent --tail 50
+  --command "yu app gateway-discord start"
+yu service start discord-agent
+yu service logs discord-agent --tail 50
 ```
 
 The gateway reconnects with exponential backoff, resumes valid Discord
@@ -121,7 +121,7 @@ splits long agent responses at Discord's 2,000-character limit.
 - **Server message is ignored:** allow its guild or channel and mention the
   bot unless `require_mention=false`.
 - **Agent answers do not remember earlier messages:** inspect
-  `cos app gateway-discord status`; `agent_sessions` should increase after
+  `yu app gateway-discord status`; `agent_sessions` should increase after
   successful conversations.
 - **Permission denied:** grant the `net.dial`, `secret.read`,
   `data.inbox.write`, `agent.spawn`, process, and memory capabilities declared
@@ -132,9 +132,9 @@ splits long agent responses at Discord's 2,000-character limit.
 Telegram already supports bidirectional long polling:
 
 ```bash
-cos credential store telegram_bot_token "<bot-token>"
+yu credential store telegram_bot_token "<bot-token>"
 export COS_TELEGRAM_ALLOWED_CHATS=123456789
-cos app gateway-telegram start
+yu app gateway-telegram start
 ```
 
 `COS_TELEGRAM_ALLOWED_CHATS` is mandatory and accepts comma-separated chat
@@ -145,10 +145,10 @@ IDs. `COS_TELEGRAM_RPM` changes the default five requests per minute.
 Outbound gateways use the same app surface:
 
 ```bash
-cos app gateway-slack send C123ABC "deployment finished"
-cos app gateway-whatsapp send 15551234567 "deployment finished"
-cos app gateway-ntfy send "deployment finished" --topic alerts
+yu app gateway-slack send C123ABC "deployment finished"
+yu app gateway-whatsapp send 15551234567 "deployment finished"
+yu app gateway-ntfy send "deployment finished" --topic alerts
 ```
 
-Run `cos app <gateway-id> --schema` to inspect the exact credentials,
+Run `yu app <gateway-id> --schema` to inspect the exact credentials,
 arguments, and operations supported by an installed gateway.

@@ -7,7 +7,7 @@
 /// iptables/nftables directly.
 ///
 /// For full enforcement, combine with:
-///   - An HTTP proxy that calls `cos netfilter check` before forwarding
+///   - An HTTP proxy that calls `yu netfilter check` before forwarding
 ///   - The agent's sandbox tool, which can run subprocesses with
 ///     `--no-network` for complete isolation (see
 ///     `crate::agent::tools::cos_proxy::cos_sandbox`)
@@ -113,7 +113,7 @@ fn save_config(cfg: &NetFilterConfig) {
 
 /// Atomic read-modify-write on the netfilter config. Without this,
 /// `load_config()` + mutate + `save_config()` is a textbook lost-
-/// update race: two concurrent `cos netfilter add` calls both read
+/// update race: two concurrent `yu netfilter add` calls both read
 /// the same starting state and the second `save_config` clobbers
 /// the first. Funnel every mutation through here.
 fn update_config<F>(transform: F) -> Result<(), String>
@@ -158,8 +158,8 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
 /// Add a network policy rule.
 ///
-/// Usage: cos netfilter add --allow <domain> [--port N] [--method GET,POST] [--path "/api/**"] [--binary /usr/bin/git] [--tls]
-///        cos netfilter add --deny <domain>
+/// Usage: yu netfilter add --allow <domain> [--port N] [--method GET,POST] [--path "/api/**"] [--binary /usr/bin/git] [--tls]
+///        yu netfilter add --deny <domain>
 fn cmd_add(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
@@ -215,8 +215,8 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let domain = domain.ok_or("usage: cos netfilter add --allow|--deny <domain> [--port N] [--method GET,POST] [--path \"/api/**\"] [--binary /usr/bin/git] [--tls]")?;
-    let action = action.ok_or("usage: cos netfilter add --allow|--deny <domain>")?;
+    let domain = domain.ok_or("usage: yu netfilter add --allow|--deny <domain> [--port N] [--method GET,POST] [--path \"/api/**\"] [--binary /usr/bin/git] [--tls]")?;
+    let action = action.ok_or("usage: yu netfilter add --allow|--deny <domain>")?;
 
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let rule = NetRule {
@@ -271,11 +271,11 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
 
 /// Remove a rule by domain.
 ///
-/// Usage: cos netfilter remove <domain>
+/// Usage: yu netfilter remove <domain>
 fn cmd_remove(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
-    let domain = args.first().ok_or("usage: cos netfilter remove <domain>")?;
+    let domain = args.first().ok_or("usage: yu netfilter remove <domain>")?;
     let domain_clone = domain.clone();
     let mut removed = 0_usize;
     let removed_ref = &mut removed;
@@ -334,13 +334,13 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 
 /// Check if a domain is allowed under current rules.
 ///
-/// Usage: cos netfilter check <domain> [--method GET] [--path /api/v1] [--binary /usr/bin/curl]
+/// Usage: yu netfilter check <domain> [--method GET] [--path /api/v1] [--binary /usr/bin/curl]
 pub fn cmd_check(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
-        .ok_or("usage: cos netfilter check <domain> [--method M] [--path P] [--binary B]")?;
+        .ok_or("usage: yu netfilter check <domain> [--method M] [--path P] [--binary B]")?;
 
     let mut method: Option<String> = None;
     let mut path: Option<String> = None;
@@ -522,13 +522,13 @@ fn cmd_reset(_args: &[String]) -> Result<Value, String> {
 
 /// Set default policy.
 ///
-/// Usage: cos netfilter default allow-all|deny-all
+/// Usage: yu netfilter default allow-all|deny-all
 fn cmd_default(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let policy_str = args
         .first()
-        .ok_or("usage: cos netfilter default allow-all|deny-all")?;
+        .ok_or("usage: yu netfilter default allow-all|deny-all")?;
 
     if policy_str != "allow-all" && policy_str != "deny-all" {
         return Err("default policy must be 'allow-all' or 'deny-all'".into());
@@ -547,7 +547,7 @@ fn cmd_default(args: &[String]) -> Result<Value, String> {
 
 /// Export rules as a proxy-consumable JSON document.
 ///
-/// Usage: cos netfilter export
+/// Usage: yu netfilter export
 ///
 /// Returns the full config including all HTTP-level fields,
 /// suitable for consumption by an external proxy (mitmproxy, squid, nginx, etc.).
@@ -646,13 +646,13 @@ fn earliest_expiry(timestamps: &[String], window_secs: u64) -> Option<u64> {
 
 /// Set a rate limit for a domain.
 ///
-/// Usage: cos netfilter rate-limit <domain> --rpm N [--burst N]
+/// Usage: yu netfilter rate-limit <domain> --rpm N [--burst N]
 fn cmd_rate_limit(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
-        .ok_or("usage: cos netfilter rate-limit <domain> --rpm N [--burst N]")?;
+        .ok_or("usage: yu netfilter rate-limit <domain> --rpm N [--burst N]")?;
 
     let mut rpm: Option<u32> = None;
     let mut burst: u32 = 0;
@@ -678,7 +678,7 @@ fn cmd_rate_limit(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let rpm = rpm.ok_or("usage: cos netfilter rate-limit <domain> --rpm N [--burst N]")?;
+    let rpm = rpm.ok_or("usage: yu netfilter rate-limit <domain> --rpm N [--burst N]")?;
 
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let rl = RateLimit {
@@ -705,7 +705,7 @@ fn cmd_rate_limit(args: &[String]) -> Result<Value, String> {
 
 /// List all rate limits.
 ///
-/// Usage: cos netfilter rate-limits
+/// Usage: yu netfilter rate-limits
 fn cmd_rate_limits(_args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
@@ -731,13 +731,13 @@ fn cmd_rate_limits(_args: &[String]) -> Result<Value, String> {
 
 /// Remove a rate limit for a domain.
 ///
-/// Usage: cos netfilter rate-limit-remove <domain>
+/// Usage: yu netfilter rate-limit-remove <domain>
 fn cmd_rate_limit_remove(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
-        .ok_or("usage: cos netfilter rate-limit-remove <domain>")?;
+        .ok_or("usage: yu netfilter rate-limit-remove <domain>")?;
 
     let domain_clone = domain.clone();
     let mut removed = 0_usize;
@@ -762,13 +762,13 @@ fn cmd_rate_limit_remove(args: &[String]) -> Result<Value, String> {
 
 /// Check if a request would be allowed under rate limits (and record it).
 ///
-/// Usage: cos netfilter rate-check <domain> [--dry-run]
+/// Usage: yu netfilter rate-check <domain> [--dry-run]
 fn cmd_rate_check(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let domain = args
         .first()
-        .ok_or("usage: cos netfilter rate-check <domain> [--dry-run]")?;
+        .ok_or("usage: yu netfilter rate-check <domain> [--dry-run]")?;
 
     let dry_run = args.iter().any(|a| a == "--dry-run");
 

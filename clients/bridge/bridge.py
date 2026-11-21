@@ -5,7 +5,7 @@ No tool schemas.  No prompt pollution.  The agent discovers capabilities
 progressively by running ``cos`` commands.
 
 The bridge scans LLM output for lines starting with ``$ ``, executes
-them via the cos CLI, and feeds the results back.  The loop continues
+them via the yu CLI, and feeds the results back.  The loop continues
 until the LLM responds without any commands.
 
 Usage:
@@ -39,7 +39,7 @@ Run the command above to see what you can do.\
 
 
 # ---------------------------------------------------------------------------
-# Executor — runs cos commands locally or inside a Docker container
+# Executor — runs yu commands locally or inside a Docker container
 # ---------------------------------------------------------------------------
 
 class Executor:
@@ -49,15 +49,15 @@ class Executor:
         self.data_dir = data_dir
 
     def run(self, command_line):
-        """Execute a cos command string and return output text."""
+        """Execute a yu command string and return output text."""
         try:
             parts = shlex.split(command_line)
         except ValueError as e:
             return f"error: invalid command syntax: {e}"
 
-        # Strip leading "cos" — user writes "$ cos fs ls" but we call
+        # Strip leading "yu" — user writes "$ yu fs ls" but we call
         # the binary directly.
-        if parts and parts[0] == "cos":
+        if parts and parts[0] == "yu":
             parts = parts[1:]
 
         if self.container_id:
@@ -70,7 +70,7 @@ class Executor:
                 docker_env_args += ["-e", f"COS_APPS_DIR={self.apps_dir}"]
             if self.data_dir:
                 docker_env_args += ["-e", f"COS_DATA_DIR={self.data_dir}"]
-            cmd = ["docker", "exec"] + docker_env_args + [self.container_id, "cos"] + parts
+            cmd = ["docker", "exec"] + docker_env_args + [self.container_id, "yu"] + parts
             # Run `docker exec` itself with a minimal env — just enough
             # for the client to find the docker CLI and talk to the
             # daemon. We deliberately do NOT copy os.environ.
@@ -108,14 +108,14 @@ class Executor:
             return f"error: {e}"
 
     def _cos_path(self):
-        """Resolve the cos binary. Prefer system-installed, fall back to local build."""
+        """Resolve the yu binary. Prefer system-installed, fall back to local build."""
         import shutil
-        system_cos = shutil.which("cos")
+        system_cos = shutil.which("yu")
         if system_cos:
             return system_cos
         # Development: use locally built Rust binary
         base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        return os.path.join(base, "core", "target", "release", "cos")
+        return os.path.join(base, "core", "target", "release", "yu")
 
 
 # ---------------------------------------------------------------------------

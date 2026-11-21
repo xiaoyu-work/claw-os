@@ -201,8 +201,8 @@ pub const COMPONENTS: &[Component] = &[
         critical: true,
     },
     Component {
-        name: "cos",
-        path: "/usr/local/bin/cos",
+        name: "yu",
+        path: "/usr/local/bin/yu",
         package: "claw-os-agent",
         critical: true,
     },

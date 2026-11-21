@@ -70,8 +70,8 @@ impl ChatOptions {
             match arg.as_str() {
                 "--app" => {
                     return Err(
-                        "`cos agent chat` is the Claw Agent UI and does not accept --app. \
-                         For App-gated calls use `cos ai chat --app <id>`."
+                        "`yu agent chat` is the Claw Agent UI and does not accept --app. \
+                         For App-gated calls use `yu ai chat --app <id>`."
                             .into(),
                     )
                 }

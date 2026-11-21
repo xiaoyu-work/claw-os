@@ -29,7 +29,7 @@ use tokio::{
 
 use crate::state::AppState;
 
-const DEFAULT_COS_BIN: &str = "/usr/local/bin/cos";
+const DEFAULT_COS_BIN: &str = "/usr/local/bin/yu";
 const TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(120);
 const STDOUT_LIMIT: usize = 1024 * 1024;
 const STDERR_LIMIT: usize = 64 * 1024;

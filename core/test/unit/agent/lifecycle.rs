@@ -200,7 +200,7 @@ fn resume_refuses_when_lease_still_held() {
 
 #[test]
 fn stop_no_toctou() {
-    // Regression: two concurrent `cos agent stop` calls on the
+    // Regression: two concurrent `yu agent stop` calls on the
     // same session must serialize through the stop.lock flock.
     // Without it, both observe `lease.is_none() && active` from
     // their independent reads and both write a meta — one of

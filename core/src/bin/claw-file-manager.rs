@@ -38,7 +38,7 @@ mod desktop {
 
     const SERVICE: &str = "org.freedesktop.FileManager1";
     const OBJECT_PATH: &str = "/org/freedesktop/FileManager1";
-    const COS: &str = "/usr/local/bin/cos";
+    const COS: &str = "/usr/local/bin/yu";
     const MAX_PENDING: usize = 8;
     const MAX_URIS: usize = 128;
     const MAX_URI_BYTES: usize = 4096;
@@ -70,7 +70,7 @@ mod desktop {
             app.as_str(),
             "stdio" | "lint" | "tool" | "install" | "create" | "consent"
         ) {
-            return Err("App routing preference cannot select a cos CLI management namespace");
+            return Err("App routing preference cannot select a yu CLI management namespace");
         }
         Ok(app)
     }

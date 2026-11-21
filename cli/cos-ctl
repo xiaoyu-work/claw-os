@@ -8,7 +8,7 @@ Usage:
     cos-ctl list                           List running instances
     cos-ctl stop <id>                      Stop an instance
     cos-ctl shell <id>                     Attach a shell to an instance
-    cos-ctl exec <id> <cos-command...>     Run a cos command inside an instance
+    cos-ctl exec <id> <cos-command...>     Run a yu command inside an instance
     cos-ctl logs <id>                      Show container logs
     cos-ctl image                          Show image info
     cos-ctl status                         Show system status
@@ -153,12 +153,12 @@ def cmd_shell(args):
 
 
 def cmd_exec(args):
-    """Run a cos command inside an instance."""
+    """Run a yu command inside an instance."""
     if len(args) < 2:
         error("usage: cos-ctl exec <id|name> <cos-command...>")
     target = args[0]
     cos_args = args[1:]
-    result = docker("exec", target, "cos", *cos_args)
+    result = docker("exec", target, "yu", *cos_args)
     # Pass through the JSON output from cos directly
     if result.stdout.strip():
         try:

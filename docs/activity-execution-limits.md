@@ -23,10 +23,10 @@ In an installed Linux or WSL environment, use an existing Activity ID:
 ```bash
 activity_id="00000000-0000-4000-8000-000000000001"
 
-cos activity set-execution-limits "$activity_id" \
+yu activity set-execution-limits "$activity_id" \
   --max-attempts 10 --max-turns 5 --expires-at 2026-09-18T00:00:00Z
 
-cos activity execution-limits "$activity_id"
+yu activity execution-limits "$activity_id"
 ```
 
 Choose a future RFC3339 expiry. The backend normalizes it to UTC. Allowed
@@ -37,11 +37,11 @@ The first policy is enabled at revision 1. Later edits require the current
 revision:
 
 ```bash
-cos activity set-execution-limits "$activity_id" --revision 1 \
+yu activity set-execution-limits "$activity_id" --revision 1 \
   --max-attempts 15 --max-turns 4 --expires-at 2026-09-19T00:00:00Z
 
-cos activity disable-execution-limits "$activity_id" --revision 2
-cos activity enable-execution-limits "$activity_id" --revision 3
+yu activity disable-execution-limits "$activity_id" --revision 2
+yu activity enable-execution-limits "$activity_id" --revision 3
 ```
 
 Updates preserve the used-attempt counter and enabled state. They never
@@ -117,7 +117,7 @@ force. Unsupported/corrupt state is an error, never a reset or unlimited
 fallback. See [updating](updating.md).
 
 Activity-linked event triggers require an enabled, unexpired finite policy
-before scheduling autonomous work. Manual `cos triggers run` retains that
+before scheduling autonomous work. Manual `yu triggers run` retains that
 requirement. Trigger creation does not reserve or refund an attempt: the normal
 Root claim still owns accounting and the actual execution ceiling.
 See [event-driven Activities](activities.md#event-driven-work).

@@ -1,6 +1,6 @@
 # Inter-Process Communication
 
-Call the `cos_ipc` tool — **not the shell** — for cross-session messaging, locks, barriers, and streaming pipes. There is no user-facing `cos ipc` CLI command.
+Call the `cos_ipc` tool — **not the shell** — for cross-session messaging, locks, barriers, and streaming pipes. There is no user-facing `yu ipc` CLI command.
 
 ## Tool shape
 

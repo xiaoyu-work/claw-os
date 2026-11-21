@@ -10,7 +10,7 @@ use crate::apps::{self, installation};
 use crate::cli_help::{show_app_command_schema, show_app_help, show_app_schema, show_apps};
 
 /// Directory where freedesktop `.desktop` launchers are written at
-/// `cos app install`. Overridable via `COS_APPLICATIONS_DIR` (used by
+/// `yu app install`. Overridable via `COS_APPLICATIONS_DIR` (used by
 /// tests and per-user installs); defaults to the system location the
 /// desktop shell's applibrary/launcher already scan.
 fn applications_dir() -> PathBuf {
@@ -19,7 +19,7 @@ fn applications_dir() -> PathBuf {
     )
 }
 
-/// Dispatch to apps under the "cos app" namespace.
+/// Dispatch to apps under the "yu app" namespace.
 pub(super) fn dispatch_app(
     args: &[String],
     stdin_data: Option<Vec<u8>>,
@@ -33,14 +33,14 @@ pub(super) fn dispatch_app(
     // `require_runnable` gates every path that executes App code.
     let discovered = apps::discover(&apps_dir);
 
-    // "cos app" with no further args (or with --help/help) → list apps.
+    // "yu app" with no further args (or with --help/help) → list apps.
     if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h" | "help") {
         return show_apps(&discovered);
     }
 
     let app_name = &args[0];
 
-    // Special: `cos app lint [<name>]` — refuses AI-using apps that
+    // Special: `yu app lint [<name>]` — refuses AI-using apps that
     // import provider SDKs directly. Run before the "unknown app"
     // check so `lint` itself doesn't collide with an app name.
     if app_name == "lint" {
@@ -48,7 +48,7 @@ pub(super) fn dispatch_app(
         return lint_apps(&discovered, target);
     }
 
-    // Special: `cos app tool list [<name>]` — list session-exposed
+    // Special: `yu app tool list [<name>]` — list session-exposed
     // tools (the strict-schema, agent-callable surface) declared by
     // each app's manifest. Lives next to `lint` so authors can audit
     // what their app advertises to the kernel agent.
@@ -56,7 +56,7 @@ pub(super) fn dispatch_app(
         return tool_cmd(&args[1..], &discovered);
     }
 
-    // Special: `cos app install <source>` — authenticate and review the
+    // Special: `yu app install <source>` — authenticate and review the
     // permission requests before publishing the App. AI consent is separate.
     // Lives in the `app` namespace because it is an admin operation against the
     // App layer — no AI gate involved.
@@ -64,7 +64,7 @@ pub(super) fn dispatch_app(
         return install_cmd(&args[1..]);
     }
 
-    // Special: `cos app create <id> [--kind cli|desktop|both]` —
+    // Special: `yu app create <id> [--kind cli|desktop|both]` —
     // scaffold a new app directory (app.json + entry stub) so a
     // developer starts from a valid, ready-to-edit skeleton instead of
     // hand-writing the manifest. Pure file generation; no AI gate.
@@ -72,7 +72,7 @@ pub(super) fn dispatch_app(
         return create_cmd(&args[1..]);
     }
 
-    // Special: `cos app consent <sub> [<name>] [...]` — review / grant /
+    // Special: `yu app consent <sub> [<name>] [...]` — review / grant /
     // revoke a user's explicit approval of an App's manifest AI policy.
     // Lives in the `app` namespace because it is an inherently per-app
     // user decision.
@@ -86,13 +86,13 @@ pub(super) fn dispatch_app(
         return Err(format!("unknown app: {app_name}. installed: {names:?}"));
     }
 
-    // "cos app <name>" / "cos app <name> --help|-h|help" → show app help.
+    // "yu app <name>" / "yu app <name> --help|-h|help" → show app help.
     if args.len() == 1 || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"))
     {
         return show_app_help(app_name, &discovered[app_name.as_str()]);
     }
 
-    // cos app <name> --schema → show all command schemas for this app
+    // yu app <name> --schema → show all command schemas for this app
     if args.len() == 2 && args[1] == "--schema" {
         return show_app_schema(app_name, &discovered[app_name.as_str()]);
     }
@@ -131,7 +131,7 @@ pub(super) fn dispatch_app(
     if !app.manifest.operations.contains_key(command.as_str()) {
         let valid: Vec<&String> = app.manifest.operations.keys().collect();
         return Err(format!(
-            "unknown command: cos app {app_name} {command}. available: {valid:?}"
+            "unknown command: yu app {app_name} {command}. available: {valid:?}"
         ));
     }
 
@@ -171,7 +171,7 @@ fn stdio_schema(args: &[String]) -> Result<Option<String>, String> {
             ));
         }
         let mut schema = apps::operation_schema(operation);
-        schema["command"] = json!(format!("cos app stdio {} {}", args[0], args[1]));
+        schema["command"] = json!(format!("yu app stdio {} {}", args[0], args[1]));
         schema["model_callable"] = json!(false);
         schema["output_format"] = json!("opaque");
         schema["entry"] = json!(app
@@ -181,12 +181,12 @@ fn stdio_schema(args: &[String]) -> Result<Option<String>, String> {
             .unwrap_or_else(|| app.manifest.runtime.default_entry()));
         return Ok(Some(schema.to_string()));
     }
-    Err("opaque App stdio requires the standalone `cos app stdio` process frontend".into())
+    Err("opaque App stdio requires the standalone `yu app stdio` process frontend".into())
 }
 
 pub(super) fn run_stdio(args: &[String]) -> Result<(), String> {
     let (Some(app_id), Some(operation)) = (args.first(), args.get(1)) else {
-        return Err("usage: cos app stdio <id> <operation> [args...]".into());
+        return Err("usage: yu app stdio <id> <operation> [args...]".into());
     };
     let app = apps::find_verified_fresh(&apps_dir(), app_id)?;
     require_runnable(&app)?;
@@ -238,10 +238,10 @@ pub(super) fn schema_requested(args: &[String]) -> bool {
         .any(|arg| arg == "--schema")
 }
 
-/// `cos app lint [<name>]` — refuse apps that smuggle in AI SDKs.
+/// `yu app lint [<name>]` — refuse apps that smuggle in AI SDKs.
 ///
 /// Apps are required to route every model call through the kernel's
-/// `cos ai chat --app <id>` gate (via `claw-os-sdk/python/src/claw_os_sdk/ai.py`). Importing
+/// `yu ai chat --app <id>` gate (via `claw-os-sdk/python/src/claw_os_sdk/ai.py`). Importing
 /// `openai`, `anthropic`, or `google.generativeai` directly would
 /// bypass budget, safety, and audit — so the linter looks for those
 /// imports in every `*.py` file under each app's directory and reports
@@ -283,7 +283,7 @@ fn lint_apps(
             "hint": if any_violation {
                 "Lint failed. Apps must (a) route AI calls through `claw_os_sdk.ai` (not direct provider SDKs) \
                  and (b) ship every package-relative file referenced by their `mcp.entry` so the kernel agent can spawn \
-                 the MCP server. Run `cos app tool list <app>` to inspect the declared tool surface."
+                 the MCP server. Run `yu app tool list <app>` to inspect the declared tool surface."
             } else {
                 "All apps route their AI calls through the kernel gate and ship every declared MCP entry."
             },
@@ -292,13 +292,13 @@ fn lint_apps(
     ))
 }
 
-/// `cos app tool <sub>` — discovery surface for App-defined MCP
+/// `yu app tool <sub>` — discovery surface for App-defined MCP
 /// tools (the strict-schema, agent-callable surface declared in each
 /// manifest's `mcp` block).
 ///
 /// Currently supports:
-/// * `cos app tool list` — every MCP tool across every installed app.
-/// * `cos app tool list <app>` — the tools one app exposes.
+/// * `yu app tool list` — every MCP tool across every installed app.
+/// * `yu app tool list <app>` — the tools one app exposes.
 ///
 /// The CLI just prints what the manifest claims; it does *not* spawn
 /// the App MCP server (that happens inside the agent on first call).
@@ -356,16 +356,16 @@ fn tool_cmd(
             Ok(Some(json!({"apps": apps_json}).to_string()))
         }
         "--help" | "-h" | "help" => Ok(Some(
-            "cos app tool list [<app>]  list mcp-exposed tools".to_string(),
+            "yu app tool list [<app>]  list mcp-exposed tools".to_string(),
         )),
         other => Err(format!(
-            "unknown subcommand: cos app tool {other}. try: cos app tool list [<app>]"
+            "unknown subcommand: yu app tool {other}. try: yu app tool list [<app>]"
         )),
     }
 }
 
-/// `cos app install <source-dir> [--review] [--yes] [--no-consent] [--force]`
-/// `cos app install --recover <app-id>` checks a recorded outcome without publication.
+/// `yu app install <source-dir> [--review] [--yes] [--no-consent] [--force]`
+/// `yu app install --recover <app-id>` checks a recorded outcome without publication.
 ///
 /// Reviews a signed App, asks Root to publish under its configured App root,
 /// and separately presents the App's AI consent policy.
@@ -385,7 +385,7 @@ fn tool_cmd(
 ///     retaining an existing normalized nested layout. A different CLI-local
 ///     App root is refused. If the source already
 ///     resolves to that exact path (the in-tree dev workflow where
-///     someone runs `cos app install apps/<id>` against the bundled
+///     someone runs `yu app install apps/<id>` against the bundled
 ///     tree), the copy step is skipped and only validation +
 ///     review and checked retirement run.
 ///   * Otherwise the source is copied to a hidden sibling staging
@@ -435,7 +435,7 @@ fn request_directory(params: Value, app_id: &str) -> Result<installation::Direct
         ),
     ).map_err(|error| {
         if error.may_have_dispatched() {
-            format!("Root directory installation outcome is unknown: {error}; check with `cos app install --recover {app_id}`, never replay publication")
+            format!("Root directory installation outcome is unknown: {error}; check with `yu app install --recover {app_id}`, never replay publication")
         } else {
             format!("Root directory installation service is unavailable: {error}")
         }
@@ -447,13 +447,13 @@ fn request_directory(params: Value, app_id: &str) -> Result<installation::Direct
         ).to_string());
     }
     serde_json::from_value(
-        response.result.ok_or_else(|| format!("Root directory installation returned no result; check with `cos app install --recover {app_id}`"))?,
-    ).map_err(|error| format!("invalid Root directory installation response: {error}; check with `cos app install --recover {app_id}`"))
+        response.result.ok_or_else(|| format!("Root directory installation returned no result; check with `yu app install --recover {app_id}`"))?,
+    ).map_err(|error| format!("invalid Root directory installation response: {error}; check with `yu app install --recover {app_id}`"))
 }
 
 fn recover_directory(args: &[String]) -> Result<Option<String>, String> {
     if args.len() != 2 || args[0] != "--recover" || args[1].starts_with("--") {
-        return Err("usage: cos app install --recover <app-id> (read-only outcome check)".into());
+        return Err("usage: yu app install --recover <app-id> (read-only outcome check)".into());
     }
     require_directory_root()?;
     let app_id = &args[1];
@@ -514,12 +514,12 @@ fn publish_confirmed_directory(
         || serde_json::to_value(&published.manifest).map_err(|error| error.to_string())?
             != serde_json::to_value(&app.manifest).map_err(|error| error.to_string())?
     {
-        return Err(format!("Root directory publication does not match the confirmed App; check with `cos app install --recover {}`", app.manifest.id));
+        return Err(format!("Root directory publication does not match the confirmed App; check with `yu app install --recover {}`", app.manifest.id));
     }
     let installed = installation::verify_installed_app(&published.destination, &app.manifest.id)
-        .map_err(|error| format!("{error}; check with `cos app install --recover {}`", app.manifest.id))?;
+        .map_err(|error| format!("{error}; check with `yu app install --recover {}`", app.manifest.id))?;
     if crate::provenance::runtime::PackageRef::of(&installed) != expected {
-        return Err(format!("Installed App differs from Root's confirmed directory publication; check with `cos app install --recover {}`", app.manifest.id));
+        return Err(format!("Installed App differs from Root's confirmed directory publication; check with `yu app install --recover {}`", app.manifest.id));
     }
     Ok(published)
 }
@@ -682,7 +682,7 @@ fn install_cmd_with_publisher(
         .find(|a| !a.starts_with("--"))
         .cloned()
         .ok_or_else(|| {
-            "usage: cos app install <source-dir> [--review] [--yes] [--no-consent] [--force]"
+            "usage: yu app install <source-dir> [--review] [--yes] [--no-consent] [--force]"
                 .to_string()
         })?;
     let review_only = args.iter().any(|a| a == "--review");
@@ -731,7 +731,7 @@ fn install_cmd_with_publisher(
 
     // If the app declares a `desktop` surface, emit a freedesktop
     // launcher so it appears in the applibrary/launcher. The launcher's
-    // Exec routes through `cos app <id> <exec>` so the GUI process is
+    // Exec routes through `yu app <id> <exec>` so the GUI process is
     // kernel-spawned and inherits the app's identity/audit/consent.
     match write_desktop_entry(&manifest) {
         Ok(Some(path)) => {
@@ -761,7 +761,7 @@ fn install_cmd_with_publisher(
             "granted": false,
             "deferred": true,
             "reason": "installation_does_not_grant_ai_consent",
-            "hint": format!("Run `cos app consent grant {}` to approve.", manifest.id),
+            "hint": format!("Run `yu app consent grant {}` to approve.", manifest.id),
         });
         return Ok(Some(envelope.to_string()));
     }
@@ -786,7 +786,7 @@ fn install_cmd_with_publisher(
                 "needed": true,
                 "granted": false,
                 "reason": "user_declined",
-                "hint": format!("Run `cos app consent grant {}` to approve later.", manifest.id),
+                "hint": format!("Run `yu app consent grant {}` to approve later.", manifest.id),
             });
             return Ok(Some(envelope.to_string()));
         }
@@ -803,14 +803,14 @@ fn install_cmd_with_publisher(
     Ok(Some(envelope.to_string()))
 }
 
-/// `cos app create <id> [--kind cli|desktop|both] [--dir <parent>]
+/// `yu app create <id> [--kind cli|desktop|both] [--dir <parent>]
 /// [--force]` — scaffold a new app from a template.
 ///
 /// Generates `<parent>/<id>/` (parent defaults to the current dir)
 /// containing:
 ///   * `app.json` — a valid manifest for the chosen surface kind. For
 ///     `cli`/`both` it includes a sample `operations` entry; for
-///     `desktop`/`both` it includes a `desktop` block so `cos app
+///     `desktop`/`both` it includes a `desktop` block so `yu app
 ///     install` will emit a launcher.
 ///   * `main.py` — a Python entry exposing `run(command, args)`. When a
 ///     desktop surface is requested the stub branches on
@@ -825,7 +825,7 @@ pub(super) fn create_cmd(args: &[String]) -> Result<Option<String>, String> {
         .find(|a| !a.starts_with("--"))
         .cloned()
         .ok_or_else(|| {
-            "usage: cos app create <id> [--kind cli|desktop|both] [--dir <parent>] [--force]"
+            "usage: yu app create <id> [--kind cli|desktop|both] [--dir <parent>] [--force]"
                 .to_string()
         })?;
     if !is_scaffold_id(&id) {
@@ -888,7 +888,7 @@ pub(super) fn create_cmd(args: &[String]) -> Result<Option<String>, String> {
             manifest_path.display().to_string(),
             entry_path.display().to_string(),
         ],
-        "next": format!("Edit the stubs, then run `cos app install {}`.", dest.display()),
+        "next": format!("Edit the stubs, then run `yu app install {}`.", dest.display()),
     });
     Ok(Some(envelope.to_string()))
 }
@@ -996,8 +996,8 @@ fn scaffold_main_py(id: &str, want_ops: bool, want_desktop: bool) -> String {
 
 ///
 /// Writes `<applications_dir>/com.clawos.<Id>.desktop` with
-/// `Exec=cos app <id> <exec> [%F]`. Routing the launch through
-/// `cos app <id> ...` (rather than exec-ing the app binary) is what
+/// `Exec=yu app <id> <exec> [%F]`. Routing the launch through
+/// `yu app <id> ...` (rather than exec-ing the app binary) is what
 /// makes the GUI process kernel-spawned, so `COS_APP_ID` identity,
 /// audit, and consent apply exactly as on the headless path.
 ///
@@ -1025,9 +1025,9 @@ fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, S
     // Field code: only request file arguments when the app declares
     // MIME associations, otherwise launch with no arguments.
     let exec_line = if desktop.mime_types.is_empty() {
-        format!("cos app {id} {} ", desktop.exec)
+        format!("yu app {id} {} ", desktop.exec)
     } else {
-        format!("cos app {id} {} %F", desktop.exec)
+        format!("yu app {id} {} %F", desktop.exec)
     };
     let exec_line = exec_line.trim_end().to_string();
 
@@ -1074,7 +1074,7 @@ fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, S
     Ok(Some(file.display().to_string()))
 }
 
-/// `cos app consent <sub> [...]` — review / grant / revoke the user's
+/// `yu app consent <sub> [...]` — review / grant / revoke the user's
 /// explicit approval of an App's manifest AI policy. The gate refuses
 /// every AI call from an App that lacks a fresh consent record; this
 /// CLI is how the user produces, inspects, and revokes those records.
@@ -1103,11 +1103,11 @@ pub(super) fn consent_cmd(
                 "app": "consent",
                 "description": "Approve, inspect, or revoke an App's AI policy.",
                 "subcommands": {
-                    "list":    "cos app consent list",
-                    "show":    "cos app consent show <app>",
-                    "path":    "cos app consent path <app>",
-                    "grant":   "cos app consent grant <app> [--yes]",
-                    "revoke":  "cos app consent revoke <app>",
+                    "list":    "yu app consent list",
+                    "show":    "yu app consent show <app>",
+                    "path":    "yu app consent path <app>",
+                    "grant":   "yu app consent grant <app> [--yes]",
+                    "revoke":  "yu app consent revoke <app>",
                 },
                 "hint": "An App with an `ai` block in its manifest cannot make AI calls until you have granted consent.",
             })
@@ -1146,7 +1146,7 @@ pub(super) fn consent_cmd(
                 json!({
                     "ai_apps": rows.len(),
                     "consents": rows,
-                    "hint": "Run `cos app consent grant <app>` for any 'missing' or 'stale' entry.",
+                    "hint": "Run `yu app consent grant <app>` for any 'missing' or 'stale' entry.",
                 })
                 .to_string(),
             ))
@@ -1155,7 +1155,7 @@ pub(super) fn consent_cmd(
         "show" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos app consent show <app>".to_string())?;
+                .ok_or_else(|| "usage: yu app consent show <app>".to_string())?;
             let stored = consent::load(app)?;
             Ok(Some(
                 json!({
@@ -1171,7 +1171,7 @@ pub(super) fn consent_cmd(
         "path" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos app consent path <app>".to_string())?;
+                .ok_or_else(|| "usage: yu app consent path <app>".to_string())?;
             Ok(Some(
                 json!({
                     "app": app,
@@ -1184,7 +1184,7 @@ pub(super) fn consent_cmd(
         "grant" => {
             let app_id = args
                 .get(1)
-                .ok_or_else(|| "usage: cos app consent grant <app> [--yes]".to_string())?;
+                .ok_or_else(|| "usage: yu app consent grant <app> [--yes]".to_string())?;
             let auto = args.iter().skip(2).any(|a| a == "--yes");
 
             let installed = discovered
@@ -1237,7 +1237,7 @@ pub(super) fn consent_cmd(
         "revoke" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos app consent revoke <app>".to_string())?;
+                .ok_or_else(|| "usage: yu app consent revoke <app>".to_string())?;
             let removed = consent::delete(app)?;
             Ok(Some(
                 json!({

@@ -21,13 +21,13 @@ fn call(route: Command, params: Value) -> Result<Value, String> {
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     if command == "list" {
         if !args.is_empty() {
-            return Err("usage: cos workspace list".into());
+            return Err("usage: yu workspace list".into());
         }
         return call(Command::WorkspaceList, json!({}));
     }
     if command == "show" {
         if args.len() != 1 {
-            return Err("usage: cos workspace show ID".into());
+            return Err("usage: yu workspace show ID".into());
         }
         validate_id(&args[0])?;
         return call(Command::WorkspaceGet, json!({"id":args[0]}));
@@ -87,7 +87,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 .any(|k| !matches!(k.as_str(), "--description" | "--context"))
         {
             return Err(
-                "usage: cos workspace create NAME [--description TEXT] [--context TEXT]".into(),
+                "usage: yu workspace create NAME [--description TEXT] [--context TEXT]".into(),
             );
         }
         let action = WorkspaceAction::Create {
@@ -183,7 +183,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
     let expected_revision: u64 = flags
         .remove("--revision")
-        .ok_or("supply --revision from cos workspace show ID")?
+        .ok_or("supply --revision from yu workspace show ID")?
         .parse()
         .map_err(|_| "--revision must be a positive integer")?;
     let second = || {
@@ -290,7 +290,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         },
         _ => {
             return Err(format!(
-                "unknown Workspace command: {command}; try cos workspace --help"
+                "unknown Workspace command: {command}; try yu workspace --help"
             ))
         }
     };

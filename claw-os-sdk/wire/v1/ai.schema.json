@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/ai.schema.json",
   "title": "AI request / reply",
-  "description": "Stable text-chat reply returned by `cos ai chat`.",
+  "description": "Stable text-chat reply returned by `yu ai chat`.",
   "type": "object",
   "required": ["text", "model", "provider", "verb", "usage", "budget", "review"],
   "additionalProperties": true,

@@ -2,7 +2,7 @@
 
 Apps that want to fulfil a model-proposed tool call (returned in
 ``ai.AiResponse.tool_calls`` after ``ai.chat(..., tools=[...])``) shell
-out through this helper to ``cos ai tool <name> --app <id> --args
+out through this helper to ``yu ai tool <name> --app <id> --args
 <json>``. The kernel runs the catalog implementation under the App's
 own capabilities, audits the call, and returns a structured result.
 
@@ -24,8 +24,8 @@ verb (``fs.read``, ``fs.list``, ``data.kv.read``, ...) from the tool
 name and runs ``caps::require`` against the App's grant before any
 side effect.
 
-Apps also **never** call ``cos agent`` for tools. ``cos agent`` is
-the kernel's own Agent product; ``cos ai tool`` is the App-facing
+Apps also **never** call ``yu agent`` for tools. ``yu agent`` is
+the kernel's own Agent product; ``yu ai tool`` is the App-facing
 primitive. See ``docs/app-ai-integration.md`` §10.
 
 Typical usage
@@ -68,7 +68,7 @@ from .generated import (
 )
 
 
-# Subprocess timeout — covers every shell-out to the `cos` binary so a
+# Subprocess timeout — covers every shell-out to the `yu` binary so a
 # wedged child never blocks the calling app forever.
 _DEFAULT_TIMEOUT_S = 60
 _MISSING = object()
@@ -91,7 +91,7 @@ class ToolDenied(ToolError):
     """A gate (capability / unknown tool / args shape) refused the call.
 
     The ``payload`` attribute holds the structured envelope
-    ``cos ai tool`` returned (verb, scope, reason, hint, …) —
+    ``yu ai tool`` returned (verb, scope, reason, hint, …) —
     suitable for forwarding back to the agent.
     """
 
@@ -124,7 +124,7 @@ class ToolResult:
 
 @dataclass
 class CatalogEntry:
-    """One row from ``cos ai tools``."""
+    """One row from ``yu ai tools``."""
 
     name: str
     summary: str
@@ -149,7 +149,7 @@ def call(
     """Invoke a catalog tool through the kernel.
 
     ``args`` may be any JSON value, including explicit ``None``, a scalar,
-    or an array. Shells to ``cos ai tool <name> --app <id> --args <json>``. The
+    or an array. Shells to ``yu ai tool <name> --app <id> --args <json>``. The
     kernel resolves ``name`` against the catalog, derives the caps
     verb + scope, runs ``caps::require``, executes the implementation,
     and writes an audit row.
@@ -179,10 +179,10 @@ def call(
         args_payload,
     ]
 
-    proc = _run_with_timeout(cmd, f"cos ai tool {name}")
+    proc = _run_with_timeout(cmd, f"yu ai tool {name}")
     text = (proc.stdout or "").strip()
     try:
-        envelope = decode_response(text, proc.returncode, f"cos ai tool {name}")
+        envelope = decode_response(text, proc.returncode, f"yu ai tool {name}")
     except WireDenied as exc:
         raise ToolDenied(exc.payload) from exc
     except WireUnavailable as exc:
@@ -202,17 +202,17 @@ def call(
 
 
 def catalog() -> List[CatalogEntry]:
-    """Return the live tool catalog as exposed by ``cos ai tools``.
+    """Return the live tool catalog as exposed by ``yu ai tools``.
 
     Apps shouldn't hard-code tool names at install time without
     consulting this list; the catalog evolves and a tool can be
     deprecated or renamed between releases.
     """
     cmd = [_cos_binary(), WIRE_ARG, "ai", "tools"]
-    proc = _run_with_timeout(cmd, "cos ai tools")
+    proc = _run_with_timeout(cmd, "yu ai tools")
     text = (proc.stdout or "").strip()
     try:
-        envelope = decode_response(text, proc.returncode, "cos ai tools")
+        envelope = decode_response(text, proc.returncode, "yu ai tools")
     except WireDenied as exc:
         raise ToolDenied(exc.payload) from exc
     except WireUnavailable as exc:
@@ -286,9 +286,9 @@ def _cos_binary() -> str:
     override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
-    found = shutil.which("cos")
+    found = shutil.which("yu")
     if found is None:
         raise ToolUnavailable(
-            "the `cos` binary is not on PATH; cannot reach the AI gate"
+            "the `yu` binary is not on PATH; cannot reach the AI gate"
         )
     return found

@@ -191,5 +191,5 @@ fn system_review_schema_is_not_a_model_callable_approval_tool() {
         .unwrap();
     let schema: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(schema["model_callable"], false);
-    assert_eq!(schema["command"], "cos review approve");
+    assert_eq!(schema["command"], "yu review approve");
 }

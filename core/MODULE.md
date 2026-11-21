@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`core/` builds the `cos` CLI/library, the `clawd` system broker, the
+`core/` builds the `yu` CLI/library, the `clawd` system broker, the
 unprivileged `claw-agentd` agent worker, the task-owned
 `claw-extension-host`, and small OS helper binaries.
 It owns system authority, capability enforcement, agent orchestration,
@@ -10,7 +10,7 @@ persistence, and structured primitive dispatch.
 
 ## Responsibilities
 
-- Parse and route `cos` commands.
+- Parse and route `yu` commands.
 - Broker privileged and session-scoped operations through `clawd`.
 - Run the multi-turn agent, tool registry, memory, and provider integrations.
 - Discover app manifests and bridge bundled app execution.
@@ -31,7 +31,7 @@ persistence, and structured primitive dispatch.
 | `src/bin/clawd.rs` | System daemon entry |
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
 | `src/bin/claw-mail-ai-host.rs` | Trusted Thunderbird launcher for the canonical `/usr/lib/cos/apps/mail-ai` implementation |
-| `src/bin/claw-file-manager.rs` | Unprivileged, same-owner FileManager1 URI intents through the ordinary authenticated `cos app --gui` path |
+| `src/bin/claw-file-manager.rs` | Unprivileged, same-owner FileManager1 URI intents through the ordinary authenticated `yu app --gui` path |
 | `src/bin/claw-notification-panel.rs` | Unprivileged OS shell descriptor/public presentation proxy; native App and durable delivery remain Root-supervised |
 | `src/bin/claw-security-floor.rs` | Update downgrade-protection verifier used by maintainer scripts |
 | `src/display_session/` | Root PAM/display activation, private compositor control, kernel login identity and checked display teardown |
@@ -116,7 +116,7 @@ blocked pending genuinely quarantined publication; trust and generic OS-package
 mutations remain uncoordinated. See
 [installation review](../docs/app-development.md#installation-permission-review).
 
-`cos app stdio <id> <operation> [args...]` is a human/host transport, not a
+`yu app stdio <id> <operation> [args...]` is a human/host transport, not a
 model-callable command or executable selector. It runs a signed package-local
 primary entry for an ordinary `stdin: true` operation with only that operation's
 resolved needs. The process preserves opaque stdout and incremental stdin; it
@@ -135,7 +135,7 @@ remain unchanged until their paired App/package cutover is consumable.
 `claw-file-manager` owns only the standard `org.freedesktop.FileManager1`
 desktop transport. It authenticates every method sender with the bus daemon's
 kernel UID, bounds literal URL arguments and pending launches, and runs only
-`/usr/local/bin/cos app <configured-id> --gui [URIs...]`. The default
+`/usr/local/bin/yu app <configured-id> --gui [URIs...]`. The default
 `cosmic-files` is a routing preference, not an App entitlement. No App receives
 the user bus or an invocation bridge. Root still authenticates package,
 ancestry/delegation, owner, PAM/kernel login, review, capabilities, sandbox and

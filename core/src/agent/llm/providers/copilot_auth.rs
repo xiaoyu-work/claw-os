@@ -20,7 +20,7 @@
 //!
 //! Anything inside this module that touches the wire path returns
 //! [`CopilotAuthError`] so callers (the openai_compat alias, the
-//! `cos agent setup` subcommands) can render structured error envelopes.
+//! `yu agent setup` subcommands) can render structured error envelopes.
 //!
 //! No public types from this module are persisted. The cache is wiped
 //! on process restart.
@@ -261,7 +261,7 @@ fn truncate(s: &str, max: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// Server response to a device-code request. Public so the
-/// `cos agent setup text oauth-start` subcommand can serialize it
+/// `yu agent setup text oauth-start` subcommand can serialize it
 /// straight to JSON.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeviceCode {

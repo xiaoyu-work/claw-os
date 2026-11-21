@@ -91,7 +91,7 @@ fn private_usr() {
     }
     let shadow = Path::new("/run/calendar-usr");
     mirror(Path::new("/usr"), shadow, &["lib", "libexec"]);
-    mirror(Path::new("/usr/lib"), &shadow.join("lib"), &["cos"]);
+    mirror(Path::new("/usr/lib"), &shadow.join("lib"), &["yu"]);
     std::fs::create_dir_all(shadow.join("lib/cos/bin")).unwrap();
     std::fs::create_dir(shadow.join("libexec")).unwrap();
     bind(shadow, Path::new("/usr"));
@@ -292,7 +292,7 @@ async fn calendar_mcp_to_broker_reader_and_public_sdk() {
     std::fs::create_dir_all("/run/cos").unwrap();
     executable(
         Path::new(&std::env::var("COS_CALENDAR_COS").unwrap()),
-        Path::new("/usr/local/bin/cos"),
+        Path::new("/usr/local/bin/yu"),
     );
     executable(
         Path::new(&std::env::var("COS_CALENDAR_READER").unwrap()),

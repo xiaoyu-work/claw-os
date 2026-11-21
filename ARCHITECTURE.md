@@ -3,7 +3,7 @@
 ## Purpose
 
 Claw OS is a Debian-based operating environment built around a system-level AI
-agent. The `cos` command exposes structured system primitives and agent
+agent. The `yu` command exposes structured system primitives and agent
 workflows; `clawd` brokers privileged, session-scoped work; manifests and
 capabilities describe what apps and tools may do; image tooling packages the
 same composed rootfs for WSL, Docker, VM, ISO, Azure, and desktop targets.
@@ -22,7 +22,7 @@ not considered migrated until their complete UI/service/authority cutover.
 User / desktop / external MCP client
                  |
                  v
-        cos CLI / local bridge
+        yu CLI / local bridge
                  |
        +---------+----------+
        |                    |
@@ -54,7 +54,7 @@ route.
 
 | Component | Responsibility | Primary source |
 | --- | --- | --- |
-| `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
+| `yu` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `yu agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | Authenticated display lifetime | Root PAM/kernel-login binding, compositor and native locker custody, display epochs and downstream session subscriptions | `core/src/display_session/`, `crates/claw-display-control/`, `crates/claw-display-login/` |
 | GUI App custody | Verified launch, explicit owner actions from the bound OS desktop, reviewed actions from ordinary Apps, independent selection rights, instance-confined transport and checked teardown | `core/src/clawd/gui/`, `core/src/worker/gui_transport/`, `desktop/hyprland-claw/` |
@@ -159,7 +159,7 @@ sections below describe the pre-cutover compatibility package layout; see
 No publication, pin adoption or installed runtime acceptance follows from this
 source change.
 
-`cos app install --review` authenticates a package and projects every declared
+`yu app install --review` authenticates a package and projects every declared
 operation/MCP permission, conditional scope, AI policy and execution surface.
 Ordinary directory installation now creates a protected owner-scoped review in
 the OS approvals root. The terminal presenter obtains a decision through the
@@ -263,7 +263,7 @@ broker route. Root selects its configured App root, consumes the exact protected
 review inside publication, and retains durable admission blocking on incomplete
 cleanup or uncertain publication; disconnection never cancels the controller.
 Publication dispatch is durable before tree writes and cannot be replayed after
-an unknown outcome. `cos app install --recover <app-id>` only verifies the
+an unknown outcome. `yu app install --recover <app-id>` only verifies the
 original installed package/manifest, destination/delivery ownership and absence
 of scratch before reopening admission, without source access or review
 consumption. Records require schema version 1; missing or unknown schemas fail
@@ -274,7 +274,7 @@ Unsigned `--dev-trust` installation is blocked: the installed vendor path or an
 existing developer grant could authenticate it before a new independent trust
 decision. A quarantined Root publication contract is still required; no flag
 creates trust or capabilities.
-Public `cos provenance rollback --kind app` resolves only an exact, currently
+Public `yu provenance rollback --kind app` resolves only an exact, currently
 verifiable retained publisher-signed artifact and reuses this same directory
 controller and protected App review. Its `--dest` is only an installed-path
 comparison: Root requires the existing App at its own derived destination,
@@ -409,7 +409,7 @@ owner-bus name. The original MPRIS backend remains separate from the managed
 transport; a failed managed call never falls back to it. Stop and
 empty/ended playback status are corrected without replacing the original UI.
 The worker has no session bus, media files, GUI transport or second playback
-cache. The cancellable explicit-binary SDK uses `/usr/local/bin/cos`.
+cache. The cancellable explicit-binary SDK uses `/usr/local/bin/yu`.
 Installed identities and user state stay unchanged. Private-bus/strict-worker
 acceptance does not claim interactive Wayland or real-device playback.
 
@@ -639,7 +639,7 @@ starts only `/usr/bin/cosmic-settings` with validated page arguments and a close
 environment, observes immediate startup failure, and outlives the broker
 request. The daemon/worker `NoNewPrivileges` boundary is unchanged; only the
 independent human desktop process may present polkit confirmation. The native
-permission client selects the installed `/usr/local/bin/cos` through the shared
+permission client selects the installed `/usr/local/bin/yu` through the shared
 SDK decoder without depending on PATH. Only fixed,
 broker-mediated permissions are currently changeable; direct resources remain
 explicitly unsupported. Settings cannot inherit the eleven manager identities,
@@ -692,7 +692,7 @@ search and existing recent-history logic. Exact AppID/file grants and brokered
 native launching are preserved; desktop session validation and execution remain
 OS-owned. Recent history stays at its existing App data path, not automatically
 shared with the shell. Native `claw-launcher` UI/build/resources, its legacy
-`cos app launcher` forwarding and shared catalog/history integration remain
+`yu app launcher` forwarding and shared catalog/history integration remain
 pending. This source move does not introduce App-to-App calls or complete the
 native Launcher migration.
 Clipboard owns `clipboard-manager`'s five MCP tools, keeping selection read/write
@@ -717,7 +717,7 @@ its operations/MCP adapter, installed nested path and per-App state layout.
 It imports pinned `gateway._shared` libraries explicitly; credential, egress,
 memory and process authority plus installed state partition migration remain
 OS-owned. No credentials, configuration or Discord resume/session data are
-copied. The legacy inbound `cos agent ask` path is not an authenticated
+copied. The legacy inbound `yu agent ask` path is not an authenticated
 connector admission API and is not newly authorized by this move. Owner/sender
 binding, service lifecycle and durable replay handling remain pending without
 weakening the App-originated system-Agent restrictions.
@@ -730,7 +730,7 @@ the repository move.
 repeatable message text, legacy polling, allowlists and rate limits. Its
 offset/PID layout and existing OS state-partition migration are preserved;
 installed state is not copied with source. Like Discord, the legacy
-`cos agent ask` path does not establish authenticated owner-bound connector
+`yu agent ask` path does not establish authenticated owner-bound connector
 admission. Broker restrictions remain unchanged; supervised lifecycle and
 durable delivery are still pending.
 `gateway-whatsapp` also moves to Messaging Channels, preserving Cloud API
@@ -885,7 +885,7 @@ Apps use the Claw OS SDK/agent gate rather than provider SDKs. Provider choice,
 credentials, consent, budgets, model-visible logging, and fallback behavior
 remain owned by the core agent.
 
-SDK `ai::chat` calls `cos ai chat`, which always sends a bounded `ai.chat`
+SDK `ai::chat` calls `yu ai chat`, which always sends a bounded `ai.chat`
 broker request. The worker relay rederives the registered App session and live
 transient capabilities; the daemon runs the existing single-shot AI gate, not
 the system Agent loop. App workers need no local session registry, credentials
@@ -989,8 +989,8 @@ pages reject changed sources rather than combine versions. Search relevance
 is not factual confidence; semantic timestamps describe indexing rather than
 event time. `cos_memory search` executes the model's literal note query, while
 `cos_recall show` and `cos_recall_semantic read` expand identified sources.
-The terminal exposes `cos agent notes search <query> [name] [limit]` and
-`cos agent recall --message <id>`.
+The terminal exposes `yu agent notes search <query> [name] [limit]` and
+`yu agent recall --message <id>`.
 
 `context/budget.rs` counts policy, fenced prelude, original input and the exposed
 tool schemas against the configured input target and known model/fallback
@@ -1139,7 +1139,7 @@ authenticated MCP App Mesh: `cos_tool_search`, `cos_tool_describe`, and
 
 Token usage follows the same owner boundary as Agent execution. A model call to
 `cos_usage` reads the current routed owner's log. A direct
-`cos agent usage ...` client calls the typed `agent.usage` broker route; clawd
+`yu agent usage ...` client calls the typed `agent.usage` broker route; clawd
 derives the owner UID from kernel peer credentials and selects that UID's log,
 so neither path accepts a caller-supplied owner identifier.
 
@@ -1226,7 +1226,7 @@ the `require` gate. It describes authority; the broker authority decides it.
 ### Activities across terminal and desktop
 
 ```text
-cos activity / Agent Web / native desktop Agent
+yu activity / Agent Web / native desktop Agent
   -> authenticated activity.* broker route
   -> owner-scoped ActivityService
   -> private activities.db
@@ -1424,7 +1424,7 @@ ID/revision arguments. An explicit operation takes precedence; otherwise the
 exact App-prefixed MCP tool defines that command. Catalogue descriptions retain the verified package
 snapshot and do not execute the App or infer access to its data.
 
-`cos object resolve` reuses the existing App dispatch, capability, provenance,
+`yu object resolve` reuses the existing App dispatch, capability, provenance,
 worker and audit path. Terminal, Web and native desktop Activities attach and
 describe references through `activity.object.attach` and `activity.objects`.
 The owner-scoped core service atomically stores the URI in its existing
@@ -1476,7 +1476,7 @@ its existing audit/journal boundaries remain separate. See
 
 ### Execution receipts
 
-`cos operation execute` checks the owner's active Activity and then reuses the
+`yu operation execute` checks the owner's active Activity and then reuses the
 ordinary App invocation, permission, provenance, sandbox and audit path. It
 captures returned JSON, text, empty output, reported errors or unavailable
 results without asserting that effects occurred. The broker records only
@@ -1601,11 +1601,11 @@ frame. Provider image limits and Activity monetary/execution policy still
 apply; transport base64 is not counted as literal model text by context
 estimation, and images are never silently compressed to satisfy a provider.
 
-Interactive `cos agent chat` adds only a Claw-owned presentation path in front
+Interactive `yu agent chat` adds only a Claw-owned presentation path in front
 of this same task flow:
 
 ```text
-cos agent chat
+yu agent chat
   -> in-process Claw ratatui renderer
   -> agent.conversation.* plus existing task/approval broker routes
   -> claw-agentd and the shared guarded Agent runtime above
@@ -1756,13 +1756,13 @@ current truth or correct use by the answer. Worker protocol v17 preserves
 these references and safe tool metrics through the supervised process seam.
 
 The terminal equivalent is
-`cos agent notes search <query> [name] [limit]`. `cos_recall show` expands one
-recorded message (`cos agent recall --message <id>` in the terminal).
+`yu agent notes search <query> [name] [limit]`. `cos_recall show` expands one
+recorded message (`yu agent recall --message <id>` in the terminal).
 `cos_recall_semantic read` expands a namespace/key and supplies an original
 conversation/App read handle where that identity is known. Model-backed
 semantic searches reject incompatible models/dimensions or damaged vectors.
 App filters apply before the FTS limit, and bounded kind-filter scans disclose
-their incomplete coverage. `cos agent dev prompt show` previews the stable
+their incomplete coverage. `yu agent dev prompt show` previews the stable
 prefix and pinned request profile separately.
 
 The embedded Agent Web app uses this same queue rather than running an
@@ -2019,7 +2019,7 @@ that already authorised the work, never copied from a request, and believed only
 when the session record is root-owned — on a `0700` session directory that means
 only `clawd` could have written it. An ambient task is clamped to the baseline.
 A `clawd`-issued scheduler snapshot additionally keeps the one executor verb its
-subsystem proved at creation (`cos cron` → `proc.spawn`, `cos triggers` →
+subsystem proved at creation (`yu cron` → `proc.spawn`, `yu triggers` →
 `agent.spawn`) plus credentials named exactly, re-admitted verbatim from the
 snapshot so nothing widens, and bounded by the same owner home the scheduler
 applied when it stored the job. Everything else the creating session happened to
@@ -2157,7 +2157,7 @@ arguments, and binds a strictly narrower grant to the launched process tree.
 
 A staged migration moves ordinary App calls to the `mcp.tools` contract with
 direct `claw_os_sdk.mcp` handlers. Selection is per command: an explicitly
-declared `operations.<command>` wins; otherwise the human `cos app <id>
+declared `operations.<command>` wins; otherwise the human `yu app <id>
 <command>` resolves exactly one `<app-id>.<command>` MCP tool and uses the
 dedicated authenticated-CLI route, `app_service.cli_call` (`Access::User`).
 A distinct operation does not disable an App's MCP surface. Ambiguous or
@@ -2172,7 +2172,7 @@ envelope headroom under the unchanged 1 MiB broker request cap. Only the CLI
 route's argument strings use this larger bounded allowance; general broker
 metadata retains its 64 KiB string cap and all structural limits still apply.
 
-`cos app stdio <id> <operation> [args...]` is a separate human/host transport
+`yu app stdio <id> <operation> [args...]` is a separate human/host transport
 for an ordinary manifest operation declaring `stdin: true`. It uses a held
 verified primary entry and the existing review/capability/sandbox path, but
 owns the process streams: input is incremental and stdout stays opaque.
@@ -2194,7 +2194,7 @@ declared parent-directory capabilities. See the
 
 The editor's **App handlers** do not use that human App-dispatch bridge.
 `cos_runtime::filesystem` carries bounded text requests on stdin through
-`cos __filesystem` to `system.filesystem.read` / `system.filesystem.write`.
+`yu __filesystem` to `system.filesystem.read` / `system.filesystem.write`.
 The broker spends exact canonical `fs.read` / `fs.write` scopes, rejects
 worker-forbidden paths, pins directory descriptors against symlink swaps,
 and atomically replaces complete files. File access and staging run under
@@ -2238,7 +2238,7 @@ projection independently.
 
 The MCP-only `browser-attached` App never receives the browser socket. Its
 private runtime helper sends a bounded JSON body over stdin to the hidden
-`cos __browser` bridge, which calls typed `system.browser.control`. `clawd`
+`yu __browser` bridge, which calls typed `system.browser.control`. `clawd`
 requires the authenticated `browser-attached` App identity, spends the exact
 browser capability derived from the canonical URL host, verifies the owner's
 runtime directory/socket, and is the only accepted socket client. It injects
@@ -2249,7 +2249,7 @@ also rejects activation or navigation changes during the capture interval.
 
 The MCP-only `netdiag` App similarly has no host network namespace or direct
 socket path. Its private runtime helper sends a closed request through
-`cos __netdiag` to `system.network.diagnose`. `clawd` requires the authenticated
+`yu __netdiag` to `system.network.diagnose`. `clawd` requires the authenticated
 `netdiag` App identity, spends `sys.observe:name:network` and the exact
 `net.resolve` / `net.probe` target capabilities required by the selected action,
 then reads host interface and route state or performs bounded DNS resolution
@@ -2365,7 +2365,7 @@ COMMIT remains indeterminate rather than becoming replayable work.
 
 ### Proactive scheduling
 
-`cos cron` and `cos triggers` act on the root-owned job store the `clawd`
+`yu cron` and `yu triggers` act on the root-owned job store the `clawd`
 heartbeat drives, so a non-root CLI reaches it through the `scheduler.run`
 broker route. The daemon validates the subsystem, command, arguments, and the
 job/rule identifier before authorising anything, then resolves the caller's
@@ -2512,7 +2512,7 @@ sibling below the shared protocol floor enforced on installed machines.
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
 | `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
-| `cos agent ...` | `core/src/agent/mod.rs`, `core/src/agent/*_commands.rs` | Top-level routing plus responsibility-specific command handlers |
+| `yu agent ...` | `core/src/agent/mod.rs`, `core/src/agent/*_commands.rs` | Top-level routing plus responsibility-specific command handlers |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |
 | Notification service | `core/src/notifications/`, `core/src/clawd/notifications.rs` | Durable notification state, broker routes, and channel dispatch |

@@ -1,7 +1,7 @@
 // Subprocess transport shared by every Go SDK module.
 //
 // Like the Python, Rust, and Node SDKs, the Go SDK is a thin client
-// over wire protocol v1: it shells out to the `cos` binary, which reads
+// over wire protocol v1: it shells out to the `yu` binary, which reads
 // non-sensitive routing flags from argv and writes a JSON envelope to stdout.
 // AI prompt bodies are passed through private temporary files. The
 // subprocess model is intentional — identity, audit, and session
@@ -32,7 +32,7 @@ const DefaultTimeout = 60 * time.Second
 // large structured tool results without unbounded RAM.
 const maxOutput = 8 * 1024 * 1024
 
-// UnavailableError means the `cos` binary could not be invoked, timed
+// UnavailableError means the `yu` binary could not be invoked, timed
 // out, or returned something that was not a JSON envelope.
 type UnavailableError struct{ Msg string }
 
@@ -50,13 +50,13 @@ func (e *DeniedError) Error() string {
 	return "call denied"
 }
 
-// CosBinary resolves the `cos` binary. It honors CLAW_COS_BIN,
+// CosBinary resolves the `yu` binary. It honors CLAW_COS_BIN,
 // falling back to `cos` on $PATH.
 func CosBinary() string {
 	if b := os.Getenv("CLAW_COS_BIN"); b != "" {
 		return b
 	}
-	return "cos"
+	return "yu"
 }
 
 // cosOutcome is the parsed result of one `cos` invocation.
@@ -64,8 +64,8 @@ type cosOutcome struct {
 	Data any
 }
 
-// cosCallJSON runs `cos <args>` and parses its stdout as a JSON object.
-// label names the logical call (e.g. "cos ai chat") for error messages.
+// cosCallJSON runs `yu <args>` and parses its stdout as a JSON object.
+// label names the logical call (e.g. "yu ai chat") for error messages.
 // Returns an *UnavailableError for transport/protocol problems and a
 // *DeniedError for a valid kernel error envelope.
 func cosCallJSON(label string, args []string, input ...[]byte) (*cosOutcome, error) {

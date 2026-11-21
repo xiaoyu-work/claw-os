@@ -34,7 +34,7 @@
 //! # No CLI writer
 //!
 //! Same convention as `crate::ai::overrides`: the kernel reads, the
-//! Cosmic Settings UI writes. A read-only `cos agent budget user
+//! Cosmic Settings UI writes. A read-only `yu agent budget user
 //! show` exists for inspection.
 
 use std::fs;

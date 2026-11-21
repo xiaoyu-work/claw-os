@@ -121,7 +121,7 @@ def run(command, args):
             ["available", "cos"], ["catalog"], ["updates"], ["show", "{SIDE_EFFECT}"],
         ):
             result = subprocess.run(
-                ["/usr/local/bin/cos", "--wire=1", "__package_query", *args],
+                ["/usr/local/bin/yu", "--wire=1", "__package_query", *args],
                 capture_output=True, text=True, timeout=25,
             )
             queries.append({{"args": args, "code": result.returncode,
@@ -141,7 +141,7 @@ def run(command, args):
         while not (data / "go").exists():
             time.sleep(0.01)
         result = subprocess.run(
-            ["/usr/local/bin/cos", "__package", "--retained", "remove", "{BUNDLE}"],
+            ["/usr/local/bin/yu", "__package", "--retained", "remove", "{BUNDLE}"],
             capture_output=True, text=True,
         )
         (data / "reply.json").write_text(json.dumps({{
@@ -180,7 +180,7 @@ for line in sys.stdin:
         assert context["caller"]["kind"] == "cli"
         if request["params"]["name"] == "fixture.remove":
             completed = subprocess.run(
-                ["/usr/local/bin/cos", "__package", "--retained", "remove", "{BUNDLE}"],
+                ["/usr/local/bin/yu", "__package", "--retained", "remove", "{BUNDLE}"],
                 capture_output=True, text=True,
             )
             result = {{"content": [{{"type": "text", "text": completed.stdout}}],
@@ -1127,7 +1127,7 @@ impl Fixture {
 
     fn enable_processes(&self) {
         for (variable, destination) in [
-            ("COS_APP_APT_TEST_COS", "/usr/local/bin/cos"),
+            ("COS_APP_APT_TEST_COS", "/usr/local/bin/yu"),
             ("COS_APP_APT_TEST_RUNNER", "/usr/local/bin/claw-app-runner"),
             ("COS_APP_APT_TEST_HOST", "/usr/local/bin/claw-extension-host"),
         ] {
@@ -1188,7 +1188,7 @@ fn owner_command(uid: u32, program: &Path) -> std::process::Command {
         .env("XDG_RUNTIME_DIR", home.join("runtime"))
         .env("COS_PROC_DATA_DIR", format!("/run/cos/caps/{uid}"))
         .env("COS_APPS_DIR", "/usr/lib/cos/apps")
-        .env("COS_BIN", "/usr/local/bin/cos")
+        .env("COS_BIN", "/usr/local/bin/yu")
         .env("CLAWD_SOCKET", "/run/cos/clawd.sock")
         .env("COS_APP_APT_PROCESS", "1")
         .current_dir(home)
@@ -1647,7 +1647,7 @@ impl WebOwner {
             .unwrap().as_str().to_string();
         let log = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
             .open(Path::new(BASE).join("web-host.log")).unwrap();
-        let child = owner_command(OWNER, Path::new("/usr/local/bin/cos"))
+        let child = owner_command(OWNER, Path::new("/usr/local/bin/yu"))
             .args(["agent", "serve", "--bind", "127.0.0.1", "--port", "38082"])
             .env("COS_SESSION", &session)
             .stdin(Stdio::null()).stderr(Stdio::from(log)).spawn().unwrap();
@@ -2587,7 +2587,7 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     }));
     assert_eq!(queries[4]["reply"]["data"], json!({
         "name": "cos", "available": true, "type": "command",
-        "details": "found at /usr/local/bin/cos",
+        "details": "found at /usr/local/bin/yu",
     }));
     let catalog = &queries[5]["reply"]["data"];
     assert_eq!(catalog["configured"], true);
@@ -2845,7 +2845,7 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
                 .send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
             drop(web.take());
             assert!(!claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap(),
-                "Root-owned App MCP died with cos agent serve");
+                "Root-owned App MCP died with yu agent serve");
             let mut cli = RetainedPeer::start(OWNER);
             cli.authorize_caps(crate::caps::CapSet::from_caps([
                 crate::agent::tools::app_gateway::invoke_cap("kv", "kv.get").unwrap(),

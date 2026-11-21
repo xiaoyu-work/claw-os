@@ -1,13 +1,13 @@
-//! `cos model` — kernel primitive for local model inference.
+//! `yu model` — kernel primitive for local model inference.
 //!
-//! Hosts a long-running `model-runtime` daemon (via `cos service`) with two
+//! Hosts a long-running `model-runtime` daemon (via `yu service`) with two
 //! engines:
 //!
 //!   - **ort** (ONNX Runtime) for STT (Whisper), TTS (Piper, KittenTTS),
 //!     embedding (BGE/MiniLM), vision (CLIP/SigLIP), image-gen (SD/Flux).
 //!   - **llama.cpp** (`llama-cpp-2`) for local LLM (GGUF) — Q14 decision.
 //!
-//! Models are user-provided files registered via `cos model import <path>`,
+//! Models are user-provided files registered via `yu model import <path>`,
 //! cached at the system-level path returned by `paths::models_dir()`
 //! (default `/var/lib/cos/models/` — see `core/src/paths.rs`).
 //!
@@ -15,7 +15,7 @@
 //! Engines (`engines::ort`, `engines::llama`) are added when the user supplies
 //! the first ONNX/GGUF files.
 //!
-//! Phase 1.5 added cloud subcommands `cos model embed` and `cos model image`
+//! Phase 1.5 added cloud subcommands `yu model embed` and `yu model image`
 //! that route through OpenAI-compatible cloud providers (configured via the
 //! `[embed]` and `[imagegen]` blocks of `config.json`).
 
@@ -38,7 +38,7 @@ use tasks::imagegen::{self, ImageData, ImageGenRequest};
 use tasks::stt::{self, SttMode, SttRequest};
 use tasks::tts::{self, TtsRequest};
 
-/// Dispatch a `cos model <command>` invocation.
+/// Dispatch a `yu model <command>` invocation.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "list" => Ok(json!({
@@ -75,7 +75,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos model load <name>@<version>` — validates engine compat and
+/// `yu model load <name>@<version>` — validates engine compat and
 /// (eventually) loads the model into the daemon. Today the actual
 /// load is a stub; what *does* run is the manifest's
 /// `requires_engine` check against the active engine + version. This
@@ -84,7 +84,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 fn run_load(args: &[String]) -> Result<Value, String> {
     let spec = args
         .first()
-        .ok_or_else(|| "usage: cos model load <name>@<version>".to_string())?;
+        .ok_or_else(|| "usage: yu model load <name>@<version>".to_string())?;
     let manifest = load_model_manifest(spec)?;
     compat::check_engine_compat(&manifest).map_err(|e| e.to_string())?;
     Ok(json!({
@@ -111,7 +111,7 @@ pub(crate) fn load_model_manifest(spec: &str) -> Result<registry::Manifest, Stri
         .join("manifest.json");
     if !manifest_path.is_file() {
         return Err(format!(
-            "no manifest at {} (run `cos model import` first)",
+            "no manifest at {} (run `yu model import` first)",
             manifest_path.display()
         ));
     }
@@ -119,7 +119,7 @@ pub(crate) fn load_model_manifest(spec: &str) -> Result<registry::Manifest, Stri
     serde_json::from_slice(&bytes).map_err(|e| format!("manifest parse: {e}"))
 }
 
-/// `cos model import <path> --as <name> [--version v] [--task k]
+/// `yu model import <path> --as <name> [--version v] [--task k]
 /// [--engine ort|llama] [--format onnx|gguf] [--move] [--force]
 /// [--device cuda|cpu|metal|...]` — register a user-provided
 /// ONNX/GGUF file in the model registry.
@@ -128,7 +128,7 @@ fn run_import(args: &[String]) -> Result<Value, String> {
 
     if args.is_empty() {
         return Err(
-            "usage: cos model import <path> --as <name> [--version <v>] \
+            "usage: yu model import <path> --as <name> [--version <v>] \
              [--task llm|stt|tts|embed|vision|imagegen] [--engine ort|llama] \
              [--format onnx|gguf] [--move] [--force] [--device <name>]"
                 .into(),
@@ -216,7 +216,7 @@ fn run_import(args: &[String]) -> Result<Value, String> {
     }
 
     if source.as_os_str().is_empty() {
-        return Err("usage: cos model import <path> --as <name> ...".into());
+        return Err("usage: yu model import <path> --as <name> ...".into());
     }
     let name = name.ok_or_else(|| "--as <name> is required".to_string())?;
 
@@ -235,13 +235,13 @@ fn run_import(args: &[String]) -> Result<Value, String> {
     Ok(imported_model_json(&imported))
 }
 
-/// `cos model rm <name>@<version>` — remove a registered model
+/// `yu model rm <name>@<version>` — remove a registered model
 /// version. Idempotent: removing a missing entry returns
 /// `{ "removed": false }` rather than erroring.
 fn run_rm(args: &[String]) -> Result<Value, String> {
     let spec = args
         .first()
-        .ok_or_else(|| "usage: cos model rm <name>@<version>".to_string())?;
+        .ok_or_else(|| "usage: yu model rm <name>@<version>".to_string())?;
     let (name, version) = spec
         .split_once('@')
         .ok_or_else(|| format!("expected <name>@<version>, got \"{spec}\""))?;
@@ -345,7 +345,7 @@ fn tts_status_json() -> Value {
     })
 }
 
-/// `cos model embed <text>`
+/// `yu model embed <text>`
 ///
 /// For multiple inputs, pass `--input <text>` repeatedly or `--inputs-file <path>`
 /// (one input per line).
@@ -397,7 +397,7 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
     }
     if inputs.is_empty() {
         if positional.is_empty() {
-            return Err("usage: cos model embed <text> [--input <text> ...]".into());
+            return Err("usage: yu model embed <text> [--input <text> ...]".into());
         }
         // Treat all positional args joined by space as a single input.
         inputs.push(positional.join(" "));
@@ -408,7 +408,7 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
     let embedder = embed::build_from(&cfg)
         .map_err(|e| format!("embed config: {e}"))?
         .ok_or_else(|| {
-            "embedding provider is disabled or unavailable (run `cos agent setup embed` \
+            "embedding provider is disabled or unavailable (run `yu agent setup embed` \
              to configure embeddings)"
                 .to_string()
         })?;
@@ -445,7 +445,7 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// `cos model image <prompt> [--out PATH] [--size 1024x1024] [--quality medium] [--n 1] [--format png]`
+/// `yu model image <prompt> [--out PATH] [--size 1024x1024] [--quality medium] [--n 1] [--format png]`
 ///
 /// Saves the first generated image to `--out` (default `cos-image.<ext>`)
 /// and prints metadata. If the provider returns a URL instead of base64,
@@ -520,7 +520,7 @@ fn run_imagegen(args: &[String]) -> Result<Value, String> {
     }
     if prompt_parts.is_empty() {
         return Err(
-            "usage: cos model image <prompt> [--size WxH] [--quality medium] [--n 1] [--format png] [--out FILE]"
+            "usage: yu model image <prompt> [--size WxH] [--quality medium] [--n 1] [--format png] [--out FILE]"
                 .into(),
         );
     }
@@ -612,11 +612,11 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// `cos model transcribe <audio-path> [--language en] [--prompt "..."]
+/// `yu model transcribe <audio-path> [--language en] [--prompt "..."]
 /// [--format json|text|verbose_json|srt|vtt] [--temperature 0.0]
 /// [--model NAME] [--out FILE]`
 ///
-/// `cos model translate <audio-path> [...]` is the same but uses the
+/// `yu model translate <audio-path> [...]` is the same but uses the
 /// `/audio/translations` endpoint (always returns English).
 fn run_transcribe(args: &[String], mode: SttMode) -> Result<Value, String> {
     let mut audio_path: Option<String> = None;
@@ -693,7 +693,7 @@ fn run_transcribe(args: &[String], mode: SttMode) -> Result<Value, String> {
     }
 
     let audio_path = audio_path.ok_or_else(|| {
-        "usage: cos model transcribe <audio-path> [--language LL] [--prompt ...] [--format json|text|verbose_json|srt|vtt]"
+        "usage: yu model transcribe <audio-path> [--language LL] [--prompt ...] [--format json|text|verbose_json|srt|vtt]"
             .to_string()
     })?;
     let audio = std::fs::read(&audio_path).map_err(|e| format!("read {audio_path}: {e}"))?;
@@ -746,7 +746,7 @@ fn run_transcribe(args: &[String], mode: SttMode) -> Result<Value, String> {
     }))
 }
 
-/// `cos model speak <text> --out FILE [--voice alloy] [--format mp3]
+/// `yu model speak <text> --out FILE [--voice alloy] [--format mp3]
 /// [--speed 1.0] [--instructions "..."] [--model NAME]`
 fn run_speak(args: &[String]) -> Result<Value, String> {
     let mut text_parts: Vec<String> = Vec::new();
@@ -819,7 +819,7 @@ fn run_speak(args: &[String]) -> Result<Value, String> {
     }
     if text_parts.is_empty() {
         return Err(
-            "usage: cos model speak <text> --out FILE [--voice alloy] [--format mp3] [--speed 1.0]"
+            "usage: yu model speak <text> --out FILE [--voice alloy] [--format mp3] [--speed 1.0]"
                 .into(),
         );
     }

@@ -3,7 +3,7 @@
 //!
 //! GUI shells (the launcher, the app library, the terminal session
 //! registrar) all funnel here so process spawns get a session id and
-//! their lifetime is visible to `cos proc ps`.
+//! their lifetime is visible to `yu proc ps`.
 
 use serde::Deserialize;
 

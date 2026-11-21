@@ -414,7 +414,7 @@ async fn live_cmd_async(
     }
 }
 
-/// Helper for `cos agent live` integration tests. Mirrors the
+/// Helper for `yu agent live` integration tests. Mirrors the
 /// `run_stream_async` helper above but routes through the new
 /// multi-turn streaming path.
 fn run_live_async(

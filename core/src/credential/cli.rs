@@ -64,7 +64,7 @@ pub(crate) fn run_agent_oauth_login_typed(args: &[String]) -> CredentialResult<V
 
 /// Store a credential.
 ///
-/// Usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS]
+/// Usage: yu credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS]
 pub(super) fn cmd_store(args: &[String]) -> CredentialResult<Value> {
     let (ns_opt, args) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -106,10 +106,10 @@ pub(super) fn cmd_store(args: &[String]) -> CredentialResult<Value> {
             }
             "--refresh-cmd" if i + 1 < args.len() => {
                 let cmd = args[i + 1].trim().to_string();
-                if !cmd.starts_with("cos ") {
+                if !cmd.starts_with("yu ") {
                     return Err(CredentialError::invalid(
                         "credential.store",
-                        "--refresh-cmd must be a cos command (e.g., 'cos credential oauth-refresh google')",
+                        "--refresh-cmd must be a yu command (e.g., 'yu credential oauth-refresh google')",
                     ));
                 }
                 refresh_cmd = Some(cmd);
@@ -125,7 +125,7 @@ pub(super) fn cmd_store(args: &[String]) -> CredentialResult<Value> {
     if positional.len() < 2 {
         return Err(CredentialError::invalid(
             "credential.store",
-            "usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS] [--refresh-cmd CMD]",
+            "usage: yu credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS] [--refresh-cmd CMD]",
         ));
     }
 
@@ -159,7 +159,7 @@ pub(super) fn cmd_revoke(args: &[String]) -> CredentialResult<Value> {
     let (namespace, rest) = parse_namespace_flag(args);
     let namespace = namespace.unwrap_or_else(|| "default".into());
     let name = rest.first().ok_or_else(|| {
-        CredentialError::invalid("credential.revoke", "usage: cos credential revoke <name>")
+        CredentialError::invalid("credential.revoke", "usage: yu credential revoke <name>")
     })?;
     let id = CredentialId::parse(&namespace, name)?;
     require_secret(
@@ -233,7 +233,7 @@ pub(super) fn cmd_list(args: &[String]) -> CredentialResult<Value> {
 
 /// Load a credential value.
 ///
-/// Usage: cos credential load <name> [--namespace NS] [--fd N]
+/// Usage: yu credential load <name> [--namespace NS] [--fd N]
 ///
 /// `--fd N` writes the raw plaintext bytes to file descriptor `N` (no
 /// trailing newline) and omits the `"value"` field from the returned JSON,
@@ -272,7 +272,7 @@ pub(super) fn cmd_load(args: &[String]) -> CredentialResult<Value> {
     }
 
     let name = positional.first().ok_or_else(|| {
-        CredentialError::invalid("credential.load", "usage: cos credential load <name>")
+        CredentialError::invalid("credential.load", "usage: yu credential load <name>")
     })?;
     let id = CredentialId::parse(&namespace, name)?;
     require_secret(
@@ -358,7 +358,7 @@ fn write_value_to_fd(_fd: i32, _bytes: &[u8]) -> CredentialResult<()> {
 
 /// Create a credential bundle — a named group of credential keys.
 ///
-/// Usage: cos credential bundle <bundle-name> --keys key1,key2,key3 [--namespace NS]
+/// Usage: yu credential bundle <bundle-name> --keys key1,key2,key3 [--namespace NS]
 pub(super) fn cmd_bundle(args: &[String]) -> CredentialResult<Value> {
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -383,7 +383,7 @@ pub(super) fn cmd_bundle(args: &[String]) -> CredentialResult<Value> {
     let bundle_name = positional.first().ok_or_else(|| {
         CredentialError::invalid(
             "credential.bundle",
-            "usage: cos credential bundle <name> --keys key1,key2,key3 [--namespace NS]",
+            "usage: yu credential bundle <name> --keys key1,key2,key3 [--namespace NS]",
         )
     })?;
 
@@ -423,7 +423,7 @@ pub(super) fn cmd_bundle(args: &[String]) -> CredentialResult<Value> {
 
 /// Load all credentials in a bundle as a JSON object.
 ///
-/// Usage: cos credential load-bundle <bundle-name> [--namespace NS]
+/// Usage: yu credential load-bundle <bundle-name> [--namespace NS]
 pub(super) fn cmd_load_bundle(args: &[String]) -> CredentialResult<Value> {
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
@@ -431,7 +431,7 @@ pub(super) fn cmd_load_bundle(args: &[String]) -> CredentialResult<Value> {
     let bundle_name = rest.first().ok_or_else(|| {
         CredentialError::invalid(
             "credential.load_bundle",
-            "usage: cos credential load-bundle <name> [--namespace NS]",
+            "usage: yu credential load-bundle <name> [--namespace NS]",
         )
     })?;
     let namespace_id = NamespaceId::parse(&namespace)?;

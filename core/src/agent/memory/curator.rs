@@ -81,7 +81,7 @@ use crate::agent::memory::sqlite_fts::{MemoryDb, MessageRow};
 // =====================================================================
 
 /// Per-curator behavior knobs. The defaults are what the runtime
-/// uses when invoking via the `cos agent learn` CLI without flags.
+/// uses when invoking via the `yu agent learn` CLI without flags.
 #[derive(Debug, Clone)]
 pub struct CuratorConfig {
     /// Max messages to feed the LLM in one extraction pass.

@@ -61,9 +61,9 @@ jobs:
           set -euo pipefail
           python3 -c 'import os, pathlib, tomllib; assert tomllib.loads(pathlib.Path("core/Cargo.toml").read_text())["package"]["version"] == os.environ["SDK_VERSION"]'
           cargo test -p cos --lib --locked provenance:: -- --test-threads=1
-          cargo build --release --locked -p cos --bin cos --target "$RUST_TARGET"
+          cargo build --release --locked -p cos --bin yu --target "$RUST_TARGET"
           mkdir -p dist
-          install -m 0755 "target/$RUST_TARGET/release/cos" "dist/cos-provenance-linux-$ARCH"
+          install -m 0755 "target/$RUST_TARGET/release/yu" "dist/cos-provenance-linux-$ARCH"
           test "$(stat -c %s "dist/cos-provenance-linux-$ARCH")" -le 134217728
           "dist/cos-provenance-linux-$ARCH" --version | grep -F "$SDK_VERSION"
           cargo metadata --locked --format-version 1 --filter-platform "$RUST_TARGET" > "$RUNNER_TEMP/tool-metadata.json"

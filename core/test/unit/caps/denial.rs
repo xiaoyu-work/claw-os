@@ -21,10 +21,10 @@ fn scope_out_of_range_collects_granted_scopes_for_same_verb() {
 #[test]
 fn display_includes_summary_and_hint() {
     let d = Denial::no_session(Verb::FS_READ, Scope::path("/etc"))
-        .with_hint("run `cos session start` first");
+        .with_hint("run `yu session start` first");
     let s = d.to_string();
     assert!(s.contains("Permission denied"));
-    assert!(s.contains("run `cos session start`"));
+    assert!(s.contains("run `yu session start`"));
 }
 
 #[test]

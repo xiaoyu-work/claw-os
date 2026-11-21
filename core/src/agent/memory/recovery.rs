@@ -491,7 +491,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
     if mode == RepairMode::Quarantine && !options.allow_quarantine {
         return Err(MemoryError::Repair(
             "repair requires preserving the damaged database in quarantine; inspect with \
-             `cos agent sessions repair --dry-run`, then re-run with `--quarantine --yes`"
+             `yu agent sessions repair --dry-run`, then re-run with `--quarantine --yes`"
                 .to_string(),
         ));
     }
@@ -674,7 +674,7 @@ pub(super) fn ensure_runtime_open_allowed(path: &Path) -> Result<(), MemoryError
     let snapshot = read_repair_log(path)?;
     if snapshot.malformed_lines > 0 {
         return Err(MemoryError::Integrity(format!(
-            "repair lifecycle log {} is malformed; run `cos agent sessions health`",
+            "repair lifecycle log {} is malformed; run `yu agent sessions health`",
             repair_log_path(path).display()
         )));
     }
@@ -685,7 +685,7 @@ pub(super) fn ensure_runtime_open_allowed(path: &Path) -> Result<(), MemoryError
         };
         return Err(MemoryError::Integrity(format!(
             "memory database has an interrupted {mode} repair ({}) and cannot be opened until \
-             `cos agent sessions repair --yes{}` completes it",
+             `yu agent sessions repair --yes{}` completes it",
             event.attempt_id,
             if event.mode == RepairMode::Quarantine {
                 " --quarantine"
@@ -698,8 +698,8 @@ pub(super) fn ensure_runtime_open_allowed(path: &Path) -> Result<(), MemoryError
         event.phase == RepairPhase::Failed && event.mode == RepairMode::Quarantine
     }) {
         return Err(MemoryError::Integrity(
-            "the last quarantine repair failed; run `cos agent sessions health` and retry \
-             `cos agent sessions repair --quarantine --yes` before opening memory"
+            "the last quarantine repair failed; run `yu agent sessions health` and retry \
+             `yu agent sessions repair --quarantine --yes` before opening memory"
                 .to_string(),
         ));
     }

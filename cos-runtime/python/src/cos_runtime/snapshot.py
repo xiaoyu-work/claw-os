@@ -43,7 +43,7 @@ exists at ``$COS_DATA_DIR/sessions/<sid>/`` with a ``meta.json`` —
 every snapshot is **also** mirrored into the durable session's
 ``mutations.jsonl`` log + ``files/inverse/<blob_id>.bin`` blob store.
 This is the cross-runtime contract the Rust kernel reads from
-``cos agent undo`` (which routes through ``core/src/session/rollback.rs``)
+``yu agent undo`` (which routes through ``core/src/session/rollback.rs``)
 and the future ``cos-apid`` socket.
 
 The Python and Rust sides agree purely through the file format — see

@@ -48,8 +48,8 @@ pub(super) fn cmd_agent_oauth_login(
         .is_some_and(|session| is_attended_agent_oauth_session(&session));
     if !attended_agent {
         return Err(
-            "Agent-initiated OAuth requires an attended local `cos agent ask`, \
-             `cos agent live`, or `cos agent chat` session"
+            "Agent-initiated OAuth requires an attended local `yu agent ask`, \
+             `yu agent live`, or `yu agent chat` session"
                 .to_string(),
         );
     }
@@ -129,7 +129,7 @@ fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
     super::validate_credential_component("namespace", &namespace)
         .map_err(|error| error.to_string())?;
     let provider = provider.ok_or(
-        "usage: cos credential oauth-login <google|microsoft> [--namespace NS] [--no-open] [--timeout SECS]",
+        "usage: yu credential oauth-login <google|microsoft> [--namespace NS] [--no-open] [--timeout SECS]",
     )?;
     Ok((namespace, provider, no_open, timeout_secs))
 }
@@ -207,7 +207,7 @@ fn google_login(
         APP_ACCESS_TOKEN_TIER,
         Some(expires_in),
         Some(format!(
-            "cos credential oauth-refresh google --namespace {namespace}"
+            "yu credential oauth-refresh google --namespace {namespace}"
         )),
     )?;
 
@@ -400,7 +400,7 @@ fn microsoft_login(
         APP_ACCESS_TOKEN_TIER,
         Some(access_expires),
         Some(format!(
-            "cos credential oauth-refresh microsoft --namespace {namespace}"
+            "yu credential oauth-refresh microsoft --namespace {namespace}"
         )),
     )?;
 

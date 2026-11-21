@@ -10,7 +10,7 @@ and `message.received` exactly. Normal scheduler consent, capabilities,
 execution limits and the existing Job queue apply; channel configuration
 neither creates a trigger nor grants Agent authority.
 
-`cos channels configure <platform>` reads an object on stdin containing only
+`yu channels configure <platform>` reads an object on stdin containing only
 `account_id`, `channel_id`, `sender_id` and `trigger_id`. This crosses the
 protected scheduler approval path for the exact channel, provider host and
 fixed owner credential names. Root verifies provider account credentials.
@@ -49,8 +49,8 @@ The public SDK's `channels.control(action, ...)` calls
 Root derives the exact connector App and non-root owner. Every action requires
 `ipc.publish:Name(channel:gateway-<platform>)`; callers cannot choose a provider,
 owner, recipient, source, credentials, capabilities or prompt.
-Actions are `status`, `start`, `stop`, and `reply`. Human `cos channels status`
-and `cos channels stop` remain available without an App grant.
+Actions are `status`, `start`, `stop`, and `reply`. Human `yu channels status`
+and `yu channels stop` remain available without an App grant.
 
 Start/stop govern OS receiver admission, independent of a model process.
 Stop prevents later admission and reports pending evidence/replies; it does

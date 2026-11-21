@@ -118,9 +118,9 @@ case "$1" in
         commit_security_floor
         if [ -d "$DPKG_ROOT/usr/lib/cos/trust/publishers.d" ]; then
             if [ -n "$DPKG_ROOT" ]; then
-                chroot "$DPKG_ROOT" /usr/local/bin/cos --json provenance trust record-system
+                chroot "$DPKG_ROOT" /usr/local/bin/yu --json provenance trust record-system
             else
-                /usr/local/bin/cos --json provenance trust record-system
+                /usr/local/bin/yu --json provenance trust record-system
             fi
         fi
 

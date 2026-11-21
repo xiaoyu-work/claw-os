@@ -37,7 +37,7 @@ pub fn engines_index_path() -> PathBuf {
 /// the path API contract here is infallible — but we sanitize hard
 /// enough that no caller can escape `engines_dir()` through clever
 /// version strings. Engine/version names come from `engines.json`,
-/// which is itself populated from `cos engine update` flags and
+/// which is itself populated from `yu engine update` flags and
 /// GitHub release tags; either source could host a hostile value.
 fn sanitize_segment(s: &str) -> String {
     if s.is_empty() || s == "." || s == ".." {

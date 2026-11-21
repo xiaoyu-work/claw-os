@@ -2,10 +2,10 @@
 //! a `crate::model::engines::llama_cpp::LlamaEngine` underneath.
 //!
 //! Compiled unconditionally. Engine availability is decided at runtime
-//! based on whether `cos engine` has installed an active llama-cpp
+//! based on whether `yu engine` has installed an active llama-cpp
 //! version. When no engine is installed the provider's
 //! `is_configured()` returns false and `chat()` returns a clear
-//! `LlmError::NotConfigured` pointing at `cos engine update llama-cpp`.
+//! `LlmError::NotConfigured` pointing at `yu engine update llama-cpp`.
 //!
 //! The model identifier the provider receives doubles as the GGUF file
 //! path. The expected formats are:
@@ -13,7 +13,7 @@
 //!   - bare path: `/var/lib/cos/models/llama3-8b/v1/model.gguf`
 //!   - `llama_local:` prefix: `llama_local:/path/to/model.gguf`
 //!
-//! Both forms are accepted to keep CLI ergonomics flexible — `cos agent
+//! Both forms are accepted to keep CLI ergonomics flexible — `yu agent
 //! ask --provider llama_local --model /path/to.gguf` or the prefix form.
 
 use async_trait::async_trait;
@@ -41,7 +41,7 @@ pub struct LlamaLocalProvider {
     cfg: LlamaConfig,
     /// Lazily constructed: the actual engine. None until first chat call
     /// (or until something forces eager init). We keep it lazy because
-    /// loading a model is expensive and `cos agent status` should not
+    /// loading a model is expensive and `yu agent status` should not
     /// trigger it.
     engine: tokio::sync::Mutex<Option<Arc<LlamaEngine>>>,
     /// Captured once the engine is first loaded successfully. Read by
@@ -89,8 +89,8 @@ impl LlamaLocalProvider {
         if !llama_engine::is_installed() {
             return Err(LlmError::NotConfigured(
                 "llama_local provider: no llama-cpp engine installed. \
-                 Run `cos engine update llama-cpp` to download the latest \
-                 prebuilt release, or `cos engine install llama-cpp@<ver> \
+                 Run `yu engine update llama-cpp` to download the latest \
+                 prebuilt release, or `yu engine install llama-cpp@<ver> \
                  --from <archive>` for an offline install."
                     .into(),
             ));
@@ -106,7 +106,7 @@ impl LlamaLocalProvider {
             .map_err(|e| LlmError::NotConfigured(format!("llama_cpp engine: {e}")))?;
         // Capture the version that ACTUALLY loaded for the audit
         // trail. The engine_pkg registry can race with this loaded
-        // singleton (e.g. `cos engine activate <new>` after the
+        // singleton (e.g. `yu engine activate <new>` after the
         // daemon is up — the new version doesn't take effect until
         // restart). Reading from the runtime is the truth.
         if let Some(version) = engine.engine_version() {
@@ -129,7 +129,7 @@ impl Provider for LlamaLocalProvider {
 
     fn supported_models(&self) -> Vec<String> {
         // Local models are arbitrary GGUF files — we report the configured
-        // spec so `cos agent status` shows what's wired without pretending
+        // spec so `yu agent status` shows what's wired without pretending
         // to enumerate the filesystem.
         vec![self.model_spec.clone()]
     }

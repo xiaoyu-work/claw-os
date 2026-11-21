@@ -14,21 +14,21 @@ AI gate. Every entry below is:
   Process environment and CLI flags are runtime inputs, not independent
   identity proofs.
 
-* **Audited** — `cos ai tool` writes one `LlmRunRecord` per
-  invocation to the same `<log_dir>/ai.jsonl` stream as `cos ai
+* **Audited** — `yu ai tool` writes one `LlmRunRecord` per
+  invocation to the same `<log_dir>/ai.jsonl` stream as `yu ai
   chat`, with `provider="kernel"`, `model="tool:<name>"`, and the
   derived caps verb. Operators can grep one file for everything an
   App did under the AI surface.
 
 > **The gate never executes a tool call the model proposed.**
-> `cos ai chat --tools <list>` only *exposes* tools to the model.
+> `yu ai chat --tools <list>` only *exposes* tools to the model.
 > Proposed calls come back in `ChatResult.tool_calls[]`; the App
 > decides whether to fulfil any of them by shelling to
-> `cos ai tool <name>` (or `tools.call(...)` from the Python SDK).
+> `yu ai tool <name>` (or `tools.call(...)` from the Python SDK).
 > Each fulfilment is its own kernel-mediated, audited call.
 
-For the higher-level architecture and the line between `cos ai`
-(App-facing primitive) and `cos agent` (kernel's own Agent product),
+For the higher-level architecture and the line between `yu ai`
+(App-facing primitive) and `yu agent` (kernel's own Agent product),
 see [`docs/app-ai-integration.md`](./app-ai-integration.md).
 
 > **App-defined tools are Agent-facing services.** The catalog below is the
@@ -241,9 +241,9 @@ catalog can never drift from the implementation:
 
 After landing the change:
 
-* `cos ai tools` will start reporting the new entry.
+* `yu ai tools` will start reporting the new entry.
 * Apps must add the tool name to their `app.json`'s `ai.tools[]`
-  before they can pass it to `cos ai chat --tools` — the kernel
+  before they can pass it to `yu ai chat --tools` — the kernel
   catalog check in `bridge.rs` will otherwise reject the App at
   launch.
 * The audit stream will record `model="tool:<your_name>"` rows; no

@@ -92,11 +92,11 @@ pub enum ProvenanceError {
     #[error("{path}: {reason}")]
     Io { path: PathBuf, reason: String },
     #[error(
-        "{path}: developer trust grant is stale (tree digest changed); re-run `cos provenance dev-trust`"
+        "{path}: developer trust grant is stale (tree digest changed); re-run `yu provenance dev-trust`"
     )]
     StaleDeveloperGrant { path: PathBuf },
     #[error(
-        "{path}: unsigned package and no developer trust grant; install a signed package or run `cos provenance dev-trust --kind {kind} --id {id} --path {path}`"
+        "{path}: unsigned package and no developer trust grant; install a signed package or run `yu provenance dev-trust --kind {kind} --id {id} --path {path}`"
     )]
     Unsigned {
         path: PathBuf,

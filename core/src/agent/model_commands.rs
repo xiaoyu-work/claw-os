@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-/// `cos agent llm <providers|models|model|cost>`
+/// `yu agent llm <providers|models|model|cost>`
 ///
 /// Read-only inspection of the built-in
 /// [`crate::agent::llm::metadata`] table — the static registry of
@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 /// per-million-token pricing. Useful for cross-checking pricing
 /// against an invoice, picking a model from the CLI without leaving
 /// the terminal, or scripting a "what does this model support?"
-/// guard before issuing a `cos agent ask`.
+/// guard before issuing a `yu agent ask`.
 ///
 /// All data lives in the binary; no network or file IO is involved.
 pub(super) fn llm_cmd(args: &[String]) -> Result<Value, String> {
@@ -64,7 +64,7 @@ pub(super) fn llm_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .cloned()
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "usage: cos agent llm model <name>".to_string())?;
+                .ok_or_else(|| "usage: yu agent llm model <name>".to_string())?;
             let m = metadata::lookup(&name).ok_or_else(|| format!("unknown model: {name}"))?;
             Ok(model_to_json(m))
         }
@@ -86,7 +86,7 @@ fn model_to_json(m: &crate::agent::llm::metadata::ModelMetadata) -> Value {
     })
 }
 
-/// `cos agent compress [show-config|check --file <jsonl> [...]]`
+/// `yu agent compress [show-config|check --file <jsonl> [...]]`
 ///
 /// Inspect the context-window compressor without invoking it. Two
 /// surfaces:
@@ -260,7 +260,7 @@ fn parse_u32_arg(raw: Option<&String>, flag: &str) -> Result<u32, String> {
     s.parse::<u32>().map_err(|e| format!("{flag}: {e}"))
 }
 
-/// `cos agent aux [show|ask --prompt <text> [--system <text>] [--max-tokens N]]`
+/// `yu agent aux [show|ask --prompt <text> [--system <text>] [--max-tokens N]]`
 ///
 /// Inspect or invoke the auxiliary LLM client. The auxiliary path
 /// exists so lightweight subtasks (title generation, classification,
@@ -360,7 +360,7 @@ pub(super) fn aux_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent retry [show|schedule [--attempts N]]`
+/// `yu agent retry [show|schedule [--attempts N]]`
 ///
 /// Surface for the LLM-call retry policy resolved from the agent
 /// config via [`crate::agent::runtime::loop_::retry_policy_from_cfg`].

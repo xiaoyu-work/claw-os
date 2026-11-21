@@ -15,7 +15,7 @@ RestartSec=3
 # Default port = 0 (kernel-assigned). The authenticated endpoint is
 # published inside a private runtime directory for launchers to discover.
 # Override via drop-in if a fixed port is required.
-Environment=COS_BIN=/usr/local/bin/cos
+Environment=COS_BIN=/usr/local/bin/yu
 Environment=CLAWD_SOCKET=/run/cos/clawd.sock
 RuntimeDirectory=cos-agent-bridge
 RuntimeDirectoryMode=0700
@@ -40,7 +40,7 @@ MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 # Discovery/audio staging plus the audit/provider state written by
-# `cos model transcribe`. A leading `-` keeps first boot working before
+# `yu model transcribe`. A leading `-` keeps first boot working before
 # the optional data/cache directories exist.
 ReadWritePaths=%t/cos-agent-bridge -%h/.local/share/cos -%h/.cache/cos
 

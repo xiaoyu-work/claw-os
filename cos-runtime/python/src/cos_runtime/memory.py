@@ -23,11 +23,11 @@ Typical usage::
         kind="event",
         entity_id="expense-12839",
         tags=["hotel", "travel", "2025"],
-        link="cos app expense-tracker show 12839",
+        link="yu app expense-tracker show 12839",
     )
 
 Apps are expected to push *summaries*, not raw rows. The user inspects
-or redacts what has been stored via ``cos agent memory``.
+or redacts what has been stored via ``yu agent memory``.
 """
 
 from __future__ import annotations
@@ -216,9 +216,9 @@ def _cos_binary() -> str:
     override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
-    found = shutil.which("cos")
+    found = shutil.which("yu")
     if found is None:
         raise MemoryUnavailable(
-            "the `cos` binary is not on PATH; cannot push to agent memory"
+            "the `yu` binary is not on PATH; cannot push to agent memory"
         )
     return found

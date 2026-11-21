@@ -39,7 +39,7 @@ fn extract_wire_version(mut argv: Vec<String>) -> Result<(Vec<String>, bool), St
 ///
 /// Hidden internal bridges (`__memory`, `__policy`, …) are exempt:
 /// their argv is a private wire format between the SDK and the kernel,
-/// and `cos __memory remember --json <payload>` must reach the bridge
+/// and `yu __memory remember --json <payload>` must reach the bridge
 /// with its flag intact. They always answer in compact JSON anyway.
 fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
     if argv.first().is_some_and(|first| first.starts_with("__")) {
@@ -222,7 +222,7 @@ fn main() {
         Ok(parsed) => parsed,
         Err(error) => {
             if opaque_stdio {
-                eprintln!("cos app stdio: {error}");
+                eprintln!("yu app stdio: {error}");
                 process::exit(1);
             }
             println!(
@@ -240,7 +240,7 @@ fn main() {
     };
 
     // After selecting the output protocol but before request argv is
-    // interpreted or a session is bootstrapped, reject a `cos` binary
+    // interpreted or a session is bootstrapped, reject a `yu` binary
     // older than the release this system has already accepted. Decoding
     // the protocol first keeps this fail-closed refusal machine-readable.
     if let Err(refusal) =
@@ -258,7 +258,7 @@ fn main() {
                 )
             );
         } else {
-            eprintln!("cos: {refusal}");
+            eprintln!("yu: {refusal}");
         }
         process::exit(1);
     }
@@ -269,7 +269,7 @@ fn main() {
             process::exit(1);
         }
         if let Err(error) = router::dispatch(&raw_args) {
-            eprintln!("cos desktop events: {error}");
+            eprintln!("yu desktop events: {error}");
             process::exit(1);
         }
         return;
@@ -280,7 +280,7 @@ fn main() {
             process::exit(1);
         }
         if let Err(error) = router::dispatch(&raw_args) {
-            eprintln!("cos GUI audio: {error}");
+            eprintln!("yu GUI audio: {error}");
             process::exit(1);
         }
         return;
@@ -291,14 +291,14 @@ fn main() {
             process::exit(1);
         }
         if let Err(error) = cos::model::local_embedding::serve() {
-            eprintln!("cos local embedding: {error}");
+            eprintln!("yu local embedding: {error}");
             process::exit(1);
         }
         return;
     }
     if opaque_stdio {
         if wire_v1 {
-            eprintln!("cos app stdio is an opaque transport and does not support --wire=1");
+            eprintln!("yu app stdio is an opaque transport and does not support --wire=1");
             process::exit(1);
         }
         // The broker authenticates this launcher. Do not manufacture a CLI
@@ -314,7 +314,7 @@ fn main() {
     let (args, stdin_requested) = extract_stdin_request(raw_args, operation_accepts_stdin);
 
     // Bootstrap a CLI session if the caller didn't already gate us
-    // through one (typical for `cos agent setup`, `cos agent chat`,
+    // through one (typical for `yu agent setup`, `yu agent chat`,
     // and other commands a human runs straight from a shell). The
     // guard cleans up its registry row on Drop.
     let _session_guard = caps::bootstrap_user_cli_session(&args);
@@ -375,7 +375,7 @@ fn main() {
             }
             // If a primitive returned a structured JSON error envelope as
             // its Err string (e.g. `{"error":"agent not configured",
-            // "fix":"cos agent setup"}`), surface it as-is instead of
+            // "fix":"yu agent setup"}`), surface it as-is instead of
             // re-wrapping it in another `{"error":"..."}` layer. That
             // double-encoding made the structured fields invisible to
             // both humans and `jq` consumers.

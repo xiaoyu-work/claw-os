@@ -29,7 +29,7 @@ def publish(
     if len(data) > 20 * 1024:
         raise ValueError("App event request exceeds 20 KiB")
     return call_json_with_stdin_binary(
-        binary if binary is not None else os.environ.get("CLAW_COS_BIN", "/usr/local/bin/cos"),
+        binary if binary is not None else os.environ.get("CLAW_COS_BIN", "/usr/local/bin/yu"),
         ["__app_event", "publish"],
         data,
         deadline_unix_ms=(

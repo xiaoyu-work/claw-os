@@ -11,7 +11,7 @@ export const EXPECTED_WIRE_VERSION = 1 as const;
 
 /**
  * AI request / reply.
- * Stable text-chat reply returned by `cos ai chat`.
+ * Stable text-chat reply returned by `yu ai chat`.
  */
 export interface Ai {
   text: string;
@@ -64,7 +64,7 @@ export interface AiToolCall {
 
 /**
  * App-verb invocation reply.
- * Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places
+ * Success data for `yu --wire=1 app <id> <verb> [args]`. The kernel places
  * the operation-specific object under the wire envelope's `data` field.
  */
 export interface App {
@@ -74,7 +74,7 @@ export interface App {
 
 /**
  * AI budget show reply.
- * Shape returned by `cos agent budget show <app>`.
+ * Shape returned by `yu agent budget show <app>`.
  */
 export interface BudgetShow {
   app: string;
@@ -84,7 +84,7 @@ export interface BudgetShow {
 
 /**
  * Envelope.
- * Common wrapper around every wire v1 reply requested with `cos --wire=1`.
+ * Common wrapper around every wire v1 reply requested with `yu --wire=1`.
  */
 export interface Envelope {
   ok: boolean;
@@ -598,7 +598,7 @@ export interface Perms {
 
 /**
  * Catalog tool invocation reply.
- * Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.
+ * Shape returned by `yu ai tool <name> --app <id> --args '<json>'`.
  */
 export interface Tool {
   tool: string;
@@ -609,7 +609,7 @@ export interface Tool {
 
 /**
  * Catalog tool list reply.
- * Shape returned by `cos ai tools`.
+ * Shape returned by `yu ai tools`.
  */
 export interface ToolCatalog {
   tools: WireCatalogEntry[];
@@ -949,7 +949,7 @@ function normalizeWireIntegers(rule: WireRule, root: WireRule, value: unknown): 
   }
 }
 
-const _WIRE_SCHEMA_AI: WireRule = decodeWireJson("{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `cos ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}") as WireRule;
+const _WIRE_SCHEMA_AI: WireRule = decodeWireJson("{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `yu ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateAi(value: unknown): asserts value is Ai & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value, "Ai", "$");
@@ -960,7 +960,7 @@ export function normalizeAiIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value);
 }
 
-const _WIRE_SCHEMA_BUDGET_SHOW: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/budget_show.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Shape returned by `cos agent budget show <app>`.\",\"properties\":{\"app\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"app\",\"period\",\"units_used\"],\"title\":\"AI budget show reply\",\"type\":\"object\"}") as WireRule;
+const _WIRE_SCHEMA_BUDGET_SHOW: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/budget_show.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Shape returned by `yu agent budget show <app>`.\",\"properties\":{\"app\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"app\",\"period\",\"units_used\"],\"title\":\"AI budget show reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateBudgetShow(value: unknown): asserts value is BudgetShow & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$");
@@ -971,7 +971,7 @@ export function normalizeBudgetShowIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
 }
 
-const _WIRE_SCHEMA_ENVELOPE: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/envelope.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Common wrapper around every wire v1 reply requested with `cos --wire=1`.\",\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"data\":{\"type\":\"object\"},\"ok\":{\"const\":true},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"data\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"code\":{\"minLength\":1,\"type\":\"string\"},\"detail\":{\"type\":\"object\"},\"error\":{\"minLength\":1,\"type\":\"string\"},\"ok\":{\"const\":false},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"error\",\"code\"],\"type\":\"object\"}],\"properties\":{\"audit_id\":{\"description\":\"Audit log entry id (ULID).\",\"type\":\"string\"},\"code\":{\"description\":\"Stable error code from wire/v1/error_codes.md.\",\"minLength\":1,\"type\":\"string\"},\"data\":{\"description\":\"Request-specific success payload. See the per-family schema for shape.\",\"type\":\"object\"},\"detail\":{\"description\":\"Request-specific error payload.\",\"type\":\"object\"},\"error\":{\"description\":\"Human-readable error summary. Present only when ok is false.\",\"minLength\":1,\"type\":\"string\"},\"ok\":{\"description\":\"true iff the kernel accepted and dispatched the call.\",\"type\":\"boolean\"},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\"],\"title\":\"Envelope\",\"type\":\"object\"}") as WireRule;
+const _WIRE_SCHEMA_ENVELOPE: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/envelope.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Common wrapper around every wire v1 reply requested with `yu --wire=1`.\",\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"data\":{\"type\":\"object\"},\"ok\":{\"const\":true},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"data\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"code\":{\"minLength\":1,\"type\":\"string\"},\"detail\":{\"type\":\"object\"},\"error\":{\"minLength\":1,\"type\":\"string\"},\"ok\":{\"const\":false},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"error\",\"code\"],\"type\":\"object\"}],\"properties\":{\"audit_id\":{\"description\":\"Audit log entry id (ULID).\",\"type\":\"string\"},\"code\":{\"description\":\"Stable error code from wire/v1/error_codes.md.\",\"minLength\":1,\"type\":\"string\"},\"data\":{\"description\":\"Request-specific success payload. See the per-family schema for shape.\",\"type\":\"object\"},\"detail\":{\"description\":\"Request-specific error payload.\",\"type\":\"object\"},\"error\":{\"description\":\"Human-readable error summary. Present only when ok is false.\",\"minLength\":1,\"type\":\"string\"},\"ok\":{\"description\":\"true iff the kernel accepted and dispatched the call.\",\"type\":\"boolean\"},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\"],\"title\":\"Envelope\",\"type\":\"object\"}") as WireRule;
 
 export function validateEnvelope(value: unknown): asserts value is Envelope & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value, "Envelope", "$");
@@ -1081,7 +1081,7 @@ export function normalizeOwnerPathNeedIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_OWNER_PATH_NEED, _WIRE_SCHEMA_OWNER_PATH_NEED, value);
 }
 
-const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;
+const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `yu ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateToolCatalog(value: unknown): asserts value is ToolCatalog & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value, "ToolCatalog", "$");
@@ -1092,7 +1092,7 @@ export function normalizeToolCatalogIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value);
 }
 
-const _WIRE_SCHEMA_TOOL: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/tool.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.\",\"properties\":{\"app_id\":{\"description\":\"App identity under which the tool ran.\",\"type\":\"string\"},\"result\":{\"description\":\"Tool-specific JSON result.\"},\"status\":{\"description\":\"Execution status. Denials are returned as errors, not ToolResult values.\",\"enum\":[\"ok\"],\"type\":\"string\"},\"tool\":{\"description\":\"Catalog tool name.\",\"type\":\"string\"}},\"required\":[\"tool\",\"app_id\",\"status\",\"result\"],\"title\":\"Catalog tool invocation reply\",\"type\":\"object\"}") as WireRule;
+const _WIRE_SCHEMA_TOOL: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/tool.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `yu ai tool <name> --app <id> --args '<json>'`.\",\"properties\":{\"app_id\":{\"description\":\"App identity under which the tool ran.\",\"type\":\"string\"},\"result\":{\"description\":\"Tool-specific JSON result.\"},\"status\":{\"description\":\"Execution status. Denials are returned as errors, not ToolResult values.\",\"enum\":[\"ok\"],\"type\":\"string\"},\"tool\":{\"description\":\"Catalog tool name.\",\"type\":\"string\"}},\"required\":[\"tool\",\"app_id\",\"status\",\"result\"],\"title\":\"Catalog tool invocation reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateTool(value: unknown): asserts value is Tool & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value, "Tool", "$");

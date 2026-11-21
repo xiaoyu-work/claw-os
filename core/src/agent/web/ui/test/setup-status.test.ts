@@ -12,14 +12,14 @@ describe("readSetupStatus", () => {
         reason: {
           error: "credential missing",
           details: "GitHub sign-in could not be resolved.",
-          fix: "cos agent setup text",
+          fix: "yu agent setup text",
         },
       }),
     ).toEqual({
       configured: true,
       ready: false,
       reason:
-        "credential missing — GitHub sign-in could not be resolved. — Fix: cos agent setup text",
+        "credential missing — GitHub sign-in could not be resolved. — Fix: yu agent setup text",
     });
   });
 

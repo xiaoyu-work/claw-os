@@ -1,7 +1,7 @@
 // Subprocess transport shared by every Node SDK module.
 //
 // Like the Python and Rust SDKs, the Node SDK is a thin client over
-// wire protocol v1: it shells out to the `cos` binary, which reads
+// wire protocol v1: it shells out to the `yu` binary, which reads
 // non-sensitive routing flags from argv and writes a JSON envelope to stdout.
 // AI prompt bodies are passed through private temporary files. The
 // subprocess model is intentional — identity, audit, and session
@@ -22,19 +22,19 @@ const MAX_BUFFER = 8 * 1024 * 1024;
 const WIRE_ARG = "--wire=1";
 
 /**
- * Resolve the `cos` binary.
+ * Resolve the `yu` binary.
  *
  * Honors `CLAW_COS_BIN`, falling back to `cos` on `$PATH`.
  */
 export function cosBinary(): string {
-  return process.env.CLAW_COS_BIN || "cos";
+  return process.env.CLAW_COS_BIN || "yu";
 }
 
 /** Base class for every error the transport (or a module built on it)
  * raises. */
 export class BridgeError extends Error {}
 
-/** The `cos` binary could not be invoked, timed out, or returned
+/** The `yu` binary could not be invoked, timed out, or returned
  * something that was not a JSON envelope. */
 export class Unavailable extends BridgeError {}
 
@@ -55,9 +55,9 @@ function truncate(value: string, limit = 200): string {
 }
 
 /**
- * Run `cos --wire=1 <args>` synchronously and return the success data.
+ * Run `yu --wire=1 <args>` synchronously and return the success data.
  *
- * `label` names the logical call (e.g. `"cos ai chat"`) for error
+ * `label` names the logical call (e.g. `"yu ai chat"`) for error
  * messages. Throws {@link Unavailable} for transport problems (binary
  * missing, timeout, malformed protocol). Throws {@link Denied} for a
  * valid kernel error envelope.

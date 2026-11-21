@@ -13,7 +13,7 @@ Rust, Python, Node, and Go bindings.
 - Admit System Agent, permitted external Agent, and authenticated CLI callers,
   never Apps or App-owned agents. Cross-App orchestration is system-Agent-owned.
 - Provide public SDK calls without exposing internal broker details.
-- AI chat retains its public options and error envelope while `cos ai chat`
+- AI chat retains its public options and error envelope while `yu ai chat`
   transports bounded prompt/system/tool/budget data to the authenticated broker.
   Hosted Apps neither resolve local session registries nor own provider access.
 - Keep language bindings behaviorally compatible.
@@ -88,7 +88,7 @@ retains separate signed GUI executables under one App identity. Every named
 entry requires `entry`, one literal `exec`, localized `name`, and its own
 `needs`; optional `panel_applet` is presentation only. Explicit default GUI
 needs, including `[]`, never recover the legacy operation union; omission does.
-Named selection is `cos app <id> --gui:<name>`, not an executable/path argument.
+Named selection is `yu app <id> --gui:<name>`, not an executable/path argument.
 All four generated manifest types retain these fields, including Go's
 presence-sensitive default needs. See
 [the GUI contract](../docs/app-development.md#multiple-gui-entries-under-one-app-identity).
@@ -165,7 +165,7 @@ The Rust controlled-primitive stdin transport captures diagnostics by default.
 Its explicit human-terminal variant only inherits an already-connected stderr
 terminal; it never creates a TTY, changes identity, or bypasses the OS bootstrap
 guards. Capture uses it for direct CLI compatibility, never for MCP calls.
-Installed Settings uses the explicit-binary variant for `/usr/local/bin/cos`;
+Installed Settings uses the explicit-binary variant for `/usr/local/bin/yu`;
 it does not depend on launcher PATH or a process-wide environment mutation.
 Generic SDK clients still honor `CLAW_COS_BIN` and otherwise resolve `cos` on PATH.
 Media Player uses `cos_call_json_async_with_binary`: it shares the strict wire

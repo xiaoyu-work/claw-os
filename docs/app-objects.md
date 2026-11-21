@@ -86,18 +86,18 @@ IDs are nonempty, control-free UTF-8, at most 1024 bytes; revisions are at most
 128 bytes. Canonical references fit the existing 4096-byte Activity reference
 limit. Credentials, ports, fragments, unknown/repeated query keys, invalid
 UTF-8, and noncanonical spellings are rejected. Use the SDK helpers or
-`cos object reference` rather than concatenating unescaped strings.
+`yu object reference` rather than concatenating unescaped strings.
 
 ## Inspect and resolve
 
 These commands run inside Linux or WSL Claw OS:
 
 ```bash
-cos object catalog
-cos object catalog kv
-cos object reference kv entry release.status
-cos object describe 'app://kv/entry?id=release.status'
-cos object resolve 'app://kv/entry?id=release.status'
+yu object catalog
+yu object catalog kv
+yu object reference kv entry release.status
+yu object describe 'app://kv/entry?id=release.status'
+yu object resolve 'app://kv/entry?id=release.status'
 ```
 
 `reference` only formats an identity. `catalog` and `describe` read authenticated
@@ -110,7 +110,7 @@ Opaque IDs are passed as argv values, never through a shell. CLI reference
 creation accepts `--` before an ID that resembles an option:
 
 ```bash
-cos object reference kv entry -- --schema
+yu object reference kv entry -- --schema
 ```
 
 Invocation previews expose structured argv, not a command assembled by joining
@@ -121,11 +121,11 @@ unquoted strings. Quote a complete URI when supplying it to a shell.
 ```bash
 activity_id="00000000-0000-4000-8000-000000000001" # use an existing Activity ID
 
-cos activity attach-object "$activity_id" \
+yu activity attach-object "$activity_id" \
   --label "Release status" \
   --app kv --type entry --object-id release.status
 
-cos activity objects "$activity_id"
+yu activity objects "$activity_id"
 ```
 
 The shared broker verifies the App package and declaration, then atomically

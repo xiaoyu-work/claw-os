@@ -70,7 +70,7 @@ fn execute_with(
                 "recording_error":receipts::diagnostic(&error),
                 "activity_id":activity.id,
                 "report":report,
-                "retry":"Pipe the report JSON to cos activity record-receipt ACTIVITY_ID --stdin",
+                "retry":"Pipe the report JSON to yu activity record-receipt ACTIVITY_ID --stdin",
             }).to_string());
         }
     };
@@ -85,7 +85,7 @@ fn execute_with(
 
 fn parse_execute(args: &[String]) -> Result<(String, String, String, Vec<String>), String> {
     if args.len() < 5 || args[2] != "--activity" || args[4] != "--" {
-        return Err("usage: cos operation execute APP OPERATION --activity ID -- [APP ARGS]; stdin is not forwarded".into());
+        return Err("usage: yu operation execute APP OPERATION --activity ID -- [APP ARGS]; stdin is not forwarded".into());
     }
     crate::activities::validate_id(&args[3]).map_err(|error| error.to_string())?;
     let argv = args[5..].to_vec();

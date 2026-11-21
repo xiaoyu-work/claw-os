@@ -9,10 +9,10 @@ The default linked OS library retains plain CLI JSON, so SDK feature unification
 does not change other desktop consumers' floating-point parsing. Neither mode
 adds a core or UI library dependency.
 
-- `src/policy.rs`: bounded `cos __policy check` process, named/wild scopes,
+- `src/policy.rs`: bounded `yu __policy check` process, named/wild scopes,
   typed deny/error handling and exact verb/scope affirmation.
 - `src/command.rs`: bounded subprocess stdout/stderr, deadlines and checked
-  kill/reaping. The installed provider fixes `/usr/local/bin/cos`; the original
+  kill/reaping. The installed provider fixes `/usr/local/bin/yu`; the original
   `COS_BIN` test/development override remains only in the default OS library.
 - `src/service.rs`, `src/bin/claw-os-applet-provider.rs`: closed v1 dispatch,
   independent per-operation checks, bounded framing and nonblocking private
@@ -27,10 +27,10 @@ adds a core or UI library dependency.
   SQLite view. Agent installs this independent GPL executable; core never
   links this library or product UI.
 - `test/unit/`: original provider/policy tests plus exact named-scope coverage.
-- `src/tasks.rs`: shared read-only `cos agent ls` records and bounded async
+- `src/tasks.rs`: shared read-only `yu agent ls` records and bounded async
   listing; `observe()` first checks `agent.observe:Name(tasks)`.
 - `src/system.rs`: first check `sys.observe:Wild`, then sample CPU/network and
-  bounded `cos sys resources`, preserving the existing Linux fallback and
+  bounded `yu sys resources`, preserving the existing Linux fallback and
   process-local delta state. Original telemetry tests remain alongside it.
 
 The OS `cosmic-applets` dispatcher translates events to the product-owned
@@ -50,7 +50,7 @@ must establish the authenticated grant and owner-scoped data view. A caller
 environment is not independently attested by this library. Provider sources
 and binaries are excluded from the public development artifact.
 
-Calendar dispatch uses `cos --wire=1 __calendar day <year> <month> <day>`.
+Calendar dispatch uses `yu --wire=1 __calendar day <year> <month> <day>`.
 The existing session reaches `system.calendar.day`, which spends exactly
 `data.db.read:Name(calendar)` once and derives the owner data root in `clawd`.
 The Applet never reads its own `COS_DATA_DIR` as Calendar storage. A missing

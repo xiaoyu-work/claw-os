@@ -756,7 +756,7 @@ fn session_startup_failure(root: &Path) {
 }
 
 async fn owner_permissions(params: serde_json::Value) -> std::process::Output {
-    let mut command = ProcessCommand::new("/usr/local/bin/cos");
+    let mut command = ProcessCommand::new("/usr/local/bin/yu");
     command
         .args(["__app-permissions", &params.to_string()])
         .env_clear()
@@ -1083,7 +1083,7 @@ async fn run_selected_read_window(group: &std::fs::File, inherited: bool) {
     });
     let window = claw_display_control::Epoch(retained.instance.0).label();
     assert!(read.session.starts_with(&format!("gui-read-{window}-")));
-    let mut review_command = ProcessCommand::new("/usr/local/bin/cos");
+    let mut review_command = ProcessCommand::new("/usr/local/bin/yu");
     review_command.args(["review", "show", &read.id]).env_clear()
         .env("HOME", home).env("PATH", "/usr/local/bin:/usr/bin:/bin")
         .current_dir(home).stdin(Stdio::null());
@@ -1203,7 +1203,7 @@ async fn approve_native_resource(id: &str) -> crate::approvals::Request {
 }
 
 async fn owner_native_json(arguments: &[&str]) -> serde_json::Value {
-    let mut command = ProcessCommand::new("/usr/local/bin/cos");
+    let mut command = ProcessCommand::new("/usr/local/bin/yu");
     command.args(arguments).env_clear().env("HOME", "/run/display-home")
         .env("PATH", "/usr/local/bin:/usr/bin:/bin").current_dir("/run/display-home").stdin(Stdio::null());
     unsafe {
@@ -1856,7 +1856,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
 
 fn headless_cli(group: &std::fs::File) {
     let invoke = |args: &[&str]| {
-        let mut command = ProcessCommand::new("/usr/local/bin/cos");
+        let mut command = ProcessCommand::new("/usr/local/bin/yu");
         command
             .args(args)
             .env_clear()

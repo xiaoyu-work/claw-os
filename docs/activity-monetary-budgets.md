@@ -41,16 +41,16 @@ The finite accepted ranges are:
 ```bash
 activity_id="00000000-0000-4000-8000-000000000001"
 
-cos activity set-monetary-budget "$activity_id" \
+yu activity set-monetary-budget "$activity_id" \
   --currency USD \
   --max-total-microusd 5000000 \
   --input-microusd-per-million-tokens 250000 \
   --output-microusd-per-million-tokens 1000000 \
   --max-output-tokens-per-turn 4096
 
-cos activity monetary-budget "$activity_id"
-cos activity disable-monetary-budget "$activity_id" --revision 1
-cos activity enable-monetary-budget "$activity_id" --revision 2
+yu activity monetary-budget "$activity_id"
+yu activity disable-monetary-budget "$activity_id" --revision 1
+yu activity enable-monetary-budget "$activity_id" --revision 2
 ```
 
 Creation omits `--revision`; updates supply the exact current revision.

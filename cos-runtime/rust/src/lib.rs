@@ -8,7 +8,7 @@
 //!
 //! ## What's in here
 //!
-//! Every gated `cos app <id> <verb>` call from the apps in `apps/*`
+//! Every gated `yu app <id> <verb>` call from the apps in `apps/*`
 //! and the cosmic-desktop binaries under `desktop/*` is routed through
 //! one of these modules:
 //!
@@ -16,14 +16,14 @@
 //! |---------------|-------------|----------------------------|
 //! | [`ask_claw`]  | desktop     | supervised Agent overlay   |
 //! | [`policy`]    | `policy`    | hidden policy bridge       |
-//! | [`fs`]        | `app`       | `cos app fs ...`           |
+//! | [`fs`]        | `app`       | `yu app fs ...`           |
 //! | [`filesystem`] | system    | controlled text-file provider |
 //! | [`desktop`]   | system     | controlled native editor launch |
 //! | [`capture`]   | system     | owner-scoped screenshot provider |
-//! | [`exec`]      | `app`       | `cos app exec ...`         |
-//! | [`pkg`]       | `app`       | `cos app pkg ...`          |
-//! | [`notify`]    | `app`       | `cos app notify ...`       |
-//! | [`net`]       | `app`       | `cos app net ...`          |
+//! | [`exec`]      | `app`       | `yu app exec ...`         |
+//! | [`pkg`]       | `app`       | `yu app pkg ...`          |
+//! | [`notify`]    | `app`       | `yu app notify ...`       |
+//! | [`net`]       | `app`       | `yu app net ...`          |
 //!
 //! App handlers use controlled providers (`filesystem`, `desktop`) and SDK AI.
 //! The `fs`, `exec`, `pkg`, `notify` and `net` modules are trusted-human

@@ -88,7 +88,7 @@ func wireErrorEnvelope(message, code string) string {
 func fakeCos(t *testing.T, stdout string, exitCode int) (bin, argvOut string) {
 	t.Helper()
 	dir := t.TempDir()
-	bin = filepath.Join(dir, "cos")
+	bin = filepath.Join(dir, "yu")
 	argvOut = filepath.Join(dir, "argv.txt")
 	payload := filepath.Join(dir, "stdout.json")
 	if err := os.WriteFile(payload, []byte(stdout), 0o644); err != nil {
@@ -99,7 +99,7 @@ func fakeCos(t *testing.T, stdout string, exitCode int) (bin, argvOut string) {
 		"cat " + payload + "\n" +
 		"exit " + itoa(exitCode) + "\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake cos: %v", err)
+		t.Fatalf("write fake yu: %v", err)
 	}
 	return bin, argvOut
 }
@@ -157,11 +157,11 @@ func TestCosBinaryResolution(t *testing.T) {
 	}
 	os.Unsetenv("CLAW_COS_BIN")
 	t.Setenv("COS_BIN", "/x/cosbin")
-	if got := CosBinary(); got != "cos" {
+	if got := CosBinary(); got != "yu" {
 		t.Fatalf("COS_BIN must not affect SDK transport, got %q", got)
 	}
 	os.Unsetenv("COS_BIN")
-	if got := CosBinary(); got != "cos" {
+	if got := CosBinary(); got != "yu" {
 		t.Fatalf("default should be cos, got %q", got)
 	}
 }

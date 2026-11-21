@@ -146,7 +146,7 @@ fn cli_child(helper: &Process) -> Process {
         for pid in text.split_whitespace() {
             let pid: u32 = pid.parse().unwrap();
             if std::fs::read_link(format!("/proc/{pid}/exe"))
-                .is_ok_and(|path| path == Path::new("/usr/local/bin/cos"))
+                .is_ok_and(|path| path == Path::new("/usr/local/bin/yu"))
             {
                 children.push(pid);
             }

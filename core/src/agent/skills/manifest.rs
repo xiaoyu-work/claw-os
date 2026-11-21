@@ -103,7 +103,7 @@ pub enum ManifestError {
     TooLarge { len: usize, cap: usize },
     #[error(
         "a `signature:` frontmatter block is no longer an authentication \
-         mechanism; sign the package with `cos provenance sign --kind skill`"
+         mechanism; sign the package with `yu provenance sign --kind skill`"
     )]
     LegacySignatureBlock,
 }

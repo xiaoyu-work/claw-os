@@ -1,6 +1,6 @@
 use super::*;
 
-/// Pin the alphabetical ordering. `cos agent status` and the
+/// Pin the alphabetical ordering. `yu agent status` and the
 /// provider-registry consumers rely on this; changing it is a
 /// surface-visible behavior change.
 #[test]

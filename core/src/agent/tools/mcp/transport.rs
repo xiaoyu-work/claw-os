@@ -10,7 +10,7 @@
 //! [`StdioTransport`] reads/writes newline-delimited JSON-RPC frames
 //! over a configurable async pair (`tokio::io::stdin/stdout` in the
 //! production path; arbitrary `tokio::io::DuplexStream` halves in
-//! tests). Used by `cos agent mcp serve` to expose the cos tool
+//! tests). Used by `yu agent mcp serve` to expose the yu tool
 //! catalogue to MCP clients (Claude Desktop / Cursor / Cody).
 
 use std::sync::Arc;

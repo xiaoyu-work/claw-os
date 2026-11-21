@@ -1,6 +1,6 @@
 use super::*;
 
-/// The `cos agent ls` JSON envelope shape we consume.
+/// The `yu agent ls` JSON envelope shape we consume.
 #[test]
 fn parses_real_kernel_ls_response() {
     let raw = r#"{

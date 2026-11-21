@@ -43,13 +43,13 @@ attached App reference:
 activity_id="00000000-0000-4000-8000-000000000001"
 reference="app://kv/entry?id=release.status"
 
-cos activity observe "$activity_id" --reference "$reference" \
+yu activity observe "$activity_id" --reference "$reference" \
   --text "The release is waiting for review"
 
-cos activity observe "$activity_id" --reference "$reference" \
+yu activity observe "$activity_id" --reference "$reference" \
   --source agent_inference --text "The remaining blocker may be the review"
 
-cos activity object-state "$activity_id" --reference "$reference" --limit 100
+yu activity object-state "$activity_id" --reference "$reference" --limit 100
 ```
 
 The source flag is a reported classification, not proof that an Agent authored
@@ -57,10 +57,10 @@ the text. Link an existing same-Activity receipt without supplying replacement
 App output:
 
 ```bash
-cos activity observe "$activity_id" --reference "$reference" \
+yu activity observe "$activity_id" --reference "$reference" \
   --receipt 00000000-0000-4000-8000-000000000002
 
-cos activity relate "$activity_id" --reference "$reference" \
+yu activity relate "$activity_id" --reference "$reference" \
   --target "app://kv/entry?id=review.status" --relation depends_on \
   --note "Planning link only"
 ```
@@ -88,11 +88,11 @@ Only the latest unsuperseded entry may be corrected. A racing or delayed
 correction conflicts instead of silently replacing another writer's update.
 
 ```bash
-cos activity observe "$activity_id" --reference "$reference" \
+yu activity observe "$activity_id" --reference "$reference" \
   --supersedes 00000000-0000-4000-8000-000000000003 \
   --text "Review is now complete; publishing still requires confirmation"
 
-cos activity retract-object-state "$activity_id" --reference "$reference" \
+yu activity retract-object-state "$activity_id" --reference "$reference" \
   --supersedes 00000000-0000-4000-8000-000000000004 \
   --reason "This statement was not supported"
 ```
@@ -107,7 +107,7 @@ or its completion confirmation.
 submission's result is unknown. An exact retry returns the original immutable
 entry; changed content or another Activity under that owner's ID conflicts.
 Current validity and supersession are read-time projections and may change.
-`cos activity record-object-state ID --stdin` accepts the same draft used by
+`yu activity record-object-state ID --stdin` accepts the same draft used by
 graphical clients, up to 16 KiB, for a recording-only retry.
 
 ## Shared presentation and Agent context

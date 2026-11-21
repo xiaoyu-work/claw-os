@@ -1,7 +1,7 @@
 use super::{insights, memory};
 use serde_json::{json, Value};
 
-/// `cos agent insights [overall|recent|sessions] [n]` — aggregate
+/// `yu agent insights [overall|recent|sessions] [n]` — aggregate
 /// the JSONL run-record stream produced by every LLM call.
 pub(super) fn insights_cmd(args: &[String]) -> Result<Value, String> {
     use chrono::DateTime;
@@ -12,7 +12,7 @@ pub(super) fn insights_cmd(args: &[String]) -> Result<Value, String> {
 
     // Parse trailing flags shared across all three sub-verbs.
     // For "recent" the optional N positional must come first
-    // (preserves the existing `cos agent insights recent 25` UX).
+    // (preserves the existing `yu agent insights recent 25` UX).
     let (n_for_recent, mut i) = if sub == "recent" {
         let n = args.get(1).and_then(|s| s.parse::<usize>().ok());
         (n, if n.is_some() { 2 } else { 1 })
@@ -131,7 +131,7 @@ pub(super) fn usage_public_cmd(args: &[String]) -> Result<Value, String> {
 
 fn usage_help() -> Value {
     json!({
-        "command": "cos agent usage",
+        "command": "yu agent usage",
         "description": "Aggregate token usage from the current user's AI run log.",
         "scopes": {
             "overall": "All matching calls",
@@ -150,9 +150,9 @@ fn usage_help() -> Value {
             "--verb <name>": "Combine with an AI verb filter",
         },
         "examples": [
-            "cos agent usage overall",
-            "cos agent usage provider anthropic",
-            "cos agent usage session <session-id>",
+            "yu agent usage overall",
+            "yu agent usage provider anthropic",
+            "yu agent usage session <session-id>",
         ],
         "model_tool": "cos_usage",
     })
@@ -165,7 +165,7 @@ pub(crate) fn usage_primitive(command: &str, args: &[String]) -> Result<Value, S
     usage_for_current_context(&invocation)
 }
 
-/// `cos agent usage [overall|provider <name>|model <name>|session <id>|app <id>|verb <name>]`
+/// `yu agent usage [overall|provider <name>|model <name>|session <id>|app <id>|verb <name>]`
 /// `[--since <ISO>] [--until <ISO>] [--ok|--error] [--app <id>] [--verb <name>]`
 /// — filtered aggregation over `ai.jsonl`. Mirrors `agent insights
 /// overall` for the unfiltered case but adds the AND-combined filter
@@ -288,7 +288,7 @@ fn parse_usage_query(args: &[String]) -> Result<ParsedUsageQuery, String> {
                 args.get(1)
                     .cloned()
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "usage: cos agent usage provider <name>".to_string())?,
+                    .ok_or_else(|| "usage: yu agent usage provider <name>".to_string())?,
             );
             2
         }
@@ -297,7 +297,7 @@ fn parse_usage_query(args: &[String]) -> Result<ParsedUsageQuery, String> {
                 args.get(1)
                     .cloned()
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "usage: cos agent usage model <name>".to_string())?,
+                    .ok_or_else(|| "usage: yu agent usage model <name>".to_string())?,
             );
             2
         }
@@ -306,7 +306,7 @@ fn parse_usage_query(args: &[String]) -> Result<ParsedUsageQuery, String> {
                 args.get(1)
                     .cloned()
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "usage: cos agent usage session <id>".to_string())?,
+                    .ok_or_else(|| "usage: yu agent usage session <id>".to_string())?,
             );
             2
         }
@@ -315,7 +315,7 @@ fn parse_usage_query(args: &[String]) -> Result<ParsedUsageQuery, String> {
                 args.get(1)
                     .cloned()
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "usage: cos agent usage app <id>".to_string())?,
+                    .ok_or_else(|| "usage: yu agent usage app <id>".to_string())?,
             );
             2
         }
@@ -324,7 +324,7 @@ fn parse_usage_query(args: &[String]) -> Result<ParsedUsageQuery, String> {
                 args.get(1)
                     .cloned()
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| "usage: cos agent usage verb <name>".to_string())?,
+                    .ok_or_else(|| "usage: yu agent usage verb <name>".to_string())?,
             );
             2
         }
@@ -422,7 +422,7 @@ fn usage_output(
     })
 }
 
-/// `cos agent display <subcommand>` — render conversation
+/// `yu agent display <subcommand>` — render conversation
 /// history from the memory DB through [`crate::agent::display`]'s
 /// pure-functional formatter, so operators can preview what a
 /// terminal/gateway would show without firing up a real session.
@@ -442,7 +442,7 @@ pub(super) fn display_cmd(args: &[String]) -> Result<Value, String> {
         "format-bytes" => display_format_bytes_cmd(&args[1..]),
         "format-duration" => display_format_duration_cmd(&args[1..]),
         "" => Err(
-            "usage: cos agent display transcript --session <id> [--limit N] [--width W] [--no-truncate] [--truncate-at N] [--indent N] | format-bytes <n> | format-duration <ms>"
+            "usage: yu agent display transcript --session <id> [--limit N] [--width W] [--no-truncate] [--truncate-at N] [--indent N] | format-bytes <n> | format-duration <ms>"
                 .to_string(),
         ),
         other => Err(format!(
@@ -593,7 +593,7 @@ fn display_transcript_with(
 fn display_format_bytes_cmd(args: &[String]) -> Result<Value, String> {
     let raw = args
         .first()
-        .ok_or_else(|| "usage: cos agent display format-bytes <n>".to_string())?;
+        .ok_or_else(|| "usage: yu agent display format-bytes <n>".to_string())?;
     let n: u64 = raw
         .parse()
         .map_err(|_| format!("format-bytes needs a positive integer, got: {raw}"))?;
@@ -606,7 +606,7 @@ fn display_format_bytes_cmd(args: &[String]) -> Result<Value, String> {
 fn display_format_duration_cmd(args: &[String]) -> Result<Value, String> {
     let raw = args
         .first()
-        .ok_or_else(|| "usage: cos agent display format-duration <ms>".to_string())?;
+        .ok_or_else(|| "usage: yu agent display format-duration <ms>".to_string())?;
     let ms: u64 = raw
         .parse()
         .map_err(|_| format!("format-duration needs a positive integer (ms), got: {raw}"))?;
@@ -616,7 +616,7 @@ fn display_format_duration_cmd(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// `cos agent shell-hooks <init <bash|zsh|fish>|record-pre <cmd>|record-post <exit>|tail [--limit N]|clear --yes|path>`
+/// `yu agent shell-hooks <init <bash|zsh|fish>|record-pre <cmd>|record-post <exit>|tail [--limit N]|clear --yes|path>`
 ///
 /// Exposes [`crate::agent::shell_hooks`] as a CLI surface so the
 /// user can install shell-init scripts that capture interactive
@@ -635,7 +635,7 @@ pub(super) fn shell_hooks_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .map(|s| s.as_str())
                 .ok_or_else(|| {
-                    "usage: cos agent shell-hooks init <bash|zsh|fish>".to_string()
+                    "usage: yu agent shell-hooks init <bash|zsh|fish>".to_string()
                 })?;
             let shell = crate::agent::shell_hooks::Shell::parse(raw)?;
             let script = crate::agent::shell_hooks::render_init(shell);
@@ -650,7 +650,7 @@ pub(super) fn shell_hooks_cmd(args: &[String]) -> Result<Value, String> {
             let cmd = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent shell-hooks record-pre <cmd>".to_string())?;
+                .ok_or_else(|| "usage: yu agent shell-hooks record-pre <cmd>".to_string())?;
             let path = crate::agent::shell_hooks::default_log_path();
             let ts_ms = crate::agent::shell_hooks::now_ms();
             crate::agent::shell_hooks::append_pre_at(&path, &cmd, ts_ms)
@@ -665,7 +665,7 @@ pub(super) fn shell_hooks_cmd(args: &[String]) -> Result<Value, String> {
         "record-post" => {
             let raw = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent shell-hooks record-post <exit>".to_string())?;
+                .ok_or_else(|| "usage: yu agent shell-hooks record-post <exit>".to_string())?;
             let exit: i32 = raw
                 .parse()
                 .map_err(|_| format!("record-post needs an integer exit code, got: {raw}"))?;
@@ -712,7 +712,7 @@ pub(super) fn shell_hooks_cmd(args: &[String]) -> Result<Value, String> {
             let confirmed = args.iter().any(|a| a == "--yes");
             if !confirmed {
                 return Err(
-                    "usage: cos agent shell-hooks clear --yes  (truncates the JSONL log)".into(),
+                    "usage: yu agent shell-hooks clear --yes  (truncates the JSONL log)".into(),
                 );
             }
             let path = crate::agent::shell_hooks::default_log_path();
@@ -733,13 +733,13 @@ fn init_instructions_for(shell: crate::agent::shell_hooks::Shell) -> &'static st
     use crate::agent::shell_hooks::Shell;
     match shell {
         Shell::Bash => {
-            "append the script to ~/.bashrc, or eval it inline: eval \"$(cos agent shell-hooks init bash | jq -r .script)\""
+            "append the script to ~/.bashrc, or eval it inline: eval \"$(yu agent shell-hooks init bash | jq -r .script)\""
         }
         Shell::Zsh => {
-            "append the script to ~/.zshrc, or eval it inline: eval \"$(cos agent shell-hooks init zsh | jq -r .script)\""
+            "append the script to ~/.zshrc, or eval it inline: eval \"$(yu agent shell-hooks init zsh | jq -r .script)\""
         }
         Shell::Fish => {
-            "append the script to ~/.config/fish/config.fish, or source it: cos agent shell-hooks init fish | jq -r .script | source"
+            "append the script to ~/.config/fish/config.fish, or source it: yu agent shell-hooks init fish | jq -r .script | source"
         }
     }
 }

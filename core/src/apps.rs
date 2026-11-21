@@ -351,7 +351,7 @@ pub fn command_uses_mcp_cli(manifest: &Manifest, command: &str) -> bool {
     !manifest.operations.contains_key(command) && manifest.mcp.is_some()
 }
 
-/// Resolve a human `cos app <id> <command>` to the exact MCP tool it
+/// Resolve a human `yu app <id> <command>` to the exact MCP tool it
 /// names, by the fixed `<app_id>.<command>` convention.
 ///
 /// The caller selects this only when no ordinary operation matches. The

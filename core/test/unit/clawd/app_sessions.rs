@@ -4073,7 +4073,7 @@ fn e2e_install_dev_app(manifest: &str) -> (std::path::PathBuf, std::path::PathBu
         ),
     }];
     // Trust files with no recorded generation fail the domain closed,
-    // so the fixture records it exactly as `cos provenance dev-trust`
+    // so the fixture records it exactly as `yu provenance dev-trust`
     // does.
     crate::test_env::record_trust_state(&roots);
     crate::provenance::set_trust_store_for_roots(TrustStore::load_roots(&roots), roots);

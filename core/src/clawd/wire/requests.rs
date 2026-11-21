@@ -1370,7 +1370,7 @@ pub struct AppSessionDeregister {
 pub struct SchedulerRun {
     pub subsystem: Token,
     pub command: Token,
-    /// The `cos cron` / `cos triggers` argument vector. `scheduler`
+    /// The `yu cron` / `yu triggers` argument vector. `scheduler`
     /// re-validates it against the allow-listed command before the job
     /// or rule id it addresses is resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -4,11 +4,11 @@
 //! function-pointer table. Constructed once per process via
 //! [`OrtRuntime::shared`], which caches **only successful loads** —
 //! a failure to load now does NOT poison future calls so the daemon
-//! can survive an `cos engine update ort` happening after startup.
+//! can survive an `yu engine update ort` happening after startup.
 //!
 //! Active-version changes after a successful load are NOT picked up
 //! until the process restarts. This is the documented behavior; a
-//! `cos engine activate` followed by `cos service restart` swaps in
+//! `yu engine activate` followed by `yu service restart` swaps in
 //! the new version. Mirrors `super::super::llama_cpp::runtime` exactly.
 
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ impl OrtRuntime {
     pub fn load(lib_path: &Path) -> Result<Self, EngineError> {
         if !lib_path.is_file() {
             return Err(EngineError::NotInstalled(format!(
-                "expected ort runtime at {} — run `cos engine update ort` or check `cos engine list`",
+                "expected ort runtime at {} — run `yu engine update ort` or check `yu engine list`",
                 lib_path.display()
             )));
         }
@@ -96,7 +96,7 @@ impl OrtRuntime {
             crate::engine_pkg::active_library_path(super::PKG_ENGINE_NAME, super::LIB_BASENAME)
                 .ok_or_else(|| {
                     EngineError::NotInstalled(
-                        "no active ort engine — run `cos engine update ort` to install".into(),
+                        "no active ort engine — run `yu engine update ort` to install".into(),
                     )
                 })?;
 

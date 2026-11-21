@@ -1,4 +1,4 @@
-//! `cos model import <path> --as <name>` — register a user-provided
+//! `yu model import <path> --as <name>` — register a user-provided
 //! ONNX/GGUF file in the model registry.
 //!
 //! Layout produced:

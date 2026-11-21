@@ -1001,9 +1001,9 @@ async fn unknown_tool_surfaces_as_tool_error_not_panic() {
 #[tokio::test]
 async fn end_to_end_agent_drives_cos_primitive() {
     // Prove the full integration: provider returns ToolUse referencing a
-    // cos_proxy tool; the loop dispatches it; the cos primitive's real
+    // cos_proxy tool; the loop dispatches it; the yu primitive's real
     // run() is called; result is fed back; provider terminates with
-    // final text. This is the smallest possible "agent uses cos kernel"
+    // final text. This is the smallest possible "agent uses yu kernel"
     // proof point.
     let cfg = cfg();
     let mock = MockProvider::new(&cfg.model, &cfg);
@@ -2076,7 +2076,7 @@ fn registry_as_llm_tools_omits_denied_tools() {
 }
 
 /// `get_unfiltered` MUST still return denied tools (for diagnostics
-/// like `cos agent status`); `get` MUST NOT.
+/// like `yu agent status`); `get` MUST NOT.
 #[test]
 fn registry_get_unfiltered_bypasses_guardrails() {
     let mut tools = builtin_only_registry();
@@ -3497,7 +3497,7 @@ async fn post_turn_summary_carries_input_and_output_tokens() {
     assert_eq!(summary.cache_write_tokens, 5);
 }
 
-/// Regression: `cos agent ask` one-shot mode used to cancel
+/// Regression: `yu agent ask` one-shot mode used to cancel
 /// background curator + semantic-indexer tasks the instant
 /// `ask_blocking` returned, because dropping the current-thread
 /// runtime aborts every `tokio::spawn`. This test reproduces the

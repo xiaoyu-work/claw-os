@@ -175,7 +175,7 @@ fn redirect_user_data_dir() -> UserDataDirGuard {
 /// which is `root:root 0755` on a real install. This is the
 /// regression that produced
 ///   `Permission denied (no active session): secret.write on *`
-/// when `cos agent setup text` tried to store the GitHub Copilot
+/// when `yu agent setup text` tried to store the GitHub Copilot
 /// OAuth token.
 #[test]
 fn bootstrap_writes_to_user_data_dir_when_cos_data_dir_unset() {
@@ -202,7 +202,7 @@ fn bootstrap_writes_to_user_data_dir_when_cos_data_dir_unset() {
     assert_eq!(sessions[0]["session_id"].as_str(), Some(sid.as_str()));
 
     // Caps gate test: the row must still grant ai.chat so a real
-    // `cos agent chat` invocation succeeds end-to-end.
+    // `yu agent chat` invocation succeeds end-to-end.
     use crate::caps::Verb;
     let caps = sessions[0]["caps"].as_array().expect("caps array");
     let has_ai_chat = caps

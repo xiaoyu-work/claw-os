@@ -150,7 +150,7 @@ impl AutoCurator {
     ///
     /// Spawned via [`runtime::background::spawn`] so a
     /// `runtime::background::drain` call (used by the one-shot
-    /// `cos agent ask` CLI path) can await completion before the
+    /// `yu agent ask` CLI path) can await completion before the
     /// tokio runtime is dropped. Without the registry the curator
     /// would be cancelled mid-LLM-call by runtime shutdown.
     pub fn spawn_curate(self: &Arc<Self>, session_id: String) {

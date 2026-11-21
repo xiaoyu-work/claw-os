@@ -39,7 +39,7 @@ Adapters are not included in a Debian package yet. For development, install
 one through the normal App installer:
 
 ```bash
-cos app install adapters/qpdf --dev-trust
+yu app install adapters/qpdf --dev-trust
 ```
 
 Production packages require publisher provenance; see

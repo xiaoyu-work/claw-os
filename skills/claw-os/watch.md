@@ -1,6 +1,6 @@
 # File / Process / Service Watching
 
-Call the `cos_watch` tool — **not the shell** — for event-driven watching backed by inotify (Linux). There is no user-facing `cos watch` CLI command.
+Call the `cos_watch` tool — **not the shell** — for event-driven watching backed by inotify (Linux). There is no user-facing `yu watch` CLI command.
 
 ## Tool shape
 

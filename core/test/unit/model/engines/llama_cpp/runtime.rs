@@ -13,7 +13,7 @@ pub fn set_test_override(rt: Option<Arc<LlamaRuntime>>) -> Option<Arc<LlamaRunti
 }
 
 /// `load()` against a path that doesn't exist returns the explicit
-/// `NotInstalled` variant so `cos agent status` can give a useful
+/// `NotInstalled` variant so `yu agent status` can give a useful
 /// hint instead of a libloading-level OS error.
 #[test]
 fn load_missing_file_returns_not_installed() {

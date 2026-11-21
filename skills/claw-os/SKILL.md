@@ -1,6 +1,6 @@
 ---
 name: claw-os
-description: "Discover and operate the Claw system-agent layer. Use its progressive cos command tree before concluding that an OS, App, diagnostic, permission, or session capability is unavailable."
+description: "Discover and operate the Claw system-agent layer. Use its progressive yu command tree before concluding that an OS, App, diagnostic, permission, or session capability is unavailable."
 ---
 
 # Claw System Agent
@@ -100,7 +100,7 @@ has begun.
 
 ## User isolation
 
-`cos agent serve` runs as one non-root Unix uid per instance. It refuses root,
+`yu agent serve` runs as one non-root Unix uid per instance. It refuses root,
 wrong-owner, or symlinked state roots and tightens its per-user data directory
 to mode `0700`. Web task lifecycle, approval resolution, memory sessions, and
 context-event inbox reads are filtered to that uid; legacy records without an
@@ -109,13 +109,13 @@ all-owner view only for root callers.
 
 ## Web TLS
 
-Loopback `cos agent serve` may use HTTP. Any non-loopback bind is rejected
+Loopback `yu agent serve` may use HTTP. Any non-loopback bind is rejected
 unless both `--tls-cert /absolute/cert.pem` and
 `--tls-key /absolute/key.pem` are supplied. The built-in server uses rustls;
 the private key must be owned by the serving uid with no group/other
 permissions. API query-string tokens are never accepted; the loopback `?t=`
 value is consumed only by the frontend bootstrap exchange. A TLS reverse proxy
-can instead terminate HTTPS while `cos agent serve` remains bound to
+can instead terminate HTTPS while `yu agent serve` remains bound to
 `127.0.0.1`.
 
 `serve.token` is only a bootstrap secret. The browser exchanges it at

@@ -9,7 +9,7 @@
 //! Configuration model (read at construction by `registry::build`):
 //!
 //!   - `base_url`              `https://api.openai.com/v1` (provider default)
-//!   - `api_key_credential`    name of the cred in `cos credential` namespace `agent`
+//!   - `api_key_credential`    name of the cred in `yu credential` namespace `agent`
 //!   - `api_key_env`           env var fallback (e.g. `OPENAI_API_KEY`)
 //!   - `extra_headers`         arbitrary headers (OpenRouter `HTTP-Referer` etc.)
 //!   - `request_timeout`       per-request timeout, seconds
@@ -455,7 +455,7 @@ impl OpenAICompatProvider {
                 None => self.cfg.api_key.clone().ok_or_else(|| {
                     LlmError::NotConfigured(
                         "GitHub Copilot is not signed in. Run \
-                         `cos agent setup text oauth-start --provider copilot` \
+                         `yu agent setup text oauth-start --provider copilot` \
                          or use the desktop AI settings page to sign in with GitHub."
                             .into(),
                     )
@@ -734,7 +734,7 @@ impl Provider for OpenAICompatProvider {
                 "azure provider needs `agent.base_url` set to the Azure OpenAI \
                  resource root (e.g. https://<resource>.openai.azure.com/). The \
                  model field is treated as the deployment name. Run \
-                 `cos agent setup text apply --provider azure \
+                 `yu agent setup text apply --provider azure \
                  --base-url https://<resource>.openai.azure.com/ \
                  --model <deployment> --api-version <version> \
                  --api-key-stdin`."

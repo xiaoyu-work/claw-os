@@ -25,7 +25,7 @@ pub(crate) fn request(route: Command, params: Value) -> Result<Value, String> {
 fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
     if command != "preview" || args.len() < 2 {
         return Err(
-            "usage: cos operation preview APP OPERATION [--activity ID] -- [APP ARGS]".into(),
+            "usage: yu operation preview APP OPERATION [--activity ID] -- [APP ARGS]".into(),
         );
     }
     let mut params = json!({"app_id":args[0], "operation":args[1]});

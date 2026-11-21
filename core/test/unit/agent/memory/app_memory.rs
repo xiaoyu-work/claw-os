@@ -123,14 +123,14 @@ async fn show_returns_structured_fields() {
     e.kind = Some("event".into());
     e.entity_id = Some("expense-42".into());
     e.tags = vec!["expense".into(), "hotel".into(), "Hotel".into()]; // dedup case-insensitively
-    e.link = Some("cos app expense-tracker show 42".into());
+    e.link = Some("yu app expense-tracker show 42".into());
     let out = remember(&db, None, e, false).await.unwrap();
     let row = show(&db, out.row_id).unwrap().expect("row exists");
     assert_eq!(row.text, "Marriott NYC $487.50");
     assert_eq!(row.kind.as_deref(), Some("event"));
     assert_eq!(row.entity_id.as_deref(), Some("expense-42"));
     assert_eq!(row.tags, vec!["expense", "hotel"]);
-    assert_eq!(row.link.as_deref(), Some("cos app expense-tracker show 42"));
+    assert_eq!(row.link.as_deref(), Some("yu app expense-tracker show 42"));
     assert_eq!(row.source, "expense-tracker");
 }
 
@@ -241,7 +241,7 @@ async fn remember_semantic_failure_returns_fts_success_without_retry() {
 
 #[test]
 fn parse_content_recovers_full_metadata() {
-    let content = "Hello world\n\nSource: my-app\nKind: event\nEntity: x-1\nTags: a, b\nLink: cos app my-app show x-1";
+    let content = "Hello world\n\nSource: my-app\nKind: event\nEntity: x-1\nTags: a, b\nLink: yu app my-app show x-1";
     let p = parse_content(content);
     assert_eq!(p.text, "Hello world");
     assert_eq!(p.source.as_deref(), Some("my-app"));
@@ -250,7 +250,7 @@ fn parse_content_recovers_full_metadata() {
     assert_eq!(p.tags, vec!["a", "b"]);
     assert_eq!(
         p.link.as_deref(),
-        Some("cos app my-app show x-1")
+        Some("yu app my-app show x-1")
     );
 }
 

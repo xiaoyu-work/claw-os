@@ -1,4 +1,4 @@
-//! Machine-readable public `cos` command catalogue.
+//! Machine-readable public `yu` command catalogue.
 //!
 //! This is a definition layer shared by terminal help and model-facing
 //! progressive discovery. It describes commands but never dispatches them, so
@@ -316,20 +316,20 @@ pub fn overview(version: &str, apps_available: usize) -> Value {
                 "name": name,
                 "description": description,
                 "commands_available": commands.len(),
-                "next": format!("cos {name}"),
+                "next": format!("yu {name}"),
             })
         })
         .collect();
     json!({
-        "name": "cos",
+        "name": "yu",
         "version": version,
-        "description": "Claw OS - agent-native operating system. Commands return structured JSON except explicitly selected opaque App stdio.",
+        "description": "Yu OS - agent-native operating system. Commands return structured JSON except explicitly selected opaque App stdio.",
         "primitives": primitives,
         "total_primitives": primitives.len(),
         "apps_available": apps_available,
         "next": {
-            "primitive": "cos <primitive>",
-            "apps": "cos app",
+            "primitive": "yu <primitive>",
+            "apps": "yu app",
         },
     })
 }
@@ -354,14 +354,14 @@ pub fn namespace_help(name: &str) -> Option<Value> {
         "description": description,
         "commands": command_map,
         "model_tools": model_tools,
-        "hint": format!("Inspect one command with: cos {name} <command> --schema"),
+        "hint": format!("Inspect one command with: yu {name} <command> --schema"),
     }))
 }
 
 pub fn command_help(namespace: &str, command: &str) -> Option<Value> {
     if namespace == "app" && command == "stdio" {
         return Some(json!({
-            "command": "cos app stdio",
+            "command": "yu app stdio",
             "description": APP_STDIO_DESCRIPTION,
             "model_callable": false,
             "model_tool": Value::Null,
@@ -375,7 +375,7 @@ pub fn command_help(namespace: &str, command: &str) -> Option<Value> {
     let (_, description) = commands.into_iter().find(|(name, _)| *name == command)?;
     let model_tool = model_tool_for(namespace, command);
     Some(json!({
-        "command": format!("cos {namespace} {command}"),
+        "command": format!("yu {namespace} {command}"),
         "description": description,
         "model_callable": model_tool.is_some(),
         "model_tool": model_tool,

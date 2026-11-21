@@ -15,7 +15,7 @@ from app_packages import DESKTOP_SHELL_ROOT, ROOT, run, sha256, work_root
 APP = "desktop-shell"
 ENTRY = "bin/claw-desktop-shell"
 SHELL_QML = "resources/usr/share/claw-desktop-shell/shell.qml"
-BUILD_FORMAT = "claw.desktop-shell-build/v1"
+BUILD_FORMAT = "yuos.desktop-shell-build/v1"
 MAX_BYTES = 264 * 1024 * 1024
 MAX_FILES = 20_001
 PUBLISHER = ROOT / "packaging/deb/claw-os-agent/trust/publishers.d/clawos-app.json"
@@ -67,8 +67,8 @@ def verify(root, architecture, pin):
             "--clearenv", "--setenv", "LC_ALL", "C", "--chdir", "/",
             "--ro-bind", passwd, "/etc/passwd", "--bind", home, "/home/builder",
             "--ro-bind", publisher_file, "/publisher.json",
-            "--ro-bind", tool, "/cos", "--ro-bind", root, "/payload",
-            "--", "/cos", "--json", "provenance",
+            "--ro-bind", tool, "/yu", "--ro-bind", root, "/payload",
+            "--", "/yu", "--json", "provenance",
         ]
         subprocess.run(
             [*isolate, "trust", "add", "--file", "/publisher.json"], check=True, capture_output=True,

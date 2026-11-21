@@ -48,5 +48,5 @@ serialized-byte Activity monetary reservation remain authoritative.
 ## Tests
 
 ```bash
-cargo test -p cos agent::context:: -- --test-threads=1
+cargo test -p yu agent::context:: -- --test-threads=1
 ```

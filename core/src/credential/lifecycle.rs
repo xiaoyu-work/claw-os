@@ -251,14 +251,14 @@ pub(super) fn load_bundle(
 pub(super) fn execute_refresh(cmd: &str) -> CredentialResult<String> {
     use std::process::{Command, Stdio};
 
-    // OS safety: only allow cos commands as refresh commands.
+    // OS safety: only allow yu commands as refresh commands.
     // This prevents arbitrary code execution from credential files.
     let trimmed = cmd.trim();
-    if !trimmed.starts_with("cos ") && !trimmed.starts_with("cos\t") && trimmed != "cos" {
+    if !trimmed.starts_with("yu ") && !trimmed.starts_with("yu\t") && trimmed != "yu" {
         return Err(CredentialError::invalid(
             "credential.refresh",
             format!(
-                "refresh_cmd must be a cos command (starts with 'cos '). got: {}",
+                "refresh_cmd must be a yu command (starts with 'yu '). got: {}",
                 &trimmed[..trimmed.len().min(50)]
             ),
         ));

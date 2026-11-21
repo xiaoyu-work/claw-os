@@ -258,7 +258,7 @@ pub(super) fn confirm_install(
             return Err(crate::errors::error_with_details(
                 "approval_required",
                 "App installation is waiting for OS permission review; --yes is not a user decision",
-                json!({"review_id":review.id, "status":"pending", "hint":"Use the OS review interface or cos review show <id>."}),
+                json!({"review_id":review.id, "status":"pending", "hint":"Use the OS review interface or yu review show <id>."}),
             ).to_string());
         }
         let action = approval_action(&review)?;
@@ -325,7 +325,7 @@ pub(super) fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         ),
         _ => {
             return Err(
-                "usage: cos review pending | show <id> | approve <id> | deny <id> [revision]"
+                "usage: yu review pending | show <id> | approve <id> | deny <id> [revision]"
                     .into(),
             );
         }

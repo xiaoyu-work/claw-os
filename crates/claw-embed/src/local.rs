@@ -138,7 +138,7 @@ impl LocalEmbedder {
     }
 
     fn spawn(&self) -> Result<Process, String> {
-        let mut command = Command::new("/usr/local/bin/cos");
+        let mut command = Command::new("/usr/local/bin/yu");
         command
             .arg("__embed-local")
             .stdin(std::process::Stdio::piped())

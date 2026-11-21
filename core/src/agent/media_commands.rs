@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-/// `cos agent media <providers|outputs-dir|list-outputs [--limit N] [--ext <e>]>`
+/// `yu agent media <providers|outputs-dir|list-outputs [--limit N] [--ext <e>]>`
 ///
 /// Surfaces the media subsystem so operators can introspect:
 ///   * which TTS / STT / image-gen providers are wired up and which
@@ -176,7 +176,7 @@ fn list_media_outputs(
 }
 
 // =====================================================================
-// `cos agent media play <path>` — short-term blocking playback via
+// `yu agent media play <path>` — short-term blocking playback via
 // the OS's native audio facility (PlaySoundW on Windows, afplay on
 // macOS, format-aware CLI player on Linux). See
 // `crate::agent::media::voice::system_playback` for the semantic
@@ -219,7 +219,7 @@ fn media_play_cmd(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let path = path.ok_or("usage: cos agent media play <path> [--detect]")?;
+    let path = path.ok_or("usage: yu agent media play <path> [--detect]")?;
 
     // Format detection up front so we always report it, even on error.
     let format = system_playback::PlaybackFormat::from_path(&path);

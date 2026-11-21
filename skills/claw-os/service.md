@@ -3,20 +3,20 @@
 Manage long-running services with lifecycle hooks and graceful shutdown:
 
 ```bash
-cos service list
-cos service start my-api
-cos service stop my-api          # graceful: checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop
-cos service stop-all             # stop all in reverse dependency order
-cos service restart my-api
-cos service status my-api
-cos service health my-api
-cos service logs my-api --tail 50
+yu service list
+yu service start my-api
+yu service stop my-api          # graceful: checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop
+yu service stop-all             # stop all in reverse dependency order
+yu service restart my-api
+yu service status my-api
+yu service health my-api
+yu service logs my-api --tail 50
 ```
 
 ## Register with Lifecycle Hooks
 
 ```bash
-cos service register \
+yu service register \
   --name my-api \
   --command "python app.py" \
   --workdir /home/cos/api \

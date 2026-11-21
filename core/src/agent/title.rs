@@ -1,7 +1,7 @@
 //! Session title generation via the auxiliary client.
 //!
 //! Sessions in the memory DB are keyed by an opaque uuid. For UI
-//! purposes (`cos agent sessions`) a short human-readable title makes
+//! purposes (`yu agent sessions`) a short human-readable title makes
 //! browsing past conversations far easier. Generating titles in the
 //! main agent loop would burn flagship-tier tokens on a one-shot
 //! summarisation that doesn't need them — so this routes through

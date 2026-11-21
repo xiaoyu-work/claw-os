@@ -97,5 +97,5 @@ truncation and is excluded from conversation replay and curation.
 ## Tests
 
 ```bash
-cargo test -p cos agent::memory:: -- --test-threads=1
+cargo test -p yu agent::memory:: -- --test-threads=1
 ```

@@ -83,7 +83,7 @@ pub enum RegistryError {
     DuplicateVersion { engine: String, version: String },
     #[error("cannot uninstall the active version \"{version}\" of \"{engine}\" (activate another version first)")]
     UninstallActive { engine: String, version: String },
-    #[error("engine \"{0}\" is pinned (use `cos engine unpin {0}` first or pass --force)")]
+    #[error("engine \"{0}\" is pinned (use `yu engine unpin {0}` first or pass --force)")]
     Pinned(String),
 }
 
@@ -114,7 +114,7 @@ impl EnginesIndex {
 
     /// Race-free load + mutate + save under a file lock.
     ///
-    /// Two `cos engine` invocations running concurrently against the
+    /// Two `yu engine` invocations running concurrently against the
     /// same `engines.json` would otherwise read the same state, each
     /// apply their mutation locally, and have the second writer's
     /// `save()` clobber the first writer's record (lost-update).

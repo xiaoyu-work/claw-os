@@ -11,13 +11,13 @@
 //! ```
 //!
 //! and we resolve the shared library at runtime via `libloading`. The
-//! user controls availability with `cos engine update ort`,
-//! `cos engine activate <ver>`, etc. — see `core/src/engine_pkg/`.
+//! user controls availability with `yu engine update ort`,
+//! `yu engine activate <ver>`, etc. — see `core/src/engine_pkg/`.
 //!
 //! **Scaffold scope (P2.3 follow-up):** this module exposes only:
 //!
 //!   - [`is_installed`] — cheap availability check used by
-//!     `engines_linked()` and `cos agent status`.
+//!     `engines_linked()` and `yu agent status`.
 //!   - [`engine_version_from_lib_path`] — derived from the loaded
 //!     library path so audit logs reflect what's actually executing
 //!     (mirrors the llama_cpp decision in P2.4-C).
@@ -69,7 +69,7 @@ pub fn is_installed() -> bool {
 ///
 /// The decision to read from the loaded path mirrors P2.4-C for
 /// `llama_cpp`: the process-wide [`runtime::OrtRuntime`] cache may hold
-/// the previously-active version even after `cos engine activate <new>`
+/// the previously-active version even after `yu engine activate <new>`
 /// — the user must restart the daemon for the new version to take
 /// effect. The registry would falsely report the new version; this
 /// returns what's actually executing.

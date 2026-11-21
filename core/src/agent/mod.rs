@@ -1,4 +1,4 @@
-//! `cos agent` — agent-native OS subsystem.
+//! `yu agent` — agent-native OS subsystem.
 //!
 //! Command implementations live in responsibility-specific sibling modules.
 //! This module owns only subsystem composition and top-level CLI routing.
@@ -65,7 +65,7 @@ pub(crate) use diagnostic_commands::{
 };
 use provider_commands::{provider_doctor_cmd, run_active_provider_probe};
 
-/// Dispatch a `cos agent <command>` invocation.
+/// Dispatch a `yu agent <command>` invocation.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "ask" => conversation_commands::ask_cmd(args),
@@ -98,7 +98,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent dev <subcmd>` — internal / power-user namespace.
+/// `yu agent dev <subcmd>` — internal / power-user namespace.
 fn dev_dispatch(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
@@ -140,7 +140,7 @@ fn dev_dispatch(args: &[String]) -> Result<Value, String> {
         "learn" => memory_commands::learn_cmd(&rest),
         "hooks" => developer_commands::hooks_cmd(&rest),
         other => Err(format!(
-            "unknown dev subcommand: {other}. run `cos agent dev` for the list."
+            "unknown dev subcommand: {other}. run `yu agent dev` for the list."
         )),
     }
 }

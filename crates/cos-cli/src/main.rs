@@ -1,18 +1,18 @@
-//! cos-cli — interactive REPL / TUI front-end for the cos kernel
+//! cos-cli — interactive REPL / TUI front-end for the yu kernel
 //! agent (Phase 7 scaffold).
 //!
-//! Today this binary forwards subcommands to the `cos` binary via
+//! Today this binary forwards subcommands to the `yu` binary via
 //! a child process. Phase 7 will replace that with an in-process
 //! handle once the agent runtime exposes an embeddable API surface
 //! (issue tracked under p7-cli-subcommands).
 //!
 //! Usage shape (all aspirational; today only `ask` works, and only
-//! by re-shelling out to `cos agent ask`):
+//! by re-shelling out to `yu agent ask`):
 //!
 //! ```text
 //! cos-cli                          # enter REPL
 //! cos-cli ask "what's the time?"   # one-shot
-//! cos-cli skill list               # delegate to cos agent skill list
+//! cos-cli skill list               # delegate to yu agent skill list
 //! ```
 
 use std::io::{self, BufRead, Write};
@@ -25,28 +25,28 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "cos-cli",
     version,
-    about = "Interactive shell for the cos agent (Phase 7 scaffold)"
+    about = "Interactive shell for the yu agent (Phase 7 scaffold)"
 )]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<CliCmd>,
 
-    /// Override the path to the `cos` binary (default: `cos`).
-    #[arg(long, env = "COS_BIN", default_value = "cos")]
+    /// Override the path to the `yu` binary (default: `cos`).
+    #[arg(long, env = "COS_BIN", default_value = "yu")]
     cos_bin: String,
 }
 
 #[derive(Debug, Subcommand)]
 enum CliCmd {
-    /// One-shot ask — equivalent to `cos agent ask "<prompt>"`.
+    /// One-shot ask — equivalent to `yu agent ask "<prompt>"`.
     Ask {
         /// Joined into one prompt string.
         #[arg(num_args = 1..)]
         prompt: Vec<String>,
     },
-    /// Print agent status — equivalent to `cos agent status`.
+    /// Print agent status — equivalent to `yu agent status`.
     Status,
-    /// Forward arbitrary args to `cos agent ...`.
+    /// Forward arbitrary args to `yu agent ...`.
     Agent {
         #[arg(num_args = 1.., trailing_var_arg = true)]
         args: Vec<String>,
@@ -79,7 +79,7 @@ fn one_shot_ask(cos_bin: &str, prompt: Vec<String>) -> Result<()> {
         return Err(anyhow!("ask requires a non-empty prompt"));
     }
     // Pass `--` so prompts that start with a dash (e.g. `--help` or
-    // `-foo`) are not interpreted as flags by `cos agent ask`. Without
+    // `-foo`) are not interpreted as flags by `yu agent ask`. Without
     // the separator, `cos cli ask -- --version` and similar inputs
     // would be parsed as version requests instead of prompts.
     forward(cos_bin, &["agent", "ask", "--", &prompt])
@@ -97,7 +97,7 @@ fn forward(cos_bin: &str, args: &[&str]) -> Result<()> {
 }
 
 /// Minimal REPL: read a line, treat it as the prompt, forward to
-/// `cos agent ask`. `exit` / `quit` / EOF exit cleanly. Slash
+/// `yu agent ask`. `exit` / `quit` / EOF exit cleanly. Slash
 /// commands (`/status`, `/help`) trigger the matching subcommand.
 fn repl(cos_bin: &str) -> Result<()> {
     let stdin = io::stdin();
@@ -122,7 +122,7 @@ fn repl(cos_bin: &str) -> Result<()> {
                 println!("commands:");
                 println!("  /status   — show agent status");
                 println!("  /quit     — exit");
-                println!("  <text>    — send as prompt to `cos agent ask`");
+                println!("  <text>    — send as prompt to `yu agent ask`");
             }
             "/status" => {
                 let _ = forward(cos_bin, &["agent", "status"]);
@@ -133,7 +133,7 @@ fn repl(cos_bin: &str) -> Result<()> {
             prompt => {
                 // Same `--` separator as `one_shot_ask`: keep
                 // REPL-typed prompts that happen to start with `-`
-                // from being parsed as flags by `cos agent ask`.
+                // from being parsed as flags by `yu agent ask`.
                 let _ = forward(cos_bin, &["agent", "ask", "--", prompt]);
             }
         }

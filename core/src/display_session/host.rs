@@ -812,7 +812,7 @@ fn spawn_desktop_process(
     display: &str,
     process: DesktopProcess,
 ) -> Result<Child, Error> {
-    const COS: &str = "/usr/local/bin/cos";
+    const COS: &str = "/usr/local/bin/yu";
     const AGENT: &str = "/usr/local/bin/cos-agent-ui";
     let executable = match &process {
         DesktopProcess::Native(_) => "/usr/bin/gtk4-launch",

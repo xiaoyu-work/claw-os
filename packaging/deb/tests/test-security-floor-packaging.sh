@@ -814,7 +814,7 @@ dpkg-deb -Znone --root-owner-group --build "$CONTROL_STAGE" "$CONTROL_DEB" >/dev
 [ "$(dpkg-deb --field "$CONTROL_DEB" XB-Claw-Os-Abi)" = "$POLICY_ABI" ] \
     || fail "the ABI generation must be readable from the built package"
 dpkg-deb --field "$CONTROL_DEB" Provides \
-    | grep -Fq "claw-os-app-runtime-v1 (= $APP_RUNTIME_VERSION)" \
+    | grep -Fq "yuos-app-runtime-v1 (= $APP_RUNTIME_VERSION)" \
     || fail "the App runtime implementation version must survive control rendering"
 for service in "claw-os-abi-$POLICY_ABI" claw-os-app-permissions-v1 \
     claw-os-capture-v1 claw-os-media-player-v1; do

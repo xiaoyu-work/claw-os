@@ -1,10 +1,10 @@
-//! `cos agent serve` — built-in web UI.
+//! `yu agent serve` — built-in web UI.
 //!
-//! Terminal output (`cos agent chat`) is a deliberately plain-text
+//! Terminal output (`yu agent chat`) is a deliberately plain-text
 //! channel — see the header doc on [`crate::agent::display`]: the
 //! pure-functional formatter never emits ANSI control codes, so the
 //! same renderer is reusable from headless contexts (the gateway,
-//! `cos agent ask --full`, mcp-server) that have no tty.
+//! `yu agent ask --full`, mcp-server) that have no tty.
 //!
 //! For WSL and headless-Linux hosts that lacks a rich tty, plain text
 //! is the *only* thing the REPL can produce — no folding for long
@@ -13,7 +13,7 @@
 //! tricks it doesn't have; it's to expose a second front-end that
 //! happens to live in the user's browser instead.
 //!
-//! `cos agent serve [--bind ADDR] [--port N] [--detach]` boots a tiny
+//! `yu agent serve [--bind ADDR] [--port N] [--detach]` boots a tiny
 //! axum server that:
 //!
 //! * Streams chat turns over Server-Sent Events (one request per turn,
@@ -76,7 +76,7 @@ fn default_log_path() -> PathBuf {
     auth::token_dir().join("serve.log")
 }
 
-/// `cos agent serve` entry point — invoked from
+/// `yu agent serve` entry point — invoked from
 /// [`crate::agent::run`]'s match arm.
 pub fn serve(args: &[String]) -> Result<Value, String> {
     let _detached_session_guard = DetachedSessionGuard::from_env();
@@ -164,9 +164,9 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
             }
             "--help" | "-h" => {
                 return Ok(json!({
-                    "command": "cos agent serve",
+                    "command": "yu agent serve",
                     "summary": "Run the built-in web UI for chat / tasks / approvals / sysinfo.",
-                    "usage": "cos agent serve [--bind 127.0.0.1] [--port 7878] [--tls-cert cert.pem --tls-key key.pem] [--token <hex>] [--open] [--detach|--stop|--status] [--log <path>]",
+                    "usage": "yu agent serve [--bind 127.0.0.1] [--port 7878] [--tls-cert cert.pem --tls-key key.pem] [--token <hex>] [--open] [--detach|--stop|--status] [--log <path>]",
                     "flags": {
                         "--bind": "Network interface to bind. Default 127.0.0.1 (localhost only).",
                         "--port": "TCP port. Default 7878.",
@@ -215,7 +215,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     // Deliberately do *not* short-circuit on `is_ready`: the UI itself
     // remains useful for inspecting tasks, approvals, inbox, sysinfo,
     // and serves as the place a user discovers they still need to run
-    // `cos agent setup text`. The chat SSE handler surfaces the
+    // `yu agent setup text`. The chat SSE handler surfaces the
     // `is_ready` error inline as a streamed `error` frame, so the
     // user gets actionable feedback in the browser instead of a
     // command that refuses to start.
@@ -243,7 +243,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("set nonblocking {addr}: {error}"))?;
-    eprintln!("cos agent serve — listening on {addr}");
+    eprintln!("yu agent serve — listening on {addr}");
     eprintln!("  open: {url}");
     if open_browser {
         if let Err(error) = try_open_browser(&url) {
@@ -253,7 +253,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     eprintln!("  token persisted at {}", auth::token_path().display());
     if foreground_flag {
         eprintln!("  pid file: {}", pid_path().display());
-        eprintln!("  stop with: cos agent serve --stop");
+        eprintln!("  stop with: yu agent serve --stop");
     } else {
         eprintln!("  press Ctrl-C to stop (or run with --detach to background).");
     }
@@ -394,7 +394,7 @@ fn read_tls_file(path: &Path, owner_uid: u32, private_key: bool) -> Result<Vec<u
     }
 }
 
-/// Re-execute `cos agent serve …` as a backgrounded child process. The
+/// Re-execute `yu agent serve …` as a backgrounded child process. The
 /// child runs the normal foreground path (we add `--foreground` to its
 /// argv so it doesn't try to re-detach) with stdio detached from the
 /// caller's terminal and routed to a log file. We wait briefly for the
@@ -415,8 +415,8 @@ fn spawn_detached(
     if let Some(pid) = read_pid_file() {
         if process_alive(pid) {
             return Err(format!(
-                "cos agent serve is already running (pid {pid}). \
-                 Use `cos agent serve --stop` first, or `--status` to inspect."
+                "yu agent serve is already running (pid {pid}). \
+                 Use `yu agent serve --stop` first, or `--status` to inspect."
             ));
         }
         // Stale pid file from a crashed run — remove and continue.
@@ -534,7 +534,7 @@ fn spawn_detached(
                     "url": url,
                     "log": log_path.display().to_string(),
                     "pid_file": pid_path().display().to_string(),
-                    "stop": "cos agent serve --stop",
+                    "stop": "yu agent serve --stop",
                 }));
             }
         }
@@ -543,7 +543,7 @@ fn spawn_detached(
             Ok(Some(status)) => {
                 let tail = tail_log(&log_path, 40);
                 return Err(format!(
-                    "cos agent serve failed to start (pid {child_pid}, status {status}). \
+                    "yu agent serve failed to start (pid {child_pid}, status {status}). \
                      Last log lines from {}:\n{}",
                     log_path.display(),
                     tail
@@ -562,7 +562,7 @@ fn spawn_detached(
             let _ = child.wait();
             let tail = tail_log(&log_path, 40);
             return Err(format!(
-                "cos agent serve failed to start (pid {child_pid} exited). \
+                "yu agent serve failed to start (pid {child_pid} exited). \
                  Last log lines from {}:\n{}",
                 log_path.display(),
                 tail
@@ -572,7 +572,7 @@ fn spawn_detached(
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!(
-                "cos agent serve did not become ready within 6s. \
+                "yu agent serve did not become ready within 6s. \
                  Check log: {}",
                 log_path.display()
             ));
@@ -684,7 +684,7 @@ fn report_status() -> Result<Value, String> {
         "token_persisted_at": auth::token_path().display().to_string(),
         "url_hint": url_hint,
         "log": default_log_path().display().to_string(),
-        "stop": "cos agent serve --stop",
+        "stop": "yu agent serve --stop",
     }))
 }
 

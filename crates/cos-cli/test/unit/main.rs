@@ -35,11 +35,11 @@ fn cli_defaults_to_repl_when_no_subcommand() {
 fn cos_bin_env_default() {
     let cli = Cli::try_parse_from(["cos-cli"]).unwrap();
     // Default value when env var unset.
-    assert_eq!(cli.cos_bin, "cos");
+    assert_eq!(cli.cos_bin, "yu");
 }
 
 #[test]
 fn one_shot_ask_rejects_empty_prompt() {
-    let err = one_shot_ask("cos", vec!["   ".into()]).unwrap_err();
+    let err = one_shot_ask("yu", vec!["   ".into()]).unwrap_err();
     assert!(err.to_string().contains("non-empty"));
 }

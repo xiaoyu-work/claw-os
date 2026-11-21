@@ -233,7 +233,7 @@ pub(super) fn lock_sentinel_path(path: &Path) -> PathBuf {
 /// `<path>.refresh.lock`. Held for the duration of an auto-refresh attempt
 /// (executing the OAuth round-trip, re-checking expiry, writing the rotated
 /// token). Distinct from [`lock_sentinel_path`] so that the OAuth refresh
-/// command — which itself shells out to `cos credential store` in a child
+/// command — which itself shells out to `yu credential store` in a child
 /// process and therefore needs the *write* lock — cannot deadlock against the
 /// parent's *refresh* lock. See the HIGH "refresh-token cannibalisation race"
 /// audit finding.
@@ -536,7 +536,7 @@ pub(super) fn store_credential_record(
 /// of a `credential.revoke`, or of a `credential.store` that overwrote a
 /// prior value). Reuses the normal AES-256-GCM at-rest encryption and
 /// the atomic 0600 write so the restored entry is indistinguishable from
-/// one written by `cos credential store`.
+/// one written by `yu credential store`.
 ///
 /// Tier / TTL / refresh metadata is not captured in the mutation log, so
 /// the restored entry uses the default tier (0) and no expiry.
@@ -772,7 +772,7 @@ pub(super) fn read_credential_value(
         CredentialError::not_found(
             "credential.load",
             format!(
-                "credential not found: {name} (namespace: {namespace}). Store it with: cos credential store {name} <value> --namespace {namespace}"
+                "credential not found: {name} (namespace: {namespace}). Store it with: yu credential store {name} <value> --namespace {namespace}"
             ),
         )
     })?;

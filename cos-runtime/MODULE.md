@@ -75,7 +75,7 @@ The production executable is fixed at `/usr/local/bin/cos-agent-ui` and must
 pass regular-file, root-owner, executable, and non-writable checks. Test
 injection is private to the runtime's `cfg(test)` module.
 
-The attached-browser helper invokes the fixed hidden `cos __browser` bridge
+The attached-browser helper invokes the fixed hidden `yu __browser` bridge
 with only protocol selectors in argv. Its bounded JSON request travels over
 stdin and is accepted only inside an authenticated App session; `clawd`, not
 the helper, derives browser capabilities and browser-socket authority.

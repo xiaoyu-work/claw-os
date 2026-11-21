@@ -95,7 +95,7 @@ runtime default. Neither override changes ordinary operations or `mcp.entry`.
 Additional entries require a package-relative `entry`, literal `exec`, localized
 `name` and explicit `needs`. Names match `[a-z][a-z0-9_-]*`, at most 64 ASCII
 bytes; there are at most 64 additional entries. Only
-`cos app <id> --gui:<name> [literal args...]` selects one. Default `--gui` and the
+`yu app <id> --gui:<name> [literal args...]` selects one. Default `--gui` and the
 exact existing `desktop.exec` remain supported. No user-supplied path or
 executable is interpreted.
 Default and named launchers without `COS_SESSION` use the existing authenticated Root
@@ -265,7 +265,7 @@ this window's private broker. The selected GUI must explicitly declare
 There is no caller-selected device, rate, program, bus, PipeWire graph handle or
 recording mode. The App receives no owner sound-server or microphone descriptor.
 
-The fixed `cos __gui-audio --pcm-stdin` transport uses ordinary correlated,
+The fixed `yu __gui-audio --pcm-stdin` transport uses ordinary correlated,
 one-request broker calls, not extra frames on an answered connection. Root
 retains at most eight output helpers and a bounded queue per stream. Its fixed
 unprivileged `pw-cat --playback` child consumes only PCM stdin in the

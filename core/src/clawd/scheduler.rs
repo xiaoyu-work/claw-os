@@ -1,6 +1,6 @@
 //! Authority for the proactive-scheduler operations `clawd` brokers.
 //!
-//! `cos cron` and `cos triggers` act on the root-owned job store the
+//! `yu cron` and `yu triggers` act on the root-owned job store the
 //! daemon's heartbeat drives, so a user CLI reaches it through
 //! `scheduler.run` instead of writing into `/var/lib/cos` itself. Every
 //! request therefore forces the daemon to answer two questions: what
@@ -230,8 +230,8 @@ impl SchedulerCommand {
 
     fn label(&self) -> String {
         match &self.target {
-            Some(target) => format!("cos {} {} {target}", self.subsystem.as_str(), self.command),
-            None => format!("cos {} {}", self.subsystem.as_str(), self.command),
+            Some(target) => format!("yu {} {} {target}", self.subsystem.as_str(), self.command),
+            None => format!("yu {} {}", self.subsystem.as_str(), self.command),
         }
     }
 }
@@ -273,7 +273,7 @@ fn target_identifier(
         Subsystem::Cron => {
             let id = args
                 .first()
-                .ok_or_else(|| format!("cos cron {command} requires a job id"))?;
+                .ok_or_else(|| format!("yu cron {command} requires a job id"))?;
             validate_cron_id(id)?;
             Ok(Some(id.clone()))
         }
@@ -288,7 +288,7 @@ fn target_identifier(
                     .cloned()
                     .or_else(|| flag(args, "id"))
             }
-            .ok_or_else(|| format!("cos triggers {command} requires a rule id"))?;
+            .ok_or_else(|| format!("yu triggers {command} requires a rule id"))?;
             validate_trigger_id(&id)?;
             Ok(Some(id))
         }

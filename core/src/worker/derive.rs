@@ -6,7 +6,7 @@
 //! * the installed manifest and the operation the launcher selected;
 //! * the effective arguments the authority already bound;
 //! * the capability set the authority already resolved and granted;
-//! * kernel-owned paths (`cos` binary, SDK tree, App data directory).
+//! * kernel-owned paths (`yu` binary, SDK tree, App data directory).
 //!
 //! Nothing here reads raw worker arguments, the launcher's ambient
 //! environment, or any value the worker could influence after launch.
@@ -701,7 +701,7 @@ pub(crate) fn program_mount(program: &Path) -> Option<Mount> {
     })
 }
 
-/// Read-only kernel assets every worker needs: the `cos` binary it
+/// Read-only kernel assets every worker needs: the `yu` binary it
 /// shells out to and the SDK/runtime Python trees the wrapper imports.
 fn runtime_mounts() -> Vec<Mount> {
     let mut mounts = Vec::new();
@@ -730,7 +730,7 @@ fn cos_binary() -> Option<PathBuf> {
         }
     }
     std::env::current_exe().ok().and_then(|exe| {
-        let sibling = exe.parent()?.join("cos");
+        let sibling = exe.parent()?.join("yu");
         sibling.canonicalize().ok().filter(|path| path.is_file())
     })
 }

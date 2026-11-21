@@ -345,12 +345,12 @@ impl LaunchRequest<'_> {
 
     fn command(&self, app_id: &str) -> String {
         match self {
-            LaunchRequest::Operation { operation, .. } => format!("cos app {app_id} {operation}"),
+            LaunchRequest::Operation { operation, .. } => format!("yu app {app_id} {operation}"),
             LaunchRequest::Gui { exec, gui_entry } => match gui_entry {
-                Some(name) => format!("cos app {app_id} --gui:{name}"),
-                None => format!("cos app {app_id} {exec}"),
+                Some(name) => format!("yu app {app_id} --gui:{name}"),
+                None => format!("yu app {app_id} {exec}"),
             },
-            LaunchRequest::Mcp { tool } => format!("cos app {app_id} mcp {tool}"),
+            LaunchRequest::Mcp { tool } => format!("yu app {app_id} mcp {tool}"),
         }
     }
 
@@ -2601,7 +2601,7 @@ fn run_operation(
 /// loop; bounded stdout and stderr diagnostics are returned on completion.
 ///
 /// Root binds the kernel identity independently of the presentation
-/// environment. The generated `.desktop` routes through `cos app <id> --gui`
+/// environment. The generated `.desktop` routes through `yu app <id> --gui`
 /// instead of executing an App binary outside this custody.
 ///
 /// `exec` is the command the entry receives (the manifest's

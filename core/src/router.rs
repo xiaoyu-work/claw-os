@@ -129,7 +129,7 @@ pub fn app_stdio_uses_process_streams(args: &[String]) -> bool {
 /// dispatch so an in-process caller cannot lend its own protocol streams.
 pub fn dispatch_app_stdio(args: &[String]) -> Result<(), String> {
     if !app_stdio_uses_process_streams(args) {
-        return Err("expected cos app stdio <id> <operation> [args...]".to_string());
+        return Err("expected yu app stdio <id> <operation> [args...]".to_string());
     }
     app_commands::run_stdio(&args[2..])
 }
@@ -446,7 +446,7 @@ fn file_replace_bridge(
 
     if args.len() != 2 || args[1] != "replace" {
         return Err(
-            "internal file bridge accepts only: cos __file replace < request.json".to_string(),
+            "internal file bridge accepts only: yu __file replace < request.json".to_string(),
         );
     }
     let session = env::var("COS_SESSION")
@@ -558,7 +558,7 @@ fn dispatch_credential_typed(args: &[String]) -> CommandResult<Option<String>> {
         let output = crate::cli_catalog::namespace_help(app_name).ok_or_else(|| {
             CommandError::execution(
                 app_name,
-                format!("no public help catalogue for: cos {app_name}"),
+                format!("no public help catalogue for: yu {app_name}"),
             )
         })?;
         return Ok(Some(output.to_string()));
@@ -742,9 +742,9 @@ fn dispatch_with_stdin_impl(
     }
 
     // Top-level help / version flags. Match what every Unix CLI does so
-    // muscle memory works: bare `cos --help` / `cos help` is the same
-    // overview as bare `cos`; `cos help <topic>` drills into one
-    // primitive/app; `cos --version` prints just the version envelope.
+    // muscle memory works: bare `yu --help` / `yu help` is the same
+    // overview as bare `cos`; `yu help <topic>` drills into one
+    // primitive/app; `yu --version` prints just the version envelope.
     match name.as_str() {
         "--help" | "-h" => {
             if args.len() >= 2 {
@@ -759,7 +759,7 @@ fn dispatch_with_stdin_impl(
             return show_overview();
         }
         "--version" | "-v" | "-V" => {
-            return Ok(Some(json!({"name": "cos", "version": VERSION}).to_string()));
+            return Ok(Some(json!({"name": "yu", "version": VERSION}).to_string()));
         }
         _ => {}
     }
@@ -777,7 +777,7 @@ fn dispatch_with_stdin_impl(
 
     // Hidden bridge for apps that want to push searchable summaries
     // into the agent's memory. The user-facing inspect/forget surface
-    // lives at `cos agent memory`. Kept off the public namespace so
+    // lives at `yu agent memory`. Kept off the public namespace so
     // we can evolve the schema without an SDK rev.
     if name == "__memory" {
         let command = args
@@ -816,7 +816,7 @@ fn dispatch_with_stdin_impl(
             return Ok(Some(value.to_string()));
         }
         if args.len() != 3 || args[1] != "configure" {
-            return Err("usage: cos channels configure <discord|telegram|slack|whatsapp> with account_id, channel_id, sender_id and trigger_id JSON on stdin".into());
+            return Err("usage: yu channels configure <discord|telegram|slack|whatsapp> with account_id, channel_id, sender_id and trigger_id JSON on stdin".into());
         }
         let mut request = parse_internal_request_object(stdin_data.as_deref(), 4096, "channel configuration")?;
         if request.contains_key("platform") { return Err("select the channel only in argv".into()); }
@@ -833,7 +833,7 @@ fn dispatch_with_stdin_impl(
                 (Command::SystemPackageStatus, json!({"invocation_id": id})),
             [flag, id] if flag == "--recover" =>
                 (Command::SystemPackageRecover, json!({"request_id": id})),
-            _ => return Err("usage: cos package-transactions [request-id | --invocation invocation-id | --recover request-id]".into()),
+            _ => return Err("usage: yu package-transactions [request-id | --invocation invocation-id | --recover request-id]".into()),
         };
         let value = request_wire_clawd(command, params)?;
         return Ok(Some(value.to_string()));
@@ -2305,18 +2305,18 @@ fn dispatch_with_stdin_impl(
         _ => {
             // Check if user forgot "app" prefix — helpful error
             let apps_dir = apps_dir();
-            // "Did you mean `cos app <name>`?" — a diagnostic, not a
+            // "Did you mean `yu app <name>`?" — a diagnostic, not a
             // dispatch. Quarantined installs should still produce the
             // helpful hint rather than a bare "unknown command".
             let discovered = apps::discover(&apps_dir);
             if discovered.contains_key(name.as_str()) {
                 Err(format!(
-                    "'{name}' is an app, not an OS primitive. Use: cos app {name} <command>"
+                    "'{name}' is an app, not an OS primitive. Use: yu app {name} <command>"
                 ))
             } else {
                 let builtins: Vec<&str> = builtin_apps().iter().map(|(n, _, _)| *n).collect();
                 Err(format!(
-                    "unknown command: {name}. OS primitives: {builtins:?}. For apps: cos app"
+                    "unknown command: {name}. OS primitives: {builtins:?}. For apps: yu app"
                 ))
             }
         }
@@ -2414,7 +2414,7 @@ fn run_app_command(
     }
 }
 
-/// Dispatch a human `cos app <id> <command>` that names an MCP tool rather
+/// Dispatch a human `yu app <id> <command>` that names an MCP tool rather
 /// than an explicitly declared ordinary operation.
 ///
 /// The command names one MCP tool by the fixed `<app_id>.<command>`
@@ -2441,7 +2441,7 @@ fn run_app_mcp_command(
     let invoke_target = format!("{app_name}/{tool_name}");
 
     let arguments = bind_mcp_command_arguments(&app.manifest, command, args, stdin_data.as_deref())
-        .map_err(|error| format!("cos app {app_name} {command}: {error}"))?;
+        .map_err(|error| format!("yu app {app_name} {command}: {error}"))?;
 
     // Root settles invoke and target consent together. Local extension
     // attenuation still applies, but must not spend the same consent first.
@@ -2615,7 +2615,7 @@ fn render_call_tool_result(result: &Value) -> Result<Option<String>, String> {
     Ok(Some(text))
 }
 
-/// `cos app <name> <desktop.exec> [files...]` — launch an app's desktop
+/// `yu app <name> <desktop.exec> [files...]` — launch an app's desktop
 /// GUI surface. The App draws its own window in any toolkit; the
 /// authenticated Root Host owns launch authority, capability review and
 /// checked lifetime independently of an AI request.
@@ -2684,7 +2684,7 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     if err_lower.contains("permission denied") || err_lower.contains("eperm") {
         return Some(json!({
             "hint": "Permission denied. Check file permissions.",
-            "try": ["cos app exec run 'ls -la <path>'", "cos app exec run 'chmod +rw <path>'"],
+            "try": ["yu app exec run 'ls -la <path>'", "yu app exec run 'chmod +rw <path>'"],
         }));
     }
     if err_lower.contains("no such file")
@@ -2693,25 +2693,25 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     {
         return Some(json!({
             "hint": "File or command not found. Verify the path exists.",
-            "try": ["cos app fs ls <parent-directory>", "cos app exec which <command>"],
+            "try": ["yu app fs ls <parent-directory>", "yu app exec which <command>"],
         }));
     }
     if err_lower.contains("no space left") || err_lower.contains("enospc") {
         return Some(json!({
             "hint": "Disk full. Free space before retrying.",
-            "try": ["cos sys resources", "cos app exec run 'du -sh $HOME/* | sort -rh | head'"],
+            "try": ["yu sys resources", "yu app exec run 'du -sh $HOME/* | sort -rh | head'"],
         }));
     }
     if err_lower.contains("connection refused") || err_lower.contains("econnrefused") {
         return Some(json!({
             "hint": "Connection refused. The target service may not be running.",
-            "try": ["cos service list", "cos service start <service-name>"],
+            "try": ["yu service list", "yu service start <service-name>"],
         }));
     }
     if err_lower.contains("timed out") || err_lower.contains("timeout") {
         return Some(json!({
             "hint": "Operation timed out. Consider increasing timeout or checking if the service is responsive.",
-            "try": ["cos proc list", "cos sys resources"],
+            "try": ["yu proc list", "yu sys resources"],
         }));
     }
     if err_lower.contains("already running")
@@ -2720,7 +2720,7 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     {
         return Some(json!({
             "hint": "Port/resource already in use. Another process may be occupying it.",
-            "try": ["cos proc list", "cos app exec run 'lsof -i :<port>'"],
+            "try": ["yu proc list", "yu app exec run 'lsof -i :<port>'"],
         }));
     }
     if err_lower.contains("out of memory")
@@ -2729,7 +2729,7 @@ fn recovery_hint(error: &str) -> Option<serde_json::Value> {
     {
         return Some(json!({
             "hint": "Out of memory. Reduce workload or increase memory limits.",
-            "try": ["cos sys resources", "cos proc list"],
+            "try": ["yu sys resources", "yu proc list"],
         }));
     }
 
@@ -2765,11 +2765,11 @@ fn error_code_from_hint(error: &str) -> Option<&'static str> {
     }
 }
 
-/// Special-case dispatcher for `cos agent` that turns a bare
+/// Special-case dispatcher for `yu agent` that turns a bare
 /// invocation (no subcommand) on an interactive TTY into either
 /// `setup` (when the agent has not been configured yet) or `chat`
 /// (when it has). Falls through to the standard help-table behavior
-/// for non-TTY callers — scripts piping `cos agent | jq` still see
+/// for non-TTY callers — scripts piping `yu agent | jq` still see
 /// the machine-readable command list — and for explicit `--help`.
 fn dispatch_agent(args: &[String]) -> Result<Option<String>, String> {
     // Explicit help should not be hijacked.
@@ -2787,7 +2787,7 @@ fn dispatch_agent(args: &[String]) -> Result<Option<String>, String> {
                 rewritten.push("chat".into());
             } else {
                 // Land directly on the LLM wizard rather than the
-                // modality picker — `cos agent` not being ready almost
+                // modality picker — `yu agent` not being ready almost
                 // always means the conversational LLM isn't configured.
                 rewritten.push("setup".into());
                 rewritten.push("llm".into());
@@ -2803,18 +2803,18 @@ fn dispatch_builtin(
     app_name: &str,
     handler: fn(&str, &[String]) -> Result<Value, String>,
 ) -> Result<Option<String>, String> {
-    // `cos <primitive>` and `cos <primitive> --help|-h|help` render the
+    // `yu <primitive>` and `yu <primitive> --help|-h|help` render the
     // same machine-readable command list. Doing this here means every
     // primitive picks up help support uniformly.
     let help_only = args.len() == 1
         || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"));
     if help_only {
         let output = crate::cli_catalog::namespace_help(app_name)
-            .ok_or_else(|| format!("no public help catalogue for: cos {app_name}"))?;
+            .ok_or_else(|| format!("no public help catalogue for: yu {app_name}"))?;
         return Ok(Some(output.to_string()));
     }
 
-    // cos <primitive> --schema → show all command schemas for this primitive
+    // yu <primitive> --schema → show all command schemas for this primitive
     if args.len() == 2 && args[1] == "--schema" {
         return cli_help::show_builtin_schema(app_name);
     }
@@ -2836,7 +2836,7 @@ fn dispatch_builtin(
         Ok(v) => {
             audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "ok", None);
             // A handler that has already written its human-facing output
-            // to stdout (e.g. `cos agent ask` printing the plain-text
+            // to stdout (e.g. `yu agent ask` printing the plain-text
             // answer) signals "nothing more to render" by returning
             // `Value::Null`. Without this special case the dispatcher
             // would print a stray `null` line after the answer. No

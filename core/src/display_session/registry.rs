@@ -44,7 +44,7 @@ impl Display {
         self.host.assert_current()?;
         launcher.assert_current()?;
         Ok(std::fs::read_link(format!("/proc/{}/exe", launcher.pid()))?
-            == Path::new("/usr/local/bin/cos"))
+            == Path::new("/usr/local/bin/yu"))
     }
 }
 

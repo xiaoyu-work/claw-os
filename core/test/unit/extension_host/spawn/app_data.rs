@@ -260,7 +260,7 @@ fn persistent_service_data_survives_uid_and_host_replacement() {
     mount_tmpfs(c"/usr/local/bin");
     copy_executable(
         Path::new(&std::env::var("COS_APP_DATA_TEST_COS").unwrap()),
-        Path::new("/usr/local/bin/cos"),
+        Path::new("/usr/local/bin/yu"),
     );
     copy_executable(
         &std::env::current_exe().unwrap(),
@@ -302,7 +302,7 @@ fn persistent_service_data_survives_uid_and_host_replacement() {
             .env("XDG_RUNTIME_DIR", "/tmp")
             .env("COS_LOG_DIR", paths.control_dir.join("log"))
             .env("COS_CACHE_DIR", paths.control_dir.join("cache"))
-            .env("COS_BIN", "/usr/local/bin/cos")
+            .env("COS_BIN", "/usr/local/bin/yu")
             .env("COS_APP_DATA_TEST_PROBE", "1")
             .env("COS_APP_DATA_TEST_APP", APP)
             .env("COS_APP_DATA_TEST_PACKAGE", &package)

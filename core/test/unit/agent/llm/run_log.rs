@@ -119,7 +119,7 @@ fn from_denial_sets_decision_and_reason() {
 }
 
 /// `with_app` attaches an app id to an otherwise app-agnostic
-/// success record. Used by the `cos ai chat` path.
+/// success record. Used by the `yu ai chat` path.
 #[test]
 fn with_app_attaches_id() {
     let r = LlmRunRecord::from_success(

@@ -17,7 +17,7 @@
 //! Configuration model (read at construction by `registry::build`):
 //!
 //!   - `base_url`              `https://api.anthropic.com` (provider default)
-//!   - `api_key_credential`    name of the cred in `cos credential` namespace `agent`
+//!   - `api_key_credential`    name of the cred in `yu credential` namespace `agent`
 //!   - `api_key_env`           env var fallback (e.g. `ANTHROPIC_API_KEY`)
 //!   - `extra_headers`         arbitrary extra headers
 //!   - `request_timeout`       per-request timeout, seconds

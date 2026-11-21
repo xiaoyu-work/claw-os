@@ -7,11 +7,11 @@ and is generated or hand-written to satisfy that contract.
 
 Public modules
 --------------
-- :mod:`claw_os_sdk.ai`       — text chat through ``cos ai chat``.
+- :mod:`claw_os_sdk.ai`       — text chat through ``yu ai chat``.
 - :mod:`claw_os_sdk.tools`    — call fixed kernel catalog tools
   (``tools.call``, ``tools.catalog``, ``tools.for_chat``), not other Apps.
 - :mod:`claw_os_sdk.gui`      — desktop GUI bootstrap: the kernel context
-  handed to an app launched via ``cos app <id> --gui`` (toolkit-agnostic).
+  handed to an app launched via ``yu app <id> --gui`` (toolkit-agnostic).
 - :mod:`claw_os_sdk.mcp`      — manifest-bound MCP App service runtime.
 - :mod:`claw_os_sdk.kernel`   — cancellable installed-CLI primitive transport.
 - :mod:`claw_os_sdk.objects`  — pure App object identifiers, without discovery,

@@ -11,8 +11,8 @@
 //!
 //! | Tier | Example | Sandbox | Display | Egress |
 //! | --- | --- | --- | --- | --- |
-//! | `AppOperation` | `cos app fs read` | yes | no | brokered, exact hosts |
-//! | `DesktopSurface` | `cos app notes --gui` | yes | yes | brokered, exact hosts |
+//! | `AppOperation` | `yu app fs read` | yes | no | brokered, exact hosts |
+//! | `DesktopSurface` | `yu app notes --gui` | yes | yes | brokered, exact hosts |
 //! | `McpServer` | a configured stdio MCP server, an adapter, an App session server | yes | no | denied |
 //! | `AgentExec` | `cos_sandbox exec` | yes | no | brokered, exact hosts |
 //! | `TrustedDesktopSession` | a vendor App session server that needs the session bus | yes | one exact socket | denied |

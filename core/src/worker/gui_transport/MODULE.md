@@ -28,7 +28,7 @@ unmediated X11 are refused rather than reopened through enclosing mounts.
 
 A helper's private process group is only its cancellation unit. Forked/execed
 descendants still inherit the GUI syscall filter and remain in the checked
-instance cgroup; SDK, provider and `cos` executable names grant no exception.
+instance cgroup; SDK, provider and `yu` executable names grant no exception.
 Private probes create separate process groups, check denied raw-socket and
 allowed instance connections, and retain transfer descriptors through checked
 retirement. This generic containment coverage is not acceptance of an Applet

@@ -28,7 +28,7 @@ pub enum Status {
     /// A process currently holds the lease and is making progress.
     Running,
     /// An agent voluntarily released the lease (e.g. user hit Ctrl+C
-    /// or `cos agent stop`). Resumable by attaching again.
+    /// or `yu agent stop`). Resumable by attaching again.
     Paused,
     /// Marked as complete by the runtime. Read-only from here; the GC
     /// can archive once the retention window passes.
@@ -208,14 +208,14 @@ pub struct SessionPresence {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SessionOrigin {
-    /// Interactive system-Agent work: `cos agent ask/chat`, a `clawd`
+    /// Interactive system-Agent work: `yu agent ask/chat`, a `clawd`
     /// transaction. Carries the minimal baseline and nothing else.
     SystemAgentTask,
-    /// A `cos cron` job the owner created through the scheduler
+    /// A `yu cron` job the owner created through the scheduler
     /// authority, which proved or had approved the executor verb
     /// (`proc.spawn`) and each named credential it injects.
     CronDelegation,
-    /// A `cos triggers` rule the owner created the same way, whose
+    /// A `yu triggers` rule the owner created the same way, whose
     /// executor verb is `agent.spawn`.
     TriggerDelegation,
 }
@@ -230,7 +230,7 @@ pub enum SessionOrigin {
 /// Notable design choices:
 ///
 /// - `purpose` is a free-form string label. The kernel never validates
-///   it; it exists solely so the GUI / `cos agent ls` can show
+///   it; it exists solely so the GUI / `yu agent ls` can show
 ///   something more useful than a raw sid. ("整理发票", the original
 ///   user prompt, a workflow name, an app manifest summary — all
 ///   legitimate values.)

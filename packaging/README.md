@@ -58,7 +58,7 @@ ELFs/resources, Browser assets, Mail's XPI, `claw-app-support` and named Python
 libraries. Support provides `claw-app-support-v1`; Files alone provides
 `claw-app-python-claw-files-v1`. App packages cannot provide OS/package/authority
 ABIs. Agent retains `claw_os_sdk`, `cos_runtime`, toolkit/system services and
-Root helpers. Its `claw-os-app-runtime-v1 (= 0.2.1)` implementation version
+Root helpers. Its `yuos-app-runtime-v1 (= 0.2.1)` implementation version
 comes from `app-platform.json`; App packages require `>= 0.2.1`, still ABI 1.
 
 `scripts/app_packages.py prepare` authenticates the official App APT release,
@@ -315,7 +315,7 @@ generation state and durable approval receipts, outside App data and signed
 manifests. Until-revoked restoration does not extend ordinary execution-grant
 lifetimes. Native activation requires the existing owner user-systemd/session
 bus, never removing `NoNewPrivileges` from system services. The compiled
-permission and fixed-launch clients use the packaged `/usr/local/bin/cos`
+permission and fixed-launch clients use the packaged `/usr/local/bin/yu`
 explicitly.
 
 Native Capture is composed under `build/native-apps/cosmic-screenshot` with
@@ -436,7 +436,7 @@ owner. `ShowFolders`, `ShowItems` and `ShowItemProperties` accept URI arrays
 and StartupID. Each authenticates `header.sender()` with the bus daemon's
 `GetConnectionUnixUser` and requires the helper's kernel-derived non-root UID.
 The three methods forward the literal URIs through only
-`/usr/local/bin/cos app <configured-id> --gui [URIs...]`; they do not supply
+`/usr/local/bin/yu app <configured-id> --gui [URIs...]`; they do not supply
 method-specific executable flags. StartupID retains the existing ignored
 presentation semantics. No shell, legacy executable, owner/session/socket
 selector or new installed App identity is involved.
@@ -601,7 +601,7 @@ Build from a Linux-filesystem checkout. Windows-mounted WSL directories may
 report mode `0777`, which cannot preserve Debian control permissions or native
 source modes; they are not supported native build/staging roots.
 
-The terminal renderer is part of the musl-built `cos` binary. Packaging has no
+The terminal renderer is part of the musl-built `yu` binary. Packaging has no
 separate TUI source acquisition, executable, runtime dependency or update
 channel.
 

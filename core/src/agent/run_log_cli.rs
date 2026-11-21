@@ -1,10 +1,10 @@
-//! `cos agent run-log` — query the per-AI-call run log.
+//! `yu agent run-log` — query the per-AI-call run log.
 //!
 //! [`crate::agent::llm::run_log`] writes one JSONL record per
 //! `provider.chat(...)` invocation (and per gate denial) to
 //! `<log_dir>/ai.jsonl`. That's a finer-grained stream than the
 //! turn-level audit log queried by [`super::audit_cli`] (one
-//! `cos agent ask` invocation produces N turns, and each turn is
+//! `yu agent ask` invocation produces N turns, and each turn is
 //! exactly one AI call). For diagnosing bad answers and reproducing
 //! them on a specific engine version, the per-call stream is what
 //! you want.
@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-/// Top-level dispatcher for `cos agent run-log <subcmd>`.
+/// Top-level dispatcher for `yu agent run-log <subcmd>`.
 pub fn run_log_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("summary");
     let rest = if args.is_empty() { &[][..] } else { &args[1..] };

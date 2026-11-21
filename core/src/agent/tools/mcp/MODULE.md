@@ -97,6 +97,6 @@ tears the sandbox and its endpoints down.
 ## Tests
 
 ```bash
-cargo test -p cos agent::tools::mcp:: -- --test-threads=1
-cargo test -p cos agent::tools::registry:: -- --test-threads=1
+cargo test -p yu agent::tools::mcp:: -- --test-threads=1
+cargo test -p yu agent::tools::registry:: -- --test-threads=1
 ```

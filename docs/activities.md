@@ -33,7 +33,7 @@ Run these commands in an installed Linux or WSL Claw OS environment with
 `clawd` available. Activity management does not require a configured model;
 starting Agent work requires the normal Agent setup and a non-root task owner.
 
-The full-screen `cos agent chat` TUI exposes the same backend through
+The full-screen `yu agent chat` TUI exposes the same backend through
 `/activities`, `/activity`, `/activity-create`, `/activity-run`,
 `/activity-pause`, `/activity-resume`, `/activity-complete`,
 `/activity-cancel`, and `/activity-attention`. Its detail panel is a
@@ -53,22 +53,22 @@ preview. Neither view resolves App data or upgrades reports into authority,
 truth, confirmed effects or goal completion.
 
 ```bash
-cos activity create "Release v2" \
+yu activity create "Release v2" \
   --goal "Publish the project next Friday" \
   --criteria "The release has been reviewed and is available" \
   --boundaries "Ask before publishing publicly" \
   --resource "Release draft=/home/user/project/release.md"
 
-cos activity list --state active
+yu activity list --state active
 ```
 
 Portable continuity is an explicit operation, not an automatic sync:
 
 ```bash
-cos activity export "$activity_id"
-cos activity export "$activity_id" --output release-activity.json
-cos activity import --placement local --file release-activity.json
-# or: cos activity import --placement local --stdin < release-activity.json
+yu activity export "$activity_id"
+yu activity export "$activity_id" --output release-activity.json
+yu activity import --placement local --file release-activity.json
+# or: yu activity import --placement local --stdin < release-activity.json
 ```
 
 Export refuses to replace an existing file unless `--overwrite` is supplied.
@@ -81,27 +81,27 @@ Use the returned `id` in later commands:
 ```bash
 activity_id="00000000-0000-4000-8000-000000000001" # replace with the returned ID
 
-cos activity show "$activity_id"
-cos activity attention "$activity_id"
-cos activity priority "$activity_id"
-cos activity set-priority "$activity_id" --priority foreground
-cos activity run "$activity_id" "Prepare a release draft"
-cos activity run "$activity_id" --workspace /home/user/project
-cos activity pause "$activity_id"
-cos activity update "$activity_id" --criteria "Reviewed, published, and announced"
-cos activity resume "$activity_id"
-cos activity complete "$activity_id" --note "I reviewed and published the release"
+yu activity show "$activity_id"
+yu activity attention "$activity_id"
+yu activity priority "$activity_id"
+yu activity set-priority "$activity_id" --priority foreground
+yu activity run "$activity_id" "Prepare a release draft"
+yu activity run "$activity_id" --workspace /home/user/project
+yu activity pause "$activity_id"
+yu activity update "$activity_id" --criteria "Reviewed, published, and announced"
+yu activity resume "$activity_id"
+yu activity complete "$activity_id" --note "I reviewed and published the release"
 ```
 
 `run` returns the ordinary durable task record. Use existing
-`cos agent service status`, `result`, and `cancel` commands to inspect or stop
-that execution. `cos activity run ID --session SESSION_ID` continues a related
+`yu agent service status`, `result`, and `cancel` commands to inspect or stop
+that execution. `yu activity run ID --session SESSION_ID` continues a related
 conversation. The Activity association is also available through
-`cos agent service submit --activity ID` and `list --activity ID`.
+`yu agent service submit --activity ID` and `list --activity ID`.
 
 Outputs follow the normal `cos` JSON/pretty-printing behavior, including
-`--compact` and `--pretty`. `cos activity --help` and
-`cos activity <command> --schema` are available without connecting to a
+`--compact` and `--pretty`. `yu activity --help` and
+`yu activity <command> --schema` are available without connecting to a
 desktop or starting a model.
 
 ## Lifecycle and outcomes
@@ -132,8 +132,8 @@ assigned to one Activity cannot silently be moved to another.
 
 Each owner can optionally set an Activity's pending admission class:
 `foreground`, `standard`, or `background`. Read it with
-`cos activity priority ID`; create or revise it with
-`cos activity set-priority ID --priority CLASS`, supplying
+`yu activity priority ID`; create or revise it with
+`yu activity set-priority ID --priority CLASS`, supplying
 `--expected-revision N` for every update after initial creation. Active and
 paused Activities can be configured. Reopen a completed or cancelled Activity
 before changing its policy.
@@ -159,7 +159,7 @@ work, claiming fails explicitly instead of inventing standard priority.
 
 ## Attention and decisions
 
-`cos activity attention ID [--limit N]` reads the same owner-scoped summary in
+`yu activity attention ID [--limit N]` reads the same owner-scoped summary in
 terminal-only and desktop installations. It combines associated Job counts,
 pending or recorded permission decisions, prioritized execution issues, and
 retained task-linked notifications. Counts and totals cover the full retained
@@ -223,7 +223,7 @@ This is not process-wide kernel protection against a compromised same-UID
 Agent; the exact App sandbox and broker remain authoritative.
 
 App installation review, background-service review and runtime capability
-approval remain separate. Use `cos review` or the native OS review presenter
+approval remain separate. Use `yu review` or the native OS review presenter
 for an App review. An Activity policy cannot confirm that review, enable an
 unreviewed service, or grant the permissions the App requested.
 
@@ -285,16 +285,16 @@ enabled, unexpired [execution limits](activity-execution-limits.md) first, then
 select an actual context-event producer and event type:
 
 ```bash
-cos triggers add --id release-changed \
+yu triggers add --id release-changed \
   --activity "$activity_id" \
   --source project-watcher --event-type artifact.changed \
   --prompt "Refresh the release draft; ask before publishing anything"
 
-cos triggers list --activity "$activity_id"
-cos triggers disable release-changed
-cos triggers enable release-changed
-cos triggers run release-changed
-cos triggers remove release-changed
+yu triggers list --activity "$activity_id"
+yu triggers disable release-changed
+yu triggers enable release-changed
+yu triggers run release-changed
+yu triggers remove release-changed
 ```
 
 `project-watcher` and `artifact.changed` are illustrative producer names.
@@ -325,7 +325,7 @@ automatically retried. Inspect any reported Job and its outcome before
 re-enabling a rule or requesting new work; enabling is not permission to
 replay an uncertain operation.
 
-`cos triggers list --activity "$activity_id"` includes each rule's
+`yu triggers list --activity "$activity_id"` includes each rule's
 `last_delivery`: `status`, `at_ms`, `message`, and available `job_id` and
 `session_id`. The heartbeat's `tick` result reports blocked and failed
 deliveries in `skipped` with an `error`; user broker requests cannot invoke
@@ -343,7 +343,7 @@ deleting or resetting progress to make a rule run.
 
 The deterministic heartbeat scans events without consulting an LLM. Idle or
 nonmatching scans create no model work. Trigger configuration currently uses
-`cos triggers`; associated jobs, results and receipts appear in the existing
+`yu triggers`; associated jobs, results and receipts appear in the existing
 terminal, Web and native Activity views through the same backend. There is no
 frontend-owned scheduler or second Activity store.
 

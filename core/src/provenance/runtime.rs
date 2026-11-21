@@ -163,7 +163,7 @@ pub enum InstanceClass {
     /// Not an installed package and never claimed to be one: there is
     /// no envelope, no publisher and nothing for a revocation to name.
     /// It is still sandboxed by the same worker policy and still
-    /// recorded here, so `cos provenance` can say what is running and
+    /// recorded here, so `yu provenance` can say what is running and
     /// under which policy rather than leaving it invisible.
     McpOperatorConfig,
 }

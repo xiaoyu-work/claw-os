@@ -9,7 +9,7 @@ name = "cos"
 path = "src/lib.rs"
 
 [[bin]]
-name = "cos"
+name = "yu"
 path = "src/main.rs"
 
 [[bin]]
@@ -113,7 +113,7 @@ zeroize = { version = "1", features = ["serde"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 
 # Phase 0.5 (engine package management): native runtimes (llama.cpp, ort,
-# ort-genai) are installed by `cos engine update` to /var/lib/cos/engines and
+# ort-genai) are installed by `yu engine update` to /var/lib/cos/engines and
 # loaded at runtime via libloading. No more compile-time link.
 libloading = "0.8"
 
@@ -140,7 +140,7 @@ claw-embed = { path = "../crates/claw-embed" }
 claw-os-sdk = { path = "../claw-os-sdk/rust" }
 claw-notification-presentation = { path = "../claw-os-sdk/rust/notification-presentation" }
 
-# `cos agent serve` — built-in web UI for headless / WSL setups. axum +
+# `yu agent serve` — built-in web UI for headless / WSL setups. axum +
 # tower-http give us SSE streaming and a minimal HTTP surface without
 # pulling in a heavy framework. Pinned to versions compatible with the
 # tokio 1.x runtime already in use; default features only (no openssl).
@@ -151,8 +151,8 @@ tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 http = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
-# Embed the Vite-built web UI (HTML/JS/CSS) inside the cos binary so
-# `cos agent serve` stays a single self-contained file with zero
+# Embed the Vite-built web UI (HTML/JS/CSS) inside the yu binary so
+# `yu agent serve` stays a single self-contained file with zero
 # external assets. The `ui/dist/` directory is committed to git.
 include_dir = "0.7"
 clawd-client = { version = "0.1.0", path = "../crates/clawd-client" }

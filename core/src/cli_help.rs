@@ -16,22 +16,22 @@ fn apps_dir() -> PathBuf {
 
 pub(crate) fn show_overview() -> Result<Option<String>, String> {
     // The headline count means "Apps you can run". Quarantined installs
-    // are surfaced with their reason by `cos app`, not counted here.
+    // are surfaced with their reason by `yu app`, not counted here.
     let output = cli_catalog::overview(VERSION, apps::discover_verified(&apps_dir()).len());
     Ok(Some(output.to_string()))
 }
 
-/// `cos help <topic>` — focused help for one primitive or app. Falls
+/// `yu help <topic>` — focused help for one primitive or app. Falls
 /// back to the global overview when the topic is unknown so the user
 /// always sees something useful (and the available names).
 pub(crate) fn show_help_for(topic: &str) -> Result<Option<String>, String> {
-    // Built-in primitives use the same shape as `cos <primitive>`
+    // Built-in primitives use the same shape as `yu <primitive>`
     // (no args).
     if let Some(help) = cli_catalog::namespace_help(topic) {
         return Ok(Some(help.to_string()));
     }
 
-    // Apps: render the same help as `cos app <name>`.
+    // Apps: render the same help as `yu app <name>`.
     // Help and schema display only: `show_app_help` never executes App
     // code, and a quarantined install must stay visible so the operator
     // can see why it stopped working. Every execution path goes through
@@ -40,7 +40,7 @@ pub(crate) fn show_help_for(topic: &str) -> Result<Option<String>, String> {
     if let Some(app) = discovered.get(topic) {
         return show_app_help(topic, app);
     }
-    // `cos help app` → list all apps.
+    // `yu help app` → list all apps.
     if topic == "app" {
         return show_apps(&discovered);
     }
@@ -81,7 +81,7 @@ pub(crate) fn show_apps(
         "apps": app_list,
         "total": app_list.len(),
         "quarantined": quarantined,
-        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Declared GUI surfaces: cos app <name> --gui or --gui:<entry-name> [literal args...]. Human/host opaque transport: cos app stdio <name> <operation> [args...] (requires declared stdin; see cos app stdio --schema). Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Review verified permission requests without installing: cos app install <source-dir> --review. Install with permission disclosure: cos app install <source-dir>. Installation does not grant the requested permissions.",
+        "hint": "Run: yu app <name> for app details, yu app <name> <command> [args] to execute. Declared GUI surfaces: yu app <name> --gui or --gui:<entry-name> [literal args...]. Human/host opaque transport: yu app stdio <name> <operation> [args...] (requires declared stdin; see yu app stdio --schema). Scaffold a new App with: yu app create <id> [--kind cli|desktop|both]. Review verified permission requests without installing: yu app install <source-dir> --review. Install with permission disclosure: yu app install <source-dir>. Installation does not grant the requested permissions.",
     });
     Ok(Some(output.to_string()))
 }
@@ -93,7 +93,7 @@ pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
         "version": app.manifest.version,
         "description": app.manifest.summary.current(),
         "commands": app_command_labels(app),
-        "hint": format!("Run: cos app {name} <command> [args]"),
+        "hint": format!("Run: yu app {name} <command> [args]"),
     });
     append_object_schema(&mut output, app);
     if let Some(desktop) = &app.manifest.desktop {
@@ -102,7 +102,7 @@ pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
     Ok(Some(output.to_string()))
 }
 
-/// The human `cos app <id> <command>` surface as a `command -> label`
+/// The human `yu app <id> <command>` surface as a `command -> label`
 /// map. Explicit operations take precedence over exact MCP command names.
 fn app_command_labels(app: &apps::App) -> serde_json::Map<String, Value> {
     let mut labels: serde_json::Map<String, Value> = mcp_cli_commands(&app.manifest)
@@ -221,7 +221,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     Param::positional("operation", "string", true, "Ordinary manifest operation declaring stdin: true"),
                     Param::positional("args", "array", false, "Manifest-bound operation arguments; -- ends option/schema parsing"),
                 ],
-                example: "cos app stdio example host",
+                example: "yu app stdio example host",
             }],
         ),
         (
@@ -232,19 +232,19 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     command: "pending",
                     description: "List the user's pending OS reviews",
                     params: vec![],
-                    example: "cos review pending",
+                    example: "yu review pending",
                 },
                 CommandSchema {
                     command: "show",
                     description: "Display an authenticated App confirmation or capability request",
                     params: vec![Param::positional("id", "string", true, "System review ID")],
-                    example: "cos review show rv-0123456789abcdef0123456789abcdef",
+                    example: "yu review show rv-0123456789abcdef0123456789abcdef",
                 },
                 CommandSchema {
                     command: "approve",
                     description: "Human-only App confirmation or explicit permission choices through the OS helper",
                     params: vec![Param::positional("id", "string", true, "System review ID")],
-                    example: "cos review approve rv-0123456789abcdef0123456789abcdef",
+                    example: "yu review approve rv-0123456789abcdef0123456789abcdef",
                 },
                 CommandSchema {
                     command: "deny",
@@ -253,7 +253,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         Param::positional("id", "string", true, "System review ID"),
                         Param::positional("revision", "string", false, "Exact decimal revision displayed to the owner"),
                     ],
-                    example: "cos review deny rv-0123456789abcdef0123456789abcdef",
+                    example: "yu review deny rv-0123456789abcdef0123456789abcdef",
                 },
             ],
         ),
@@ -281,7 +281,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     Param::flag("--activity", "uuid", false, "Owner-scoped Activity context"),
                     Param::positional("args", "array<string>", false, "App arguments after --; not executed"),
                 ],
-                example: "cos operation preview fs write -- /home/user/draft.md --content Draft",
+                example: "yu operation preview fs write -- /home/user/draft.md --content Draft",
             }, CommandSchema {
                 command: "execute",
                 description: "Execute through the normal App gate and record an unverified outcome report",
@@ -291,7 +291,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     Param::flag("--activity", "uuid", true, "Active owner-scoped Activity"),
                     Param::positional("args", "array<string>", false, "App arguments after --; stdin is not forwarded"),
                 ],
-                example: "cos operation execute kv get --activity 00000000-0000-4000-8000-000000000001 -- release.status",
+                example: "yu operation execute kv get --activity 00000000-0000-4000-8000-000000000001 -- release.status",
             }],
         ),
         (
@@ -307,13 +307,13 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         true,
                         "Checkpoint description",
                     )],
-                    example: "cos checkpoint create \"before refactoring\"",
+                    example: "yu checkpoint create \"before refactoring\"",
                 },
                 CommandSchema {
                     command: "diff",
                     description: "Show created, modified, and deleted files",
                     params: vec![],
-                    example: "cos checkpoint diff",
+                    example: "yu checkpoint diff",
                 },
                 CommandSchema {
                     command: "rollback",
@@ -324,19 +324,19 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         false,
                         "Checkpoint ID to restore (omit for base)",
                     )],
-                    example: "cos checkpoint rollback 002",
+                    example: "yu checkpoint rollback 002",
                 },
                 CommandSchema {
                     command: "list",
                     description: "List all saved checkpoints",
                     params: vec![],
-                    example: "cos checkpoint list",
+                    example: "yu checkpoint list",
                 },
                 CommandSchema {
                     command: "status",
                     description: "Show overlay mount state and disk usage",
                     params: vec![],
-                    example: "cos checkpoint status",
+                    example: "yu checkpoint status",
                 },
                 CommandSchema {
                     command: "quota-set",
@@ -347,13 +347,13 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         true,
                         "Size limit (e.g., 2G, 512M)",
                     )],
-                    example: "cos checkpoint quota-set 2G",
+                    example: "yu checkpoint quota-set 2G",
                 },
                 CommandSchema {
                     command: "quota-status",
                     description: "Show current quota usage",
                     params: vec![],
-                    example: "cos checkpoint quota-status",
+                    example: "yu checkpoint quota-status",
                 },
             ],
         ),
@@ -387,7 +387,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                             "Command to execute on expiry to refresh the value",
                         ),
                     ],
-                    example: "cos credential store OPENAI_KEY sk-abc123 --tier 0 --ttl 3600",
+                    example: "yu credential store OPENAI_KEY sk-abc123 --tier 0 --ttl 3600",
                 },
                 CommandSchema {
                     command: "load",
@@ -396,7 +396,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         Param::positional("name", "string", true, "Credential name"),
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
-                    example: "cos credential load OPENAI_KEY",
+                    example: "yu credential load OPENAI_KEY",
                 },
                 CommandSchema {
                     command: "list",
@@ -407,7 +407,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         false,
                         "Filter by namespace",
                     )],
-                    example: "cos credential list",
+                    example: "yu credential list",
                 },
                 CommandSchema {
                     command: "revoke",
@@ -416,7 +416,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         Param::positional("name", "string", true, "Credential name"),
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
-                    example: "cos credential revoke OPENAI_KEY",
+                    example: "yu credential revoke OPENAI_KEY",
                 },
                 CommandSchema {
                     command: "bundle",
@@ -431,7 +431,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         ),
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
-                    example: "cos credential bundle openai-config --keys OPENAI_KEY,OPENAI_ORG",
+                    example: "yu credential bundle openai-config --keys OPENAI_KEY,OPENAI_ORG",
                 },
                 CommandSchema {
                     command: "load-bundle",
@@ -440,7 +440,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         Param::positional("bundle_name", "string", true, "Bundle name"),
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
-                    example: "cos credential load-bundle openai-config",
+                    example: "yu credential load-bundle openai-config",
                 },
                 CommandSchema {
                     command: "oauth-login",
@@ -456,7 +456,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         Param::flag("--no-open", "bool", false, "Print URL without opening browser"),
                         Param::flag("--timeout", "integer", false, "Callback timeout in seconds"),
                     ],
-                    example: "cos credential oauth-login google",
+                    example: "yu credential oauth-login google",
                 },
                 CommandSchema {
                     command: "oauth-refresh",
@@ -470,7 +470,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         ),
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
-                    example: "cos credential oauth-refresh google",
+                    example: "yu credential oauth-refresh google",
                 },
             ],
         ),
@@ -501,25 +501,25 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         ),
                         Param::flag("--timeout", "integer", false, "Kill after N seconds"),
                     ],
-                    example: "cos cron add health-check --schedule \"*/5 * * * *\" --command \"cos service health my-api\" --overlap skip",
+                    example: "yu cron add health-check --schedule \"*/5 * * * *\" --command \"yu service health my-api\" --overlap skip",
                 },
                 CommandSchema {
                     command: "list",
                     description: "List all cron jobs",
                     params: vec![],
-                    example: "cos cron list",
+                    example: "yu cron list",
                 },
                 CommandSchema {
                     command: "run",
                     description: "Manually trigger a job",
                     params: vec![Param::positional("id", "string", true, "Job ID")],
-                    example: "cos cron run health-check",
+                    example: "yu cron run health-check",
                 },
                 CommandSchema {
                     command: "tick",
                     description: "Process all due jobs (called by scheduler)",
                     params: vec![],
-                    example: "cos cron tick",
+                    example: "yu cron tick",
                 },
             ],
         ),
@@ -531,19 +531,19 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     command: "start",
                     description: "Start a service (pre_start → credential injection → spawn → health → post_start)",
                     params: vec![Param::positional("name", "string", true, "Service name")],
-                    example: "cos service start my-api",
+                    example: "yu service start my-api",
                 },
                 CommandSchema {
                     command: "stop",
                     description: "Graceful stop (checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop)",
                     params: vec![Param::positional("name", "string", true, "Service name")],
-                    example: "cos service stop my-api",
+                    example: "yu service stop my-api",
                 },
                 CommandSchema {
                     command: "stop-all",
                     description: "Stop all services in reverse dependency order",
                     params: vec![],
-                    example: "cos service stop-all",
+                    example: "yu service stop-all",
                 },
                 CommandSchema {
                     command: "register",
@@ -576,7 +576,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                             "State checkpoint command",
                         ),
                     ],
-                    example: "cos service register --name my-api --command \"python app.py\" --health-url http://localhost:8000/health --credentials OPENAI_KEY,DB_URL",
+                    example: "yu service register --name my-api --command \"python app.py\" --health-url http://localhost:8000/health --credentials OPENAI_KEY,DB_URL",
                 },
             ],
         ),
@@ -588,13 +588,13 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     command: "info",
                     description: "OS, architecture, hostname, version",
                     params: vec![],
-                    example: "cos sys info",
+                    example: "yu sys info",
                 },
                 CommandSchema {
                     command: "resources",
                     description: "Disk, memory, CPU usage",
                     params: vec![],
-                    example: "cos sys resources",
+                    example: "yu sys resources",
                 },
                 CommandSchema {
                     command: "env",
@@ -605,13 +605,13 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         false,
                         "Filter pattern",
                     )],
-                    example: "cos sys env COS",
+                    example: "yu sys env COS",
                 },
                 CommandSchema {
                     command: "proc",
                     description: "All processes with resource usage",
                     params: vec![],
-                    example: "cos sys proc",
+                    example: "yu sys proc",
                 },
             ],
         ),
@@ -651,7 +651,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     Param::flag("--app", "string", false, "Filter by App id"),
                     Param::flag("--verb", "string", false, "Filter by AI verb"),
                 ],
-                example: "cos agent usage overall --since 2026-08-01T00:00:00Z",
+                example: "yu agent usage overall --since 2026-08-01T00:00:00Z",
             }],
         ),
     ]
@@ -671,41 +671,41 @@ fn trigger_schemas() -> Vec<CommandSchema> {
                 Param::flag("--max-turns", "integer", false, "Positive task turn ceiling; Activity limits still apply"),
                 Param::flag("--activity", "uuid", false, "Owned active Activity UUID with enabled finite execution limits; never a permission grant"),
             ],
-            example: "cos triggers add --id release-changed --source project-watcher --event-type artifact.changed --activity 00000000-0000-4000-8000-000000000001 --prompt \"Refresh the release draft\"",
+            example: "yu triggers add --id release-changed --source project-watcher --event-type artifact.changed --activity 00000000-0000-4000-8000-000000000001 --prompt \"Refresh the release draft\"",
         },
         CommandSchema {
             command: "list",
             description: "Inspect the owner's trigger rules and Activity associations",
             params: vec![Param::flag("--activity", "uuid", false, "Filter by an owned Activity UUID")],
-            example: "cos triggers list --activity 00000000-0000-4000-8000-000000000001",
+            example: "yu triggers list --activity 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "tick",
             description: "Kernel-heartbeat event scan; not available through user scheduler requests",
             params: Vec::new(),
-            example: "cos triggers tick",
+            example: "yu triggers tick",
         },
     ];
     for (command, description, example) in [
         (
             "enable",
             "Re-enable an owned trigger using current scheduler authority",
-            "cos triggers enable release-changed",
+            "yu triggers enable release-changed",
         ),
         (
             "disable",
             "Stop an owned trigger from scheduling future work",
-            "cos triggers disable release-changed",
+            "yu triggers disable release-changed",
         ),
         (
             "remove",
             "Remove an owned trigger without undoing admitted effects",
-            "cos triggers remove release-changed",
+            "yu triggers remove release-changed",
         ),
         (
             "run",
             "Request one trigger execution; Activity constraints remain authoritative",
-            "cos triggers run release-changed",
+            "yu triggers run release-changed",
         ),
     ] {
         schemas.push(CommandSchema {
@@ -745,18 +745,18 @@ fn share_schemas()->Vec<CommandSchema> {
                 _=>Vec::new(),
             },
             example:match command {
-                "receive"=>"cos share receive --seconds 300",
-                "open"=>"cos share open --seconds 300",
-                "send"=>"cos share send PEER_ID /home/user/report.pdf",
-                "accept"=>"cos share accept OFFER_ID",
-                "decline"=>"cos share decline OFFER_ID",
-                "cancel"=>"cos share cancel TRANSFER_ID",
-                "stop"=>"cos share stop",
-                "browse"=>"cos share browse",
-                "watch"=>"cos share watch",
-                "delete-upload"=>"cos share delete-upload UPLOAD_ID",
-                "doctor"=>"cos share doctor",
-                _=>"cos share status",
+                "receive"=>"yu share receive --seconds 300",
+                "open"=>"yu share open --seconds 300",
+                "send"=>"yu share send PEER_ID /home/user/report.pdf",
+                "accept"=>"yu share accept OFFER_ID",
+                "decline"=>"yu share decline OFFER_ID",
+                "cancel"=>"yu share cancel TRANSFER_ID",
+                "stop"=>"yu share stop",
+                "browse"=>"yu share browse",
+                "watch"=>"yu share watch",
+                "delete-upload"=>"yu share delete-upload UPLOAD_ID",
+                "doctor"=>"yu share doctor",
+                _=>"yu share status",
             },
         }).collect()
 }
@@ -819,27 +819,27 @@ fn workspace_schemas() -> Vec<CommandSchema> {
             ]);
         }
         CommandSchema { command, description, params, example: match command {
-            "list" => "cos workspace list",
-            "show" => "cos workspace show 00000000-0000-4000-8000-000000000001",
-            "create" => "cos workspace create Research --context \"Explain terms for beginners\"",
-            "update" => "cos workspace update 00000000-0000-4000-8000-000000000001 --name Research --revision 1",
-            "tag" => "cos workspace tag 00000000-0000-4000-8000-000000000001 /home/example/Documents/research --revision 1",
-            "untag" => "cos workspace untag WORKSPACE_UUID TAG_UUID --revision 2",
-            "note" => "cos workspace note WORKSPACE_UUID Audience --content Beginners --revision 1",
-            "forget-note" => "cos workspace forget-note WORKSPACE_UUID NOTE_UUID --revision 2",
-            "attach" => "cos workspace attach WORKSPACE_UUID ACTIVITY_UUID --revision 1",
-            "detach" => "cos workspace detach WORKSPACE_UUID ACTIVITY_UUID --revision 2",
-            "archive" => "cos workspace archive WORKSPACE_UUID --revision 1",
-            "restore" => "cos workspace restore WORKSPACE_UUID --revision 2",
-            "context"=>"cos workspace context WORKSPACE_UUID",
-            "read"=>"cos workspace read WORKSPACE_UUID /home/example/Documents/note.md --max-chars 4096",
-            "read-note"=>"cos workspace read-note WORKSPACE_UUID NOTE_UUID",
-            "search"=>"cos workspace search WORKSPACE_UUID \"related research\" --limit 10",
-            "index"=>"cos workspace index WORKSPACE_UUID",
-            "index-source"=>"cos workspace index-source WORKSPACE_UUID TAG_UUID --revision 2",
-            "read-link"=>"cos workspace read-link WORKSPACE_UUID --source-space SOURCE_UUID --conversation ses_001953abcdef0_123456789abc --notes '[\"NOTE_UUID\"]' --expires RFC3339 --revision 2",
-            "revoke"=>"cos workspace revoke WORKSPACE_UUID LINK_UUID --revision 3",
-            _ => "cos workspace delete WORKSPACE_UUID --revision 3 --confirm",
+            "list" => "yu workspace list",
+            "show" => "yu workspace show 00000000-0000-4000-8000-000000000001",
+            "create" => "yu workspace create Research --context \"Explain terms for beginners\"",
+            "update" => "yu workspace update 00000000-0000-4000-8000-000000000001 --name Research --revision 1",
+            "tag" => "yu workspace tag 00000000-0000-4000-8000-000000000001 /home/example/Documents/research --revision 1",
+            "untag" => "yu workspace untag WORKSPACE_UUID TAG_UUID --revision 2",
+            "note" => "yu workspace note WORKSPACE_UUID Audience --content Beginners --revision 1",
+            "forget-note" => "yu workspace forget-note WORKSPACE_UUID NOTE_UUID --revision 2",
+            "attach" => "yu workspace attach WORKSPACE_UUID ACTIVITY_UUID --revision 1",
+            "detach" => "yu workspace detach WORKSPACE_UUID ACTIVITY_UUID --revision 2",
+            "archive" => "yu workspace archive WORKSPACE_UUID --revision 1",
+            "restore" => "yu workspace restore WORKSPACE_UUID --revision 2",
+            "context"=>"yu workspace context WORKSPACE_UUID",
+            "read"=>"yu workspace read WORKSPACE_UUID /home/example/Documents/note.md --max-chars 4096",
+            "read-note"=>"yu workspace read-note WORKSPACE_UUID NOTE_UUID",
+            "search"=>"yu workspace search WORKSPACE_UUID \"related research\" --limit 10",
+            "index"=>"yu workspace index WORKSPACE_UUID",
+            "index-source"=>"yu workspace index-source WORKSPACE_UUID TAG_UUID --revision 2",
+            "read-link"=>"yu workspace read-link WORKSPACE_UUID --source-space SOURCE_UUID --conversation ses_001953abcdef0_123456789abc --notes '[\"NOTE_UUID\"]' --expires RFC3339 --revision 2",
+            "revoke"=>"yu workspace revoke WORKSPACE_UUID LINK_UUID --revision 3",
+            _ => "yu workspace delete WORKSPACE_UUID --revision 3 --confirm",
         }}
     }).collect()
 }
@@ -970,7 +970,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--output", "path", false, "Write bounded canonical JSON to a new file instead of stdout"),
                 Param::flag("--overwrite", "bool", false, "Explicitly replace --output; existing files are preserved by default"),
             ],
-            example: "cos activity export 00000000-0000-4000-8000-000000000001 --output activity.json",
+            example: "yu activity export 00000000-0000-4000-8000-000000000001 --output activity.json",
         },
         CommandSchema {
             command: "import",
@@ -980,13 +980,13 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--file", "path", false, "Read a regular non-symlink JSON file; mutually exclusive with --stdin"),
                 Param::flag("--stdin", "bool", false, "Read bounded JSON from redirected stdin; mutually exclusive with --file"),
             ],
-            example: "cos activity import --placement local --file activity.json",
+            example: "yu activity import --placement local --file activity.json",
         },
         CommandSchema {
             command: "capability-policy",
             description: "Read shared Activity capability constraints; missing rules mean ordinary permission checks",
             params: vec![id()],
-            example: "cos activity capability-policy 00000000-0000-4000-8000-000000000001",
+            example: "yu activity capability-policy 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "set-capability-policy",
@@ -996,25 +996,25 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--policy", "json", true, "Draft {rules:[{verb,mode,scopes}]}, at most 16 KiB and 64 unique catalogue verbs; normal/require_approval require 1-32 compatible scopes; deny uses []"),
                 Param::flag("--expected-revision", "integer", false, "Positive current revision when updating; omit only for initial creation"),
             ],
-            example: r#"cos activity set-capability-policy 00000000-0000-4000-8000-000000000001 --policy '{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}]}'"#,
+            example: r#"yu activity set-capability-policy 00000000-0000-4000-8000-000000000001 --policy '{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}]}'"#,
         },
         CommandSchema {
             command: "enable-capability-policy",
             description: "Enable an existing policy for an active or paused Activity; ordinary capability and provenance checks still apply",
             params: vec![id(), Param::flag("--expected-revision", "integer", true, "Positive current policy revision; stale writes are refused")],
-            example: "cos activity enable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+            example: "yu activity enable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
         },
         CommandSchema {
             command: "disable-capability-policy",
             description: "Block all controlled capability checks, including for terminal Activities; never delete the policy or undo admitted effects",
             params: vec![id(), Param::flag("--expected-revision", "integer", true, "Positive current policy revision; stale writes are refused")],
-            example: "cos activity disable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+            example: "yu activity disable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
         },
         CommandSchema {
             command: "priority",
             description: "Read owner-selected pending admission priority; absence preserves standard FIFO behavior",
             params: vec![id()],
-            example: "cos activity priority 00000000-0000-4000-8000-000000000001",
+            example: "yu activity priority 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "set-priority",
@@ -1024,19 +1024,19 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--priority", "enum:foreground|standard|background", true, "Pending admission class; FIFO is retained within a class"),
                 Param::flag("--expected-revision", "integer", false, "Positive current revision when updating; omit only for initial creation"),
             ],
-            example: "cos activity set-priority 00000000-0000-4000-8000-000000000001 --priority foreground",
+            example: "yu activity set-priority 00000000-0000-4000-8000-000000000001 --priority foreground",
         },
         CommandSchema {
             command: "execution-limits",
             description: "Read Activity attempt/turn/expiry controls; no capabilities are granted",
             params: vec![id()],
-            example: "cos activity execution-limits 00000000-0000-4000-8000-000000000001",
+            example: "yu activity execution-limits 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "work",
             description: "Read automatic progression and bounded caller-reported handoff history; never verified effects or goal completion",
             params: vec![id()],
-            example: "cos activity work 00000000-0000-4000-8000-000000000001",
+            example: "yu activity work 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "set-work",
@@ -1048,7 +1048,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--wake-event","string",false,"Exact existing event type; no watcher is installed"),
                 Param::flag("--expected-revision","integer",false,"Current work revision when replacing configuration"),
             ],
-            example: r#"cos activity set-work 00000000-0000-4000-8000-000000000001 --task "Research and prepare a draft; ask before publishing""#,
+            example: r#"yu activity set-work 00000000-0000-4000-8000-000000000001 --task "Research and prepare a draft; ask before publishing""#,
         },
         CommandSchema {
             command: "start-work",
@@ -1058,13 +1058,13 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--next-task","string",false,"Explicit safe next task, required when resuming reviewed/uncertain work"),
                 Param::flag("--review-note","string",false,"Owner inspection note, required after a review or indeterminate stop"),
             ],
-            example: "cos activity start-work 00000000-0000-4000-8000-000000000001 --expected-revision 1",
+            example: "yu activity start-work 00000000-0000-4000-8000-000000000001 --expected-revision 1",
         },
         CommandSchema {
             command: "stop-work",
             description: "Durably stop future automatic segments; cancel any existing Job separately through task controls",
             params: vec![id(),Param::flag("--expected-revision","integer",true,"Exact current work revision")],
-            example: "cos activity stop-work 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+            example: "yu activity stop-work 00000000-0000-4000-8000-000000000001 --expected-revision 2",
         },
         CommandSchema {
             command: "set-execution-limits",
@@ -1076,25 +1076,25 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--max-turns", "integer", true, "Maximum model turns per attempt, 1-100"),
                 Param::flag("--expires-at", "RFC3339 timestamp", true, "Future expiry of this limit policy"),
             ],
-            example: "cos activity set-execution-limits 00000000-0000-4000-8000-000000000001 --max-attempts 10 --max-turns 5 --expires-at 2026-09-18T00:00:00Z",
+            example: "yu activity set-execution-limits 00000000-0000-4000-8000-000000000001 --max-attempts 10 --max-turns 5 --expires-at 2026-09-18T00:00:00Z",
         },
         CommandSchema {
             command: "enable-execution-limits",
             description: "Explicitly enable an unexpired policy at the expected revision",
             params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
-            example: "cos activity enable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
+            example: "yu activity enable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
         },
         CommandSchema {
             command: "disable-execution-limits",
             description: "Disable bounded work without deleting its policy, clearing usage or granting unlimited work",
             params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
-            example: "cos activity disable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
+            example: "yu activity disable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
         },
         CommandSchema {
             command: "monetary-budget",
             description: "Read conservative policy-priced USD accounting; this is not provider invoice data",
             params: vec![id()],
-            example: "cos activity monetary-budget 00000000-0000-4000-8000-000000000001",
+            example: "yu activity monetary-budget 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "set-monetary-budget",
@@ -1108,19 +1108,19 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--output-microusd-per-million-tokens", "integer", true, "Output price per million provider-reported tokens, 1-1000000000000"),
                 Param::flag("--max-output-tokens-per-turn", "integer", true, "Outgoing model output ceiling, 1-1000000"),
             ],
-            example: "cos activity set-monetary-budget 00000000-0000-4000-8000-000000000001 --max-total-microusd 5000000 --input-microusd-per-million-tokens 250000 --output-microusd-per-million-tokens 1000000 --max-output-tokens-per-turn 4096",
+            example: "yu activity set-monetary-budget 00000000-0000-4000-8000-000000000001 --max-total-microusd 5000000 --input-microusd-per-million-tokens 250000 --output-microusd-per-million-tokens 1000000 --max-output-tokens-per-turn 4096",
         },
         CommandSchema {
             command: "enable-monetary-budget",
             description: "Enable an existing monetary budget for an active or paused Activity",
             params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
-            example: "cos activity enable-monetary-budget 00000000-0000-4000-8000-000000000001 --revision 2",
+            example: "yu activity enable-monetary-budget 00000000-0000-4000-8000-000000000001 --revision 2",
         },
         CommandSchema {
             command: "disable-monetary-budget",
             description: "Block new model turns while preserving spent and crash-reserved accounting",
             params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
-            example: "cos activity disable-monetary-budget 00000000-0000-4000-8000-000000000001 --revision 2",
+            example: "yu activity disable-monetary-budget 00000000-0000-4000-8000-000000000001 --revision 2",
         },
         CommandSchema {
             command: "object-state",
@@ -1130,25 +1130,25 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--reference", "string", false, "Filter by exact attached App reference"),
                 Param::flag("--limit", "integer", false, "Maximum entries, 1-100 (default 50)"),
             ],
-            example: "cos activity object-state 00000000-0000-4000-8000-000000000001",
+            example: "yu activity object-state 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "observe",
             description: "Annotate an attached object without fetching its data or granting authority",
             params: observation,
-            example: "cos activity observe 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --text 'Waiting for review'",
+            example: "yu activity observe 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --text 'Waiting for review'",
         },
         CommandSchema {
             command: "relate",
             description: "Add a non-executing planning relationship between attached objects",
             params: relation,
-            example: "cos activity relate 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --target 'app://kv/entry?id=review.status' --relation depends_on",
+            example: "yu activity relate 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --target 'app://kv/entry?id=review.status' --relation depends_on",
         },
         CommandSchema {
             command: "retract-object-state",
             description: "Supersede an entry with an explicit retraction while preserving history",
             params: retraction,
-            example: "cos activity retract-object-state 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --supersedes 00000000-0000-4000-8000-000000000002 --reason 'No longer supported'",
+            example: "yu activity retract-object-state 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --supersedes 00000000-0000-4000-8000-000000000002 --reason 'No longer supported'",
         },
         CommandSchema {
             command: "record-object-state",
@@ -1157,7 +1157,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 id(),
                 Param::flag("--stdin", "bool", true, "Read at most 16 KiB of entry JSON from piped stdin"),
             ],
-            example: "cos activity record-object-state 00000000-0000-4000-8000-000000000001 --stdin < entry.json",
+            example: "yu activity record-object-state 00000000-0000-4000-8000-000000000001 --stdin < entry.json",
         },
         CommandSchema {
             command: "receipts",
@@ -1166,7 +1166,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 id(),
                 Param::flag("--limit", "integer", false, "Maximum receipts, 1-100 (default 50)"),
             ],
-            example: "cos activity receipts 00000000-0000-4000-8000-000000000001",
+            example: "yu activity receipts 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "record-receipt",
@@ -1175,13 +1175,13 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 id(),
                 Param::flag("--stdin", "bool", true, "Read at most 16 KiB of report JSON from piped stdin"),
             ],
-            example: "cos activity record-receipt 00000000-0000-4000-8000-000000000001 --stdin < report.json",
+            example: "yu activity record-receipt 00000000-0000-4000-8000-000000000001 --stdin < report.json",
         },
         CommandSchema {
             command: "objects",
             description: "Describe attached App references without reading their data",
             params: vec![id()],
-            example: "cos activity objects 00000000-0000-4000-8000-000000000001",
+            example: "yu activity objects 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "attach-object",
@@ -1194,13 +1194,13 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--object-id", "string", true, "Opaque App-owned object ID"),
                 Param::flag("--revision", "string", false, "Optional App revision constraint"),
             ],
-            example: "cos activity attach-object 00000000-0000-4000-8000-000000000001 --label Release --app kv --type entry --object-id release.status",
+            example: "yu activity attach-object 00000000-0000-4000-8000-000000000001 --label Release --app kv --type entry --object-id release.status",
         },
         CommandSchema {
             command: "create",
             description: "Create a persistent Activity without starting a task",
             params: create,
-            example: "cos activity create \"Release v2\" --goal \"Publish next Friday\"",
+            example: "yu activity create \"Release v2\" --goal \"Publish next Friday\"",
         },
         CommandSchema {
             command: "list",
@@ -1214,7 +1214,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 ),
                 Param::flag("--limit", "integer", false, "Maximum records, 1-100 (default 50)"),
             ],
-            example: "cos activity list --state active",
+            example: "yu activity list --state active",
         },
         CommandSchema {
             command: "show",
@@ -1223,7 +1223,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 id(),
                 Param::flag("--limit", "integer", false, "Maximum related jobs, 1-100 (default 50)"),
             ],
-            example: "cos activity show 00000000-0000-4000-8000-000000000001",
+            example: "yu activity show 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "attention",
@@ -1232,13 +1232,13 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 id(),
                 Param::flag("--limit", "integer", false, "Maximum items in each list, 1-100 (default 50); counts cover the full retained scope"),
             ],
-            example: "cos activity attention 00000000-0000-4000-8000-000000000001",
+            example: "yu activity attention 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
             command: "update",
             description: "Change supplied fields of an active or paused Activity",
             params: update,
-            example: "cos activity update 00000000-0000-4000-8000-000000000001 --criteria \"Release is available\"",
+            example: "yu activity update 00000000-0000-4000-8000-000000000001 --criteria \"Release is available\"",
         },
         CommandSchema {
             command: "run",
@@ -1250,7 +1250,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::flag("--max-turns", "integer", false, "Positive per-job model-turn limit"),
                 Param::flag("--workspace", "path", false, "Owner-home-bounded task workspace; grants no capability"),
             ],
-            example: "cos activity run 00000000-0000-4000-8000-000000000001 \"Prepare a release draft\"",
+            example: "yu activity run 00000000-0000-4000-8000-000000000001 \"Prepare a release draft\"",
         },
         CommandSchema {
             command: "complete",
@@ -1259,24 +1259,24 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 id(),
                 Param::flag("--note", "string", true, "User confirmation of the achieved outcome"),
             ],
-            example: "cos activity complete 00000000-0000-4000-8000-000000000001 --note \"Reviewed and published\"",
+            example: "yu activity complete 00000000-0000-4000-8000-000000000001 --note \"Reviewed and published\"",
         },
     ];
     for (command, description, example) in [
         (
             "pause",
             "Prevent future work without undoing in-flight effects",
-            "cos activity pause 00000000-0000-4000-8000-000000000001",
+            "yu activity pause 00000000-0000-4000-8000-000000000001",
         ),
         (
             "resume",
             "Resume or explicitly reopen an Activity",
-            "cos activity resume 00000000-0000-4000-8000-000000000001",
+            "yu activity resume 00000000-0000-4000-8000-000000000001",
         ),
         (
             "cancel",
             "End an Activity without claiming that its goal was achieved",
-            "cos activity cancel 00000000-0000-4000-8000-000000000001",
+            "yu activity cancel 00000000-0000-4000-8000-000000000001",
         ),
     ] {
         schemas.push(CommandSchema {
@@ -1295,7 +1295,7 @@ fn object_schemas() -> Vec<CommandSchema> {
             command: "catalog",
             description: "List verified App object declarations without executing Apps",
             params: vec![Param::positional("app", "string", false, "Optional App ID")],
-            example: "cos object catalog kv",
+            example: "yu object catalog kv",
         },
         CommandSchema {
             command: "reference",
@@ -1312,7 +1312,7 @@ fn object_schemas() -> Vec<CommandSchema> {
                     "Optional revision constraint",
                 ),
             ],
-            example: "cos object reference kv entry release.status",
+            example: "yu object reference kv entry release.status",
         },
         CommandSchema {
             command: "describe",
@@ -1323,7 +1323,7 @@ fn object_schemas() -> Vec<CommandSchema> {
                 true,
                 "Canonical App object URI",
             )],
-            example: "cos object describe 'app://kv/entry?id=release.status'",
+            example: "yu object describe 'app://kv/entry?id=release.status'",
         },
         CommandSchema {
             command: "resolve",
@@ -1335,7 +1335,7 @@ fn object_schemas() -> Vec<CommandSchema> {
                 true,
                 "Canonical App object URI",
             )],
-            example: "cos object resolve 'app://kv/entry?id=release.status'",
+            example: "yu object resolve 'app://kv/entry?id=release.status'",
         },
     ]
 }
@@ -1356,7 +1356,7 @@ fn append_object_schema(output: &mut Value, app: &apps::App) {
 
 fn command_schema_value(app_name: &str, command: &str) -> Result<Value, String> {
     let mut output = cli_catalog::command_help(app_name, command)
-        .ok_or_else(|| format!("unknown command: cos {app_name} {command}"))?;
+        .ok_or_else(|| format!("unknown command: yu {app_name} {command}"))?;
     let detailed = command_schemas()
         .into_iter()
         .find(|(name, _, _)| *name == app_name)
@@ -1432,7 +1432,7 @@ pub(crate) fn show_app_command_schema(
     };
     Ok(Some(
         json!({
-            "command": format!("cos app {app_name} {command}"),
+            "command": format!("yu app {app_name} {command}"),
             "description": schema["description"].clone(),
             "parameters": schema["parameters"].clone(),
             "stdin": schema["stdin"].clone(),

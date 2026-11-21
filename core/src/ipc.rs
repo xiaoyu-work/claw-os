@@ -148,7 +148,7 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
     }
 
     if positional.len() < 2 {
-        return Err("usage: cos ipc send <target-session-id> <message> [--from <id>]".into());
+        return Err("usage: yu ipc send <target-session-id> <message> [--from <id>]".into());
     }
 
     let target = &positional[0];
@@ -188,7 +188,7 @@ fn cmd_send(args: &[String]) -> Result<Value, String> {
 fn cmd_recv(args: &[String]) -> Result<Value, String> {
     let session_id = args
         .first()
-        .ok_or("usage: cos ipc recv <session-id> [--timeout N] [--peek]")?;
+        .ok_or("usage: yu ipc recv <session-id> [--timeout N] [--peek]")?;
     validate_identifier("session id", session_id)?;
     require_or_json(Verb::IPC_SUBSCRIBE, Scope::name(session_id)).map_err(|v| v.to_string())?;
     let mut timeout_secs: u64 = 0;
@@ -261,7 +261,7 @@ fn cmd_recv(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    let session_id = args.first().ok_or("usage: cos ipc list <session-id>")?;
+    let session_id = args.first().ok_or("usage: yu ipc list <session-id>")?;
     validate_identifier("session id", session_id)?;
     require_or_json(Verb::IPC_SUBSCRIBE, Scope::name(session_id)).map_err(|v| v.to_string())?;
     let dir = session_queue_dir(session_id);
@@ -291,7 +291,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_clear(args: &[String]) -> Result<Value, String> {
-    let session_id = args.first().ok_or("usage: cos ipc clear <session-id>")?;
+    let session_id = args.first().ok_or("usage: yu ipc clear <session-id>")?;
     validate_identifier("session id", session_id)?;
     require_or_json(Verb::IPC_PUBLISH, Scope::name(session_id)).map_err(|v| v.to_string())?;
     let dir = session_queue_dir(session_id);
@@ -384,7 +384,7 @@ fn cmd_lock(args: &[String]) -> Result<Value, String> {
 
     let resource = positional
         .first()
-        .ok_or("usage: cos ipc lock <resource-name> [--holder <session-id>] [--timeout N]")?;
+        .ok_or("usage: yu ipc lock <resource-name> [--holder <session-id>] [--timeout N]")?;
     validate_identifier("lock resource", resource)?;
     require_or_json(Verb::IPC_INVOKE, Scope::name(resource)).map_err(|v| v.to_string())?;
     let holder = holder.unwrap_or_else(|| format!("pid-{}", std::process::id()));
@@ -506,7 +506,7 @@ fn cmd_unlock(args: &[String]) -> Result<Value, String> {
 
     let resource = positional
         .first()
-        .ok_or("usage: cos ipc unlock <resource-name> [--holder <session-id>]")?;
+        .ok_or("usage: yu ipc unlock <resource-name> [--holder <session-id>]")?;
     validate_identifier("lock resource", resource)?;
     require_or_json(Verb::IPC_INVOKE, Scope::name(resource)).map_err(|v| v.to_string())?;
 
@@ -629,7 +629,7 @@ fn cmd_barrier(args: &[String]) -> Result<Value, String> {
 
     let name = positional
         .first()
-        .ok_or("usage: cos ipc barrier <name> --expect <N> --session <session-id> [--timeout T]")?;
+        .ok_or("usage: yu ipc barrier <name> --expect <N> --session <session-id> [--timeout T]")?;
     let expect = expect.ok_or("--expect <N> is required for barrier")?;
     let session = session.ok_or("--session <session-id> is required for barrier")?;
     validate_identifier("barrier name", name)?;
@@ -752,7 +752,7 @@ fn sorted_pipe_messages(dir: &PathBuf) -> Vec<(String, PathBuf)> {
 fn cmd_pipe(args: &[String]) -> Result<Value, String> {
     let subcmd = args
         .first()
-        .ok_or("usage: cos ipc pipe <create|publish|subscribe|list|destroy> ...")?;
+        .ok_or("usage: yu ipc pipe <create|publish|subscribe|list|destroy> ...")?;
     let rest: Vec<String> = args[1..].to_vec();
     match subcmd.as_str() {
         "create" => pipe_create(&rest),
@@ -787,7 +787,7 @@ fn pipe_create(args: &[String]) -> Result<Value, String> {
 
     let name = positional
         .first()
-        .ok_or("usage: cos ipc pipe create <name> [--buffer-size N]")?;
+        .ok_or("usage: yu ipc pipe create <name> [--buffer-size N]")?;
     validate_identifier("pipe name", name)?;
     require_or_json(Verb::IPC_PUBLISH, Scope::name(name)).map_err(|v| v.to_string())?;
 
@@ -833,7 +833,7 @@ fn pipe_publish(args: &[String]) -> Result<Value, String> {
     }
 
     if positional.len() < 2 {
-        return Err("usage: cos ipc pipe publish <name> <data> [--from <session-id>]".into());
+        return Err("usage: yu ipc pipe publish <name> <data> [--from <session-id>]".into());
     }
 
     let name = &positional[0];
@@ -937,7 +937,7 @@ fn pipe_subscribe(args: &[String]) -> Result<Value, String> {
     }
 
     let name = positional.first().ok_or(
-        "usage: cos ipc pipe subscribe <name> [--since <id>] [--limit N] [--follow --timeout T]",
+        "usage: yu ipc pipe subscribe <name> [--since <id>] [--limit N] [--follow --timeout T]",
     )?;
     validate_identifier("pipe name", name)?;
     require_or_json(Verb::IPC_SUBSCRIBE, Scope::name(name)).map_err(|v| v.to_string())?;
@@ -1096,7 +1096,7 @@ fn pipe_list(_args: &[String]) -> Result<Value, String> {
 }
 
 fn pipe_destroy(args: &[String]) -> Result<Value, String> {
-    let name = args.first().ok_or("usage: cos ipc pipe destroy <name>")?;
+    let name = args.first().ok_or("usage: yu ipc pipe destroy <name>")?;
     validate_identifier("pipe name", name)?;
     require_or_json(Verb::IPC_PUBLISH, Scope::name(name)).map_err(|v| v.to_string())?;
 

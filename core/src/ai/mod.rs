@@ -29,14 +29,14 @@
 //!   7. Audit — every accepted and denied call is logged.
 //!
 //! Apps **never** talk to providers directly. The frontend desktop
-//! talks to apps; apps shell out to `cos ai chat --app <id>`; the
+//! talks to apps; apps shell out to `yu ai chat --app <id>`; the
 //! dispatcher in [`chat`] then calls into [`gate`] after every gate
 //! above has cleared.
 //!
 //! ## What this module does NOT do
 //!
-//! - It does not host the per-turn agent loop. `cos agent ask` and
-//!   the REPL form of `cos agent chat` keep their own kernel-only
+//! - It does not host the per-turn agent loop. `yu agent ask` and
+//!   the REPL form of `yu agent chat` keep their own kernel-only
 //!   loops with full tool/memory wiring — those belong to the
 //!   *kernel Agent product* ([`crate::agent`]), not to Apps.
 //! - It does not classify or detect prompt injection beyond routing
@@ -45,15 +45,15 @@
 //!
 //! ## CLI surface
 //!
-//! - `cos ai chat --app <id> …` — one-shot App-gated call. The only
+//! - `yu ai chat --app <id> …` — one-shot App-gated call. The only
 //!   sanctioned entry point for installed Apps to reach a model.
-//! - `cos agent budget …` — per-App budget ledger (lives under
-//!   `cos agent` for historical reasons; will likely move under
-//!   `cos ai budget` in a future cleanup).
-//! - `cos app consent …` — per-App user consent, lives under
-//!   `cos app` because it is a per-App user decision.
+//! - `yu agent budget …` — per-App budget ledger (lives under
+//!   `yu agent` for historical reasons; will likely move under
+//!   `yu ai budget` in a future cleanup).
+//! - `yu app consent …` — per-App user consent, lives under
+//!   `yu app` because it is a per-App user decision.
 //!
-//! `cos agent chat` and `cos agent ask` are *not* App entry points.
+//! `yu agent chat` and `yu agent ask` are *not* App entry points.
 //! They are the kernel Agent's own surface and Apps must not invoke
 //! them.
 
@@ -91,7 +91,7 @@ pub(super) fn permission_denied(
     wire_error("PERMISSION_DENIED", message, detail)
 }
 
-/// Dispatcher for `cos ai <command>`. Exposes:
+/// Dispatcher for `yu ai <command>`. Exposes:
 ///   * `chat` — single-shot, gated, modality-derived LLM call.
 ///   * `tool` — single Tool invocation from the App-facing catalog
 ///     (see [`tools::CATALOG`]).
@@ -104,15 +104,15 @@ pub fn run(command: &str, args: &[String]) -> Result<serde_json::Value, String> 
         "tools" => tools_list_cmd(args),
         other => Err(wire_error(
             "UNKNOWN_VERB",
-            format!("unknown command: cos ai {other}. try: chat | tool | tools"),
+            format!("unknown command: yu ai {other}. try: chat | tool | tools"),
             None,
         )),
     }
 }
 
-/// Implements `cos ai tool <name> --app <id> [--args <json>|--args-file <p>]`.
+/// Implements `yu ai tool <name> --app <id> [--args <json>|--args-file <p>]`.
 ///
-/// Identity is enforced via the same helper `cos ai chat` uses:
+/// Identity is enforced via the same helper `yu ai chat` uses:
 /// env claim, registered `app_id`, and nearest App ancestry must agree.
 fn tool_cmd(args: &[String]) -> Result<serde_json::Value, String> {
     let mut name: Option<String> = None;
@@ -141,14 +141,14 @@ fn tool_cmd(args: &[String]) -> Result<serde_json::Value, String> {
             }
             other => {
                 return Err(invalid_args(format!(
-                    "unknown flag for `cos ai tool`: {other}"
+                    "unknown flag for `yu ai tool`: {other}"
                 )));
             }
         }
     }
 
     let name = name.ok_or_else(|| {
-        invalid_args("missing tool name. usage: cos ai tool <name> --app <id> --args <json>")
+        invalid_args("missing tool name. usage: yu ai tool <name> --app <id> --args <json>")
     })?;
     let app = app.ok_or_else(|| invalid_args("--app is required"))?;
 
@@ -168,11 +168,11 @@ fn tool_cmd(args: &[String]) -> Result<serde_json::Value, String> {
         .map_err(|error| wire_error("INTERNAL_ERROR", error.to_string(), None))
 }
 
-/// Implements `cos ai tools` — print the App-facing Tool catalog.
+/// Implements `yu ai tools` — print the App-facing Tool catalog.
 fn tools_list_cmd(args: &[String]) -> Result<serde_json::Value, String> {
     if !args.is_empty() {
         return Err(invalid_args(format!(
-            "`cos ai tools` takes no arguments; got: {}",
+            "`yu ai tools` takes no arguments; got: {}",
             args.join(" ")
         )));
     }

@@ -94,7 +94,7 @@ def test_invalid_transport_arguments_do_not_launch(monkeypatch, change):
         pytest.fail("invalid input launched a process")
 
     monkeypatch.setattr(kernel.subprocess, "Popen", forbidden)
-    arguments = dict(binary="/usr/local/bin/cos", args=[], data=b"{}", deadline_unix_ms=until())
+    arguments = dict(binary="/usr/local/bin/yu", args=[], data=b"{}", deadline_unix_ms=until())
     arguments.update(change)
     with pytest.raises(ValueError):
         kernel.call_json_with_stdin_binary(**arguments)
@@ -109,8 +109,8 @@ def test_expired_or_cancelled_request_never_launches(monkeypatch):
 
     monkeypatch.setattr(kernel.subprocess, "Popen", forbidden)
     with pytest.raises(kernel.KernelUnavailable):
-        kernel.call_json_with_stdin_binary("/usr/local/bin/cos", [], b"{}", deadline_unix_ms=1)
+        kernel.call_json_with_stdin_binary("/usr/local/bin/yu", [], b"{}", deadline_unix_ms=1)
     with pytest.raises(CallCancelled):
         kernel.call_json_with_stdin_binary(
-            "/usr/local/bin/cos", [], b"{}", deadline_unix_ms=until(), check_cancelled=cancelled,
+            "/usr/local/bin/yu", [], b"{}", deadline_unix_ms=until(), check_cancelled=cancelled,
         )

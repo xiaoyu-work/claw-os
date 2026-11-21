@@ -270,7 +270,7 @@ export function ApprovalViews({ taskId, recent = false, compact = false }: {
       {bundle.system_reviews.map((review) => <SystemApprovalCard key={review.id} review={review}
         onChanged={refresh} readOnly={recent || !!taskId} />)}
       {bundle.app_reviews.map((review) => <Card key={review.id} className="p-3 text-xs">
-        {review.label} requires the OS App-review presenter. <code>cos review show {review.id}</code>
+        {review.label} requires the OS App-review presenter. <code>yu review show {review.id}</code>
       </Card>)}
       {!compact && bundle.reviews.length === 0 && bundle.app_reviews.length === 0 && bundle.system_reviews.length === 0 && <p className="text-sm text-muted-foreground">No approval records in this view.</p>}
     </div>

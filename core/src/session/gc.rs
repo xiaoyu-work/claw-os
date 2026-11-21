@@ -35,7 +35,7 @@
 //!   first archive boundary is left to system tooling (logrotate,
 //!   cron, manual cleanup).
 //! - It does not read archives back — that's a separate concern that
-//!   lands when a UI surface needs `cos agent show <archived-sid>`.
+//!   lands when a UI surface needs `yu agent show <archived-sid>`.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};

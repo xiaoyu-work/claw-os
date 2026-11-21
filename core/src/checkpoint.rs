@@ -140,7 +140,7 @@ fn next_checkpoint_id(checkpoints_dir: &Path) -> String {
 /// Acquire an exclusive create-lock for `checkpoints_dir`. Pure RAII:
 /// the returned guard removes the sentinel on drop.
 ///
-/// Without this, two parallel `cos checkpoint create` invocations
+/// Without this, two parallel `yu checkpoint create` invocations
 /// will both call `next_checkpoint_id` (TOCTOU), pick the same id,
 /// and one of them will silently overwrite the other's freshly
 /// created `meta.json` and layer.
@@ -412,7 +412,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos checkpoint create [description]
+// yu checkpoint create [description]
 // ---------------------------------------------------------------------------
 
 fn cmd_create(args: &[String]) -> Result<Value, String> {
@@ -526,7 +526,7 @@ fn cmd_create(args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos checkpoint diff
+// yu checkpoint diff
 // ---------------------------------------------------------------------------
 
 fn cmd_diff(_args: &[String]) -> Result<Value, String> {
@@ -572,7 +572,7 @@ fn cmd_diff(_args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos checkpoint rollback [checkpoint-id]
+// yu checkpoint rollback [checkpoint-id]
 // ---------------------------------------------------------------------------
 
 fn cmd_rollback(args: &[String]) -> Result<Value, String> {
@@ -584,7 +584,7 @@ fn cmd_rollback(args: &[String]) -> Result<Value, String> {
 
     // VALIDATE FIRST. The previous order — wipe upper, *then* look up
     // the checkpoint — meant a user who typoed the checkpoint id
-    // (`cos checkpoint rollback abc` when there is no `abc-…`)
+    // (`yu checkpoint rollback abc` when there is no `abc-…`)
     // destroyed all their uncommitted changes in `upper/` and then
     // got an error. Hoist the lookup so a typo is rejected before
     // anything mutates the filesystem. With no argument the caller
@@ -775,7 +775,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos checkpoint list
+// yu checkpoint list
 // ---------------------------------------------------------------------------
 
 fn cmd_list(_args: &[String]) -> Result<Value, String> {
@@ -834,7 +834,7 @@ fn cmd_list(_args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos checkpoint status
+// yu checkpoint status
 // ---------------------------------------------------------------------------
 
 fn cmd_status(_args: &[String]) -> Result<Value, String> {
@@ -970,13 +970,13 @@ fn format_bytes(bytes: u64) -> String {
 
 /// Set the filesystem quota for the upper layer.
 ///
-/// Usage: cos checkpoint quota-set <size>  (e.g. "2G", "512M")
+/// Usage: yu checkpoint quota-set <size>  (e.g. "2G", "512M")
 fn cmd_quota_set(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::SYS_KERNEL, Scope::wild()).map_err(|v| v.to_string())?;
 
     let size_str = args
         .first()
-        .ok_or("usage: cos checkpoint quota-set <size> (e.g. 2G, 512M)")?;
+        .ok_or("usage: yu checkpoint quota-set <size> (e.g. 2G, 512M)")?;
     let limit_bytes = parse_size(size_str)?;
 
     let cfg = QuotaConfig { limit_bytes };
@@ -991,7 +991,7 @@ fn cmd_quota_set(args: &[String]) -> Result<Value, String> {
 
 /// Show current quota status.
 ///
-/// Usage: cos checkpoint quota-status
+/// Usage: yu checkpoint quota-status
 fn cmd_quota_status(_args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
@@ -1021,7 +1021,7 @@ fn cmd_quota_status(_args: &[String]) -> Result<Value, String> {
             "quota_enabled": false,
             "used_bytes": used,
             "used_human": format_bytes(used),
-            "hint": "Set a quota with: cos checkpoint quota-set <size>",
+            "hint": "Set a quota with: yu checkpoint quota-set <size>",
         }))
     }
 }
@@ -1059,7 +1059,7 @@ fn namespace_base_dir() -> PathBuf {
 
 /// List all overlay namespaces.
 ///
-/// Usage: cos checkpoint namespaces [--create <name>] [--destroy <name>] [--status <name>]
+/// Usage: yu checkpoint namespaces [--create <name>] [--destroy <name>] [--status <name>]
 fn cmd_namespaces(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
@@ -1081,7 +1081,7 @@ fn list_namespaces() -> Result<Value, String> {
         return Ok(json!({
             "namespaces": [],
             "count": 0,
-            "hint": "Create a namespace: cos checkpoint namespaces --create <name>",
+            "hint": "Create a namespace: yu checkpoint namespaces --create <name>",
         }));
     }
 

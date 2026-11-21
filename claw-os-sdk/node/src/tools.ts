@@ -2,7 +2,7 @@
 //
 // Apps that want to fulfil a model-proposed tool call (returned in
 // `ai.AiResponse.toolCalls` after `ai.chat(..., { tools: [...] })`)
-// shell out through this module to `cos ai tool <name> --app <id>
+// shell out through this module to `yu ai tool <name> --app <id>
 // --args <json>`. The kernel resolves the name against the catalog,
 // derives the caps verb + scope, runs caps::require under the app's own
 // grants, executes the implementation, and writes an audit row.
@@ -27,7 +27,7 @@ import {
 
 /** Base class for every error this module raises. */
 export class ToolError extends BridgeError {}
-/** The `cos` binary could not be invoked or returned garbage. */
+/** The `yu` binary could not be invoked or returned garbage. */
 export class ToolUnavailable extends ToolError {}
 
 /** A gate (capability / unknown tool / args shape) refused the call.
@@ -50,7 +50,7 @@ export interface ToolResult {
   raw: Record<string, WireJsonValue>;
 }
 
-/** One row from `cos ai tools`. */
+/** One row from `yu ai tools`. */
 export interface CatalogEntry {
   name: string;
   summary: string;
@@ -85,7 +85,7 @@ export function call(
   const argv = ["ai", "tool", name, "--app", app, "--args", stringifyWireJson(args)];
   let data: unknown;
   try {
-    data = cosCallJson(`cos ai tool ${name}`, argv);
+    data = cosCallJson(`yu ai tool ${name}`, argv);
   } catch (e) {
     if (e instanceof Denied) throw new ToolDenied(e.payload);
     if (e instanceof Unavailable) throw new ToolUnavailable(e.message);
@@ -110,7 +110,7 @@ export function call(
 }
 
 /**
- * Return the live tool catalog as exposed by `cos ai tools`.
+ * Return the live tool catalog as exposed by `yu ai tools`.
  *
  * Apps shouldn't hard-code tool names without consulting this list; the
  * catalog evolves and a tool can be deprecated or renamed between
@@ -119,7 +119,7 @@ export function call(
 export function catalog(): CatalogEntry[] {
   let data: unknown;
   try {
-    data = cosCallJson("cos ai tools", ["ai", "tools"]);
+    data = cosCallJson("yu ai tools", ["ai", "tools"]);
   } catch (e) {
     if (e instanceof Denied) throw new ToolDenied(e.payload);
     if (e instanceof Unavailable) throw new ToolUnavailable(e.message);

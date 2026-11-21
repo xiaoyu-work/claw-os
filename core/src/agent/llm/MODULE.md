@@ -48,7 +48,7 @@ compatibility boundaries. Core composition uses the separately named
 ## Tests
 
 ```bash
-cargo test -p cos agent::llm:: -- --test-threads=1
+cargo test -p yu agent::llm:: -- --test-threads=1
 ```
 
 Provider work should usually target its provider tests, accumulator tests,

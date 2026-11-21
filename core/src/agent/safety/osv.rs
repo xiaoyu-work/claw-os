@@ -11,8 +11,8 @@
 //!    JSON response into `OsvVulnerability` records. Network-bound,
 //!    exercised by the CLI but skipped in cfg(test).
 //!
-//! The CLI wraps this as `cos agent osv parse <file>` (offline) and
-//! `cos agent osv check <file>` (offline parse + online query).
+//! The CLI wraps this as `yu agent osv parse <file>` (offline) and
+//! `yu agent osv check <file>` (offline parse + online query).
 //!
 //! [osv.dev]: https://osv.dev/docs/
 

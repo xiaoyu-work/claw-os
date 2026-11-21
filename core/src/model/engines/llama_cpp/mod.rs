@@ -10,10 +10,10 @@
 //!                                  /libllama.dylib       (macOS)
 //! ```
 //!
-//! The user controls availability with `cos engine update llama-cpp`,
-//! `cos engine activate <ver>`, etc. — see `core/src/engine_pkg/`.
+//! The user controls availability with `yu engine update llama-cpp`,
+//! `yu engine activate <ver>`, etc. — see `core/src/engine_pkg/`.
 //!
-//! Three failure modes are distinguished so `cos agent status` can give
+//! Three failure modes are distinguished so `yu agent status` can give
 //! actionable hints:
 //!
 //!   - [`EngineError::NotInstalled`]: no active version, or the active
@@ -24,7 +24,7 @@
 //!   - [`EngineError::InvalidModelPath`]: GGUF file argument is bad.
 //!
 //! [`is_installed`] reads only the registry + a stat — cheap enough to
-//! call from `cos agent status`. Actual loading happens lazily on the
+//! call from `yu agent status`. Actual loading happens lazily on the
 //! first `LlamaEngine::new()` call and is cached process-wide.
 //!
 //! Concrete inference (tokenize/decode loop) lands in Phase 0.5b once a
@@ -43,7 +43,7 @@ pub mod runtime;
 /// Static identifier — used by the Provider trait and `engines_linked()`.
 /// Note: this is the agent-side / FFI-side stem (`llama_cpp`), not the
 /// engine package manager's kebab-case ID (`llama-cpp`). Both are kept
-/// stable so existing `cos agent status` and registry consumers don't
+/// stable so existing `yu agent status` and registry consumers don't
 /// have to change.
 pub const ENGINE_NAME: &str = "llama_cpp";
 
@@ -198,7 +198,7 @@ impl LlamaEngine {
     /// Engine version derived from the **loaded** library path, NOT from
     /// the engine_pkg registry. Matters for audit-trail correctness: the
     /// process-wide `LlamaRuntime` cache may hold the previously-active
-    /// version even after `cos engine activate <new>` ran (the user
+    /// version even after `yu engine activate <new>` ran (the user
     /// must restart the daemon for the new version to take effect).
     /// The registry would falsely report the new version; this returns
     /// what's actually executing.

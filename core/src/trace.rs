@@ -1,6 +1,6 @@
 /// Execution tracing — tree-structured observability for agent tasks.
 ///
-/// Traces are trees: trace → spans → operations. Every `cos` command
+/// Traces are trees: trace → spans → operations. Every `yu` command
 /// automatically records its trace/span context from environment
 /// variables COS_TRACE_ID and COS_SPAN_ID.
 ///
@@ -60,14 +60,14 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos trace start <trace-id>
+// yu trace start <trace-id>
 // ---------------------------------------------------------------------------
 
 fn cmd_start(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::DATA_LOG_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
-        return Err("usage: cos trace start <trace-id>".into());
+        return Err("usage: yu trace start <trace-id>".into());
     }
     let trace_id = &args[0];
 
@@ -106,14 +106,14 @@ fn cmd_start(args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos trace end <trace-id> [--status completed|failed]
+// yu trace end <trace-id> [--status completed|failed]
 // ---------------------------------------------------------------------------
 
 fn cmd_end(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::DATA_LOG_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
-        return Err("usage: cos trace end <trace-id> [--status completed|failed]".into());
+        return Err("usage: yu trace end <trace-id> [--status completed|failed]".into());
     }
     let trace_id = &args[0];
 
@@ -168,14 +168,14 @@ fn cmd_end(args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos trace span <span-name>
+// yu trace span <span-name>
 // ---------------------------------------------------------------------------
 
 fn cmd_span(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::DATA_LOG_WRITE, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
-        return Err("usage: cos trace span <span-name>".into());
+        return Err("usage: yu trace span <span-name>".into());
     }
     let span_name = &args[0];
 
@@ -227,7 +227,7 @@ fn cmd_span(args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos trace span-end [--name <span-name>]
+// yu trace span-end [--name <span-name>]
 // ---------------------------------------------------------------------------
 
 fn cmd_span_end(args: &[String]) -> Result<Value, String> {
@@ -314,14 +314,14 @@ fn cmd_span_end(args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos trace show <trace-id>
+// yu trace show <trace-id>
 // ---------------------------------------------------------------------------
 
 fn cmd_show(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::DATA_LOG_READ, Scope::wild()).map_err(|v| v.to_string())?;
 
     if args.is_empty() {
-        return Err("usage: cos trace show <trace-id>".into());
+        return Err("usage: yu trace show <trace-id>".into());
     }
     let trace_id = &args[0];
 
@@ -468,7 +468,7 @@ fn cmd_show(args: &[String]) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------------------
-// cos trace list [--status active|completed|failed] [--limit N]
+// yu trace list [--status active|completed|failed] [--limit N]
 // ---------------------------------------------------------------------------
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {

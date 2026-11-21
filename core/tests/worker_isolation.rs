@@ -1061,7 +1061,7 @@ fn app_memory_is_brokered_to_the_owner_store_and_scoped_to_its_source() {
     let package = workspace();
     let owner_data = workspace();
     std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
-    std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_cos"));
+    std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_yu"));
     // The launcher resolves the owner's agent store from its own
     // environment; the worker never sees this directory.
     std::env::set_var("COS_DATA_DIR", owner_data.path());
@@ -1523,7 +1523,7 @@ fn fixture_services(python: &Path, app_id: &str, caps: &CapSet) -> PathBuf {
         .collect::<Vec<_>>();
     let mut script = format!(
         "#!/usr/bin/python3\nCOS = {}\nAPP = {}\nCREDENTIALS = {}\n",
-        serde_json::to_string(env!("CARGO_BIN_EXE_cos")).unwrap(),
+        serde_json::to_string(env!("CARGO_BIN_EXE_yu")).unwrap(),
         serde_json::to_string(app_id).unwrap(),
         serde_json::to_string(&names).unwrap(),
     );
@@ -1691,7 +1691,7 @@ async fn run_shipped_app(
     });
 
     std::env::set_var("COS_SDK_PYTHON_DIR", &python);
-    std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_cos"));
+    std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_yu"));
     let metadata = std::fs::metadata(&directory).unwrap();
     let pinned_entries = [&entry, &manifest_path]
         .into_iter()

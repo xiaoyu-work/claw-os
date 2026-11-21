@@ -119,7 +119,7 @@ static int gui_entry(int count, char **arguments) {
                 && strcmp(arguments[7], "/run/display-home/Pictures") == 0));
     if (getuid() != 62050 || geteuid() != 62050 || getgid() != 62050
         || (count != 7 && !editor && !files && !terminal && !calendar && !store && !widgets && !clipboard && !launcher && !settings && !capture && !notifications && !player)
-        || strcmp(arguments[0], "/usr/local/bin/cos") != 0)
+        || strcmp(arguments[0], "/usr/local/bin/yu") != 0)
         return 64;
     const char *runtime = getenv("XDG_RUNTIME_DIR");
     const char *display = getenv("WAYLAND_DISPLAY");
@@ -254,24 +254,24 @@ static int gui_fixture(void) {
                     if (scenario >= 34 && scenario <= 39) {
                         if (scenario == 34)
                             execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                                   "app", "cosmic-screenshot", "--gui", (char *)NULL);
                         else if (scenario == 35)
                             execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                                   "app", "cosmic-screenshot", "--gui", "--modal=false", (char *)NULL);
                         else if (scenario == 39)
                             execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                                   "app", "cosmic-screenshot", "--gui", "--interactive=false",
                                   "--notify=false", "--save-dir", "/run/display-home/Pictures", (char *)NULL);
                         else if (scenario == 37)
                             execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                                   "app", "cosmic-screenshot", "--gui", "--modal=false", "--notify=false", (char *)NULL);
                         else
                             execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                                   "app", "cosmic-screenshot", "--gui", "--notify=false", (char *)NULL);
                         _exit(123);
                     }
@@ -279,13 +279,13 @@ static int gui_fixture(void) {
                         /* The original video widget requires its WGPU primitive. */
                         if (setenv("ICED_BACKEND", "wgpu", 1) != 0) _exit(122);
                         execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                               "app", "cosmic-player", "--gui", "/run/display-home/native-player.webm", (char *)NULL);
                         _exit(123);
                     }
                     if (scenario == 41) {
                         execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                               "app", "cosmic-player", "--gui", "--thumbnail",
                               "/run/display-home/native-player-thumbnail.png", "--size", "160x90",
                               "/run/display-home/native-player.webm", (char *)NULL);
@@ -294,13 +294,13 @@ static int gui_fixture(void) {
                     if (scenario == 42 || scenario == 43) {
                         if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0) _exit(122);
                         execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                               "app", "cosmic-notifications", "--gui", (char *)NULL);
                         _exit(123);
                     }
                     if (scenario >= 26) {
                         execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                               "app", scenario == 26 ? "cosmic-files" :
                                      scenario == 27 ? "cosmic-term" :
                                      scenario == 28 ? "panel-calendar" :
@@ -312,13 +312,13 @@ static int gui_fixture(void) {
                         _exit(123);
                     }
                     execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                          "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                          "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu",
                           "app", "cosmic-edit", "--gui", "/run/display-home/native-editor-startup.txt",
                           (char *)NULL);
                     _exit(123);
                 }
                 execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
-                      "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos", "app",
+                      "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/yu", "app",
                       scenario == 0 ? "gui-boundary-zero" : "gui-boundary-test",
                       scenario == 1 || scenario == 4 || (scenario >= 6 && scenario <= 10) ? "--gui:read" :
                       scenario == 2 ? "--gui:write" :

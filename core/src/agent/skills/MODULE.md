@@ -40,5 +40,5 @@ into the model.
 ## Tests
 
 ```bash
-cargo test -p cos agent::skills:: -- --test-threads=1
+cargo test -p yu agent::skills:: -- --test-threads=1
 ```

@@ -51,7 +51,7 @@ def main():
         helper_dir = root / "libexec"
         binary_dir.mkdir()
         helper_dir.mkdir()
-        shutil.copy2(arguments.kernel, binary_dir / "cos")
+        shutil.copy2(arguments.kernel, binary_dir / "yu")
         shutil.copy2(arguments.provider, helper_dir / "claw-os-applet-provider")
         mount("--bind", binary_dir, "/usr/local/bin")
         mount("--bind", helper_dir, "/usr/libexec")

@@ -116,7 +116,7 @@ pub(crate) fn test_signing_key() -> &'static crate::provenance::sign::SigningKey
 /// Production refuses a domain that has trust files but no recorded
 /// state — otherwise deleting one file would be the way to reinstate a
 /// revoked key — so a fixture that writes trust files has to record it
-/// too, exactly as every `cos provenance trust` command does.
+/// too, exactly as every `yu provenance trust` command does.
 pub(crate) fn record_trust_state(roots: &[crate::provenance::trust::TrustRootSpec]) {
     use std::collections::BTreeMap;
 
@@ -414,7 +414,7 @@ pub(crate) fn sign_test_package_with_entrypoints(
 ///
 /// Writes it into the same root `install_test_trust` created and
 /// re-records the domain's generation, exactly as
-/// `cos provenance trust revoke` does.
+/// `yu provenance trust revoke` does.
 #[allow(dead_code)]
 pub(crate) fn revoke_test_package(content_digest: &str) {
     #[cfg(unix)]

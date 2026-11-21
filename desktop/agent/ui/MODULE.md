@@ -38,7 +38,7 @@ and stale stream-event handling.
 
 The standalone sidebar exposes Activities without changing the private
 chat/voice overlay. Activity requests go through the same owner-scoped broker
-service used by `cos activity`, via the bridge's versioned presentation DTOs.
+service used by `yu activity`, via the bridge's versioned presentation DTOs.
 Activity work uses durable `activity.run`, never the cancel-on-disconnect chat
 stream. Job results cannot change goal state locally; explicit completion
 requires the user's confirmation note. Pending approvals link to associated

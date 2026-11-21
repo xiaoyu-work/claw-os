@@ -318,11 +318,11 @@ fn append_with_rotation(
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "file" => {
-            require_watch_path_arg(args, 0, "usage: cos watch file <path> [--timeout N]")?;
+            require_watch_path_arg(args, 0, "usage: yu watch file <path> [--timeout N]")?;
             cmd_watch_file(args)
         }
         "dir" => {
-            require_watch_path_arg(args, 0, "usage: cos watch dir <path> [--timeout N]")?;
+            require_watch_path_arg(args, 0, "usage: yu watch dir <path> [--timeout N]")?;
             cmd_watch_dir(args)
         }
         "proc" => cmd_watch_proc(args),
@@ -371,7 +371,7 @@ fn authorize_watch_multi(args: &[String]) -> Result<(), String> {
 fn authorize_watch_on(args: &[String]) -> Result<(), String> {
     let event_type = args
         .first()
-        .ok_or_else(|| "usage: cos watch on <event-type> [--timeout N] [...]".to_string())?;
+        .ok_or_else(|| "usage: yu watch on <event-type> [--timeout N] [...]".to_string())?;
     let rest = &args[1..];
     match event_type.as_str() {
         "fs.change" => {
@@ -435,12 +435,12 @@ fn stat_file(path: &PathBuf) -> FileStat {
 
 /// Watch a single file for changes.
 ///
-/// Usage: cos watch file <path> [--timeout N]
+/// Usage: yu watch file <path> [--timeout N]
 ///
 /// Returns when the file is created, modified, or deleted.
 fn cmd_watch_file(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos watch file <path> [--timeout N]".into());
+        return Err("usage: yu watch file <path> [--timeout N]".into());
     }
 
     let path = PathBuf::from(&args[0]);
@@ -588,12 +588,12 @@ fn watch_file_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String
 
 /// Watch a directory for changes (new files, deleted files, modified files).
 ///
-/// Usage: cos watch dir <path> [--timeout N]
+/// Usage: yu watch dir <path> [--timeout N]
 ///
 /// Returns when any file in the directory is created, modified, or deleted.
 fn cmd_watch_dir(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos watch dir <path> [--timeout N]".into());
+        return Err("usage: yu watch dir <path> [--timeout N]".into());
     }
 
     let path = PathBuf::from(&args[0]);
@@ -734,12 +734,12 @@ fn watch_dir_inotify(path: &PathBuf, timeout_secs: u64) -> Result<Value, String>
 
 /// Watch a process session for exit.
 ///
-/// Usage: cos watch proc <session-id> [--timeout N]
+/// Usage: yu watch proc <session-id> [--timeout N]
 ///
-/// Delegates to `cos proc wait` but wrapped in the watch interface.
+/// Delegates to `yu proc wait` but wrapped in the watch interface.
 fn cmd_watch_proc(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos watch proc <session-id> [--timeout N]".into());
+        return Err("usage: yu watch proc <session-id> [--timeout N]".into());
     }
 
     // Delegate to proc wait
@@ -752,7 +752,7 @@ fn cmd_watch_proc(args: &[String]) -> Result<Value, String> {
 
 /// Watch multiple sources simultaneously — files, dirs, procs, services.
 ///
-/// Usage: cos watch multi [--file PATH]... [--dir PATH]... [--proc SESSION]...
+/// Usage: yu watch multi [--file PATH]... [--dir PATH]... [--proc SESSION]...
 ///        [--service NAME]... [--timeout N]
 ///
 /// Returns when ANY source fires an event.
@@ -765,7 +765,7 @@ fn cmd_watch_multi(args: &[String]) -> Result<Value, String> {
 
     if files.is_empty() && dirs.is_empty() && procs.is_empty() && services.is_empty() {
         return Err(
-            "usage: cos watch multi --file PATH [--dir PATH] [--proc SESSION] \
+            "usage: yu watch multi --file PATH [--dir PATH] [--proc SESSION] \
              [--service NAME] [--timeout N]"
                 .into(),
         );
@@ -992,7 +992,7 @@ fn watch_multi_poll(
 
 /// View past watch events from the JSONL history log.
 ///
-/// Usage: cos watch history [--limit N] [--since TIMESTAMP] [--source TYPE]
+/// Usage: yu watch history [--limit N] [--since TIMESTAMP] [--source TYPE]
 fn cmd_watch_history(args: &[String]) -> Result<Value, String> {
     let limit: usize = parse_flag(args, "--limit")
         .and_then(|v| v.parse().ok())
@@ -1085,7 +1085,7 @@ fn parse_flag<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 
 /// Unified OS event watcher — subscribe to any OS-level event.
 ///
-/// Usage: cos watch on <event-type> [--timeout N] [event-specific args]
+/// Usage: yu watch on <event-type> [--timeout N] [event-specific args]
 ///
 /// Event types:
 ///   proc.exit --session <id>         — wait for a process to exit
@@ -1097,7 +1097,7 @@ fn parse_flag<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 ///   credential.expired --name <name> — wait for a credential to expire
 fn cmd_watch_on(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos watch on <event-type> [--timeout N] [...]\n\
+        return Err("usage: yu watch on <event-type> [--timeout N] [...]\n\
              event types: proc.exit, fs.change, service.health-fail, checkpoint.created, \
              quota.exceeded, ipc.message, credential.expired"
             .into());
@@ -1286,7 +1286,7 @@ fn watch_quota_exceeded(timeout: u64) -> Result<Value, String> {
 
 /// Wait for a new IPC message to arrive for a session.
 ///
-/// Usage: cos watch on ipc.message --session <id> [--timeout N]
+/// Usage: yu watch on ipc.message --session <id> [--timeout N]
 ///
 /// Polls the IPC queue directory, returning when a new message appears.
 fn watch_ipc_message(args: &[String], timeout: u64) -> Result<Value, String> {
@@ -1348,7 +1348,7 @@ fn count_ipc_messages(dir: &PathBuf) -> usize {
 
 /// Wait for a credential to expire (cease to exist or become unloadable).
 ///
-/// Usage: cos watch on credential.expired --name <name> [--timeout N]
+/// Usage: yu watch on credential.expired --name <name> [--timeout N]
 ///
 /// Polls the credential store, returning when the named credential no longer
 /// exists or can no longer be loaded.

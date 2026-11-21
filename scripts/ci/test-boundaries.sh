@@ -64,7 +64,7 @@ app_apt() {
     local node_binary
     node_binary="$(readlink -f -- "$(command -v node)")"
     python3 -I -c 'import apt_pkg'
-    cargo build -p cos --bin cos --bin claw-app-runner --bin claw-app-apt-hook --bin claw-extension-host --locked
+    cargo build -p cos --bin yu --bin claw-app-runner --bin claw-app-apt-hook --bin claw-extension-host --locked
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/app-apt-tests.jsonl"
     local test_binary listing fixture
@@ -93,7 +93,7 @@ app_apt() {
     for fixture in "${fixtures[@]}"; do
         sudo timeout --kill-after=5 150 unshare --mount --pid --net --fork --mount-proc --kill-child=KILL \
             env COS_APP_APT_TEST_HOOK="$CARGO_TARGET_DIR/debug/claw-app-apt-hook" \
-                COS_APP_APT_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+                COS_APP_APT_TEST_COS="$CARGO_TARGET_DIR/debug/yu" \
                 COS_APP_APT_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
                 COS_APP_APT_TEST_HOST="$CARGO_TARGET_DIR/debug/claw-extension-host" \
                 COS_APP_APT_TEST_NODE="$node_binary" \
@@ -140,7 +140,7 @@ capture() {
 }
 
 app_bind() {
-    cargo build -p cos --bin cos --bin claw-app-runner --locked
+    cargo build -p cos --bin yu --bin claw-app-runner --locked
     sudo apt-get install -y --no-install-recommends acl
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/ordinary-custody-tests.jsonl"
@@ -170,7 +170,7 @@ app_bind() {
         grep -Fx -- "extension_host::spawn::task_data::tests::store_custody::$fixture: test" \
             <<< "$listing" > /dev/null
         sudo timeout 150 unshare --mount --net --fork \
-            env COS_ORDINARY_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+            env COS_ORDINARY_TEST_COS="$CARGO_TARGET_DIR/debug/yu" \
                 COS_ORDINARY_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
             bash --noprofile --norc -c '
                 set -euo pipefail
@@ -182,14 +182,14 @@ app_bind() {
 }
 
 calendar() {
-    cargo build -p cos --bin cos --locked
+    cargo build -p cos --bin yu --locked
     cargo build --manifest-path desktop/services/claw-applet-services/Cargo.toml \
         --features provider --bins --locked --target-dir "$RUNNER_TEMP/calendar-target"
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/calendar-tests.jsonl"
     test_binary="$(cos_test_binary "$RUNNER_TEMP/calendar-tests.jsonl")"
     sudo timeout 120 unshare --mount --net --fork \
-        env COS_CALENDAR_COS="$CARGO_TARGET_DIR/debug/cos" \
+        env COS_CALENDAR_COS="$CARGO_TARGET_DIR/debug/yu" \
             COS_CALENDAR_READER="$RUNNER_TEMP/calendar-target/debug/claw-calendar-reader" \
             COS_CALENDAR_PROVIDER="$RUNNER_TEMP/calendar-target/debug/claw-os-applet-provider" \
         bash --noprofile --norc -c '
@@ -322,7 +322,7 @@ display() {
     fi
     cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
-    cargo build -p cos --locked --bin cos --bin claw-display-host \
+    cargo build -p cos --locked --bin yu --bin claw-display-host \
         --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner \
         --bin claw-file-manager --bin claw-notification-panel
     if [[ "$selection" == native-capture ]]; then
@@ -413,7 +413,7 @@ display() {
             "$CARGO_TARGET_DIR/debug/claw-display-headless-fixture" \
             "$CARGO_TARGET_DIR/debug/libpam_claw_display.so" \
             "$CARGO_TARGET_DIR/pam-login-fixture" "$private" \
-            "$CARGO_TARGET_DIR/debug/cos" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
+            "$CARGO_TARGET_DIR/debug/yu" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
             "$CARGO_TARGET_DIR/debug/claw-app-runner" "$CARGO_TARGET_DIR/debug/claw-gui-probe" \
             "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/claw-file-manager" \
             "${selectors[@]}"
@@ -454,7 +454,7 @@ display() {
         persistent_service_data_survives_uid_and_host_replacement \
         service_data_refuses_aliases_foreign_owners_submounts_and_replaced_bindings; do
         sudo timeout 90 unshare --mount --net --fork \
-            env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+            env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/yu" \
             bash --noprofile --norc -c '
                 set -euo pipefail
                 mount --make-rprivate /
@@ -462,7 +462,7 @@ display() {
             ' private-app-data "$test_binary" "extension_host::spawn::app_data::tests::$data_case"
     done
     sudo timeout 100 unshare --mount --net --fork \
-        env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+        env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/yu" \
             COS_APP_DATA_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
         bash --noprofile --norc -c '
             set -euo pipefail
@@ -479,7 +479,7 @@ applets() {
     cargo test --manifest-path "$manifest" --lib --locked -- --test-threads=1
     cargo test --manifest-path "$manifest" --features provider --locked -- --test-threads=1
     cargo clippy --manifest-path "$manifest" --features provider --all-targets --locked -- -D warnings
-    cargo build -p cos --bin cos --locked
+    cargo build -p cos --bin yu --locked
     cargo test --manifest-path "$manifest" --features provider --test kernel_policy \
         --no-run --locked --message-format=json-render-diagnostics > "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl"
     test_binary="$(python3 - "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl" <<'PY'
@@ -493,7 +493,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
     )"
     sudo python3 desktop/services/claw-applet-services/test/support/run_kernel_fixture.py \
-        --kernel "$CARGO_TARGET_DIR/debug/cos" \
+        --kernel "$CARGO_TARGET_DIR/debug/yu" \
         --provider "$CARGO_TARGET_DIR/debug/claw-os-applet-provider" \
         --test-binary "$test_binary" \
         --work-dir "$CARGO_TARGET_DIR/applet-kernel-fixtures"

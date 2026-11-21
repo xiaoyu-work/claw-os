@@ -470,7 +470,7 @@ fn findings(coredumps: &[Value], events: &[Value]) -> Vec<Value> {
             "title": "Recent process crashes were recorded",
             "detail": format!("{} coredump record(s) were found.", coredumps.len()),
             "evidence": coredumps.iter().filter_map(|item| item["id"].as_str()).collect::<Vec<_>>(),
-            "recommendation": "Inspect the newest matching coredump with `cos app crash-doctor backtrace <id>` before restarting repeatedly.",
+            "recommendation": "Inspect the newest matching coredump with `yu app crash-doctor backtrace <id>` before restarting repeatedly.",
         }));
     }
 

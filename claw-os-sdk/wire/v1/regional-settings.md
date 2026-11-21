@@ -6,7 +6,7 @@ editor, or approval endpoint. The public SDK's explicit-binary controlled
 primitive transport invokes:
 
 ```text
-cos --wire=1 __regional-settings '{"action":"static_hostname","hostname":"workstation"}'
+yu --wire=1 __regional-settings '{"action":"static_hostname","hostname":"workstation"}'
 ```
 
 The CLI attaches `COS_SESSION`; callers cannot supply a session in that JSON.

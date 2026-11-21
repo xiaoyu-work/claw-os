@@ -78,7 +78,7 @@ fi
 cat > "${NM_MANIFEST}" <<EOF
 {
   "name": "com.clawos.browser",
-  "description": "Claw Agent — bridge between Chromium and the cos kernel",
+  "description": "Claw Agent — bridge between Chromium and the yu kernel",
   "path": "${HOST_LAUNCHER}",
   "type": "stdio",
   "allowed_origins": [${ALLOWED_ORIGINS}]
@@ -138,6 +138,6 @@ Next steps:
 
 To verify the bridge:
   ls -l \$XDG_RUNTIME_DIR/claw-browser.sock     # socket should exist
-  cos app browser-attached tabs.list            # approval-gated tab list
+  yu app browser-attached tabs.list            # approval-gated tab list
 
 MSG

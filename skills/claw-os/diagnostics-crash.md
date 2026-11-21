@@ -40,8 +40,8 @@ newest coredump belongs to the reported symptom.
 Use Crash Doctor when metadata indicates a matching dump:
 
 ```bash
-cos app crash-doctor diagnose 60 20
-cos app crash-doctor backtrace <boot-id>:<pid>:<timestamp-us>
+yu app crash-doctor diagnose 60 20
+yu app crash-doctor backtrace <boot-id>:<pid>:<timestamp-us>
 ```
 
 The backtrace command returns the recorded `coredumpctl info` stack and, when

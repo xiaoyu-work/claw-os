@@ -944,7 +944,7 @@ function EmptyState({ meta }: { meta: any }) {
   return (
     <div className="grid min-h-[40vh] place-items-center text-center">
       <div className="grid gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">cos agent</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">yu agent</h1>
         <p className="text-sm text-muted-foreground">
           {meta?.provider ? (
             <>

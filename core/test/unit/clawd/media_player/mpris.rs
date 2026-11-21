@@ -654,10 +654,10 @@ async fn media_player_actual_native_mcp_crosses_worker_relay() {
         .insert("TMPDIR".into(), policy.workdir.to_str().unwrap().into());
     policy
         .mounts
-        .retain(|mount| mount.target != Path::new("/usr/local/bin/cos"));
+        .retain(|mount| mount.target != Path::new("/usr/local/bin/yu"));
     policy.mounts.push(Mount::read_only(
         cos,
-        "/usr/local/bin/cos",
+        "/usr/local/bin/yu",
         MountClass::Runtime,
     ));
     assert!(policy

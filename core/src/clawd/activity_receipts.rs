@@ -241,7 +241,7 @@ pub(crate) fn record_service_result(
         let message = match serde_json::to_string(&report) {
             Ok(report) => format!(
                 "Activity receipt recording failed: {}. Do not repeat the App call. \
-                 Retry only this report with cos activity record-receipt {activity_id} --stdin:\n{report}",
+                 Retry only this report with yu activity record-receipt {activity_id} --stdin:\n{report}",
                 diagnostic(&error),
             ),
             Err(encoding) => format!(

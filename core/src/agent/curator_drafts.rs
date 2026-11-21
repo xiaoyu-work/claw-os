@@ -1,6 +1,6 @@
 //! Persistent store for curator-proposed skill drafts.
 //!
-//! `cos agent curator propose` produces an in-memory [`SkillDraft`]
+//! `yu agent curator propose` produces an in-memory [`SkillDraft`]
 //! snapshot per call. Without persistence those drafts vanish the
 //! moment the process exits; that's fine for one-shot exploration
 //! but gives the agent no way to revisit, accept, or reject them.

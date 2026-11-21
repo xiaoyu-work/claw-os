@@ -62,7 +62,7 @@ Desktop-menu effects go from the broker to its authenticated Root display
 supervisor on the same epoch. The live system shell can submit owner
 clicks directly; the OS-started Claw Launcher can only submit App selections.
 Other callers require their normal authorization for signed App launches.
-The supervisor pins the publisher and content digest for `cos app <id> --gui`.
+The supervisor pins the publisher and content digest for `yu app <id> --gui`.
 For genuinely unmanaged Linux entries it starts the fixed `gtk4-launch`
 with a desktop-entry ID instead. In both cases it launches as the logged-in
 user inside the display workload. Native XDG activation uses the ordinary

@@ -40,7 +40,7 @@ pub(crate) fn parse(
         if args.len() == 1 {
             Ok(args[0].clone())
         } else {
-            Err(format!("cos share {command} requires one exact identifier"))
+            Err(format!("yu share {command} requires one exact identifier"))
         }
     };
     match command {
@@ -87,7 +87,7 @@ pub(crate) fn parse(
         }
         "send" => {
             if args.len() < 2 {
-                return Err("usage: cos share send PEER_ID FILE [FILE ...]".into());
+                return Err("usage: yu share send PEER_ID FILE [FILE ...]".into());
             }
             let mut paths = Vec::new();
             for raw in &args[1..] {
@@ -124,7 +124,7 @@ pub(crate) fn parse(
             })
         }
         "delete-upload" => Ok(NearbyAction::UploadDelete { upload_id: one()? }),
-        _ => Err("Unknown nearby command; use cos share --help.".into()),
+        _ => Err("Unknown nearby command; use yu share --help.".into()),
     }
 }
 

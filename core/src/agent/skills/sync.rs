@@ -103,7 +103,7 @@ pub enum SyncError {
 ///
 /// A valid signature from a trusted, non-revoked publisher key is
 /// required. There is no environment variable that relaxes this; an
-/// unsigned local bundle needs an explicit `cos provenance dev-trust`
+/// unsigned local bundle needs an explicit `yu provenance dev-trust`
 /// decision after it is placed on disk.
 pub fn install_from_archive(archive: &Path, force: bool) -> Result<SyncResult, SyncError> {
     install_into_reserved(

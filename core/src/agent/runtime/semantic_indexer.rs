@@ -60,7 +60,7 @@ impl SemanticIndexer {
     /// text is silently dropped (embedding nothing wastes a request).
     ///
     /// Routes through [`runtime::background::spawn`] so the one-shot
-    /// `cos agent ask` CLI path can drain pending embeds before the
+    /// `yu agent ask` CLI path can drain pending embeds before the
     /// runtime drops. Without the registry these tasks would be
     /// cancelled mid-embed and the last turn's user/assistant
     /// messages would be missing from semantic search.

@@ -71,7 +71,7 @@ Wi-Fi recovery still require the target physical radio and phone.
 
 | Surface | Entry and workflow |
 | --- | --- |
-| CLI | `cos share status` / `doctor`, `receive --seconds 300`, `open`, `browse`, `send PEER_ID FILE...`, `accept OFFER_ID`, `decline OFFER_ID`, `cancel TRANSFER_ID`, `stop`, `watch` |
+| CLI | `yu share status` / `doctor`, `receive --seconds 300`, `open`, `browse`, `send PEER_ID FILE...`, `accept OFFER_ID`, `decline OFFER_ID`, `cancel TRANSFER_ID`, `stop`, `watch` |
 | Claw TUI | `/share` opens the dedicated center. `O`/`I` compose an explicit send/receive window command, `D` discovers, `S` composes a peer-ID plus JSON file-list command, arrows scroll/select and `A`/`N` decides only the selected offer. `X` stops; `Esc` only detaches |
 | Native Desktop | Nearby Sharing in the Agent sidebar, or `cos-agent-ui --nearby` / the Agent launcher action. Pick local files, explicitly acknowledge disruptive modes, choose a discovered recipient, confirm each offer, inspect progress and stop |
 | Authenticated Web | `#/nearby` in the Agent Web shell. Select browser files first, stage them in bounded chunks, then activate a window. Receiving writes the OS host's inbox, not an arbitrary browser download location |
@@ -79,15 +79,15 @@ Wi-Fi recovery still require the target physical radio and phone.
 CLI output is structured JSON. For example:
 
 ```sh
-cos share doctor
-cos share receive --seconds 300
+yu share doctor
+yu share receive --seconds 300
 # On an Exclusive/Active Monitor card only, after reading the warning:
-cos share receive --seconds 300 --allow-wifi-disruption
-cos share browse
-cos share send PEER_ID "$HOME/Downloads/report.pdf"
-cos share accept OFFER_ID
-cos share watch
-cos share stop
+yu share receive --seconds 300 --allow-wifi-disruption
+yu share browse
+yu share send PEER_ID "$HOME/Downloads/report.pdf"
+yu share accept OFFER_ID
+yu share watch
+yu share stop
 ```
 
 Native/CLI source paths must be regular readable files inside the authenticated

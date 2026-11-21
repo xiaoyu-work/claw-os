@@ -37,7 +37,7 @@ impl Fixture {
         .into_iter()
         .map(|key| (key, std::env::var_os(key)))
         .collect();
-        fs::write(root.join("cos"), r#"#!/bin/sh
+        fs::write(root.join("yu"), r#"#!/bin/sh
 set -eu
 root=${0%/*}
 printf '%s\n' "$*" >> "$root/calls"
@@ -84,9 +84,9 @@ else
     exit 14
 fi
 "#).unwrap();
-        fs::set_permissions(root.join("cos"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(root.join("yu"), fs::Permissions::from_mode(0o700)).unwrap();
         unsafe {
-            std::env::set_var("COS_BIN", root.join("cos"));
+            std::env::set_var("COS_BIN", root.join("yu"));
             std::env::set_var("COS_DATA_DIR", root.join("data"));
             std::env::set_var("HOME", root.join("home"));
             std::env::set_var("COS_APP_ID", "example-app-data-client");

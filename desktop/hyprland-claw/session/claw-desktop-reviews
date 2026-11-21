@@ -17,7 +17,7 @@ GLib.set_prgname("claw-desktop-reviews")
 from gi.repository import Gdk, Gtk, Pango
 
 
-COS = "/usr/local/bin/cos"
+COS = "/usr/local/bin/yu"
 APPROVAL_HELPER = "/usr/local/bin/claw-approval-helper"
 REVIEW_ID = re.compile(r"(?:rv-[a-f0-9]{32}|ap-[a-f0-9]{12}|pg-[a-f0-9]{32})")
 CONFIRMATIONS = {

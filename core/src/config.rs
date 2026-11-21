@@ -3,7 +3,7 @@
 /// Reads `~/.config/cos/config.json` (or `COS_CONFIG_PATH` override)
 /// and provides typed access to settings. Falls back to sensible
 /// defaults if the config file is missing or malformed. The file is
-/// per-user; `cos agent setup` (and the cosmic-settings agent page)
+/// per-user; `yu agent setup` (and the cosmic-settings agent page)
 /// write to it under the running user's `$HOME`, so changes don't
 /// need root.
 use serde::{Deserialize, Serialize};
@@ -72,7 +72,7 @@ pub struct AgentConfig {
     /// "anthropic", "openai", "ollama"). Default is empty string,
     /// meaning **not configured** — every AI call will fail with
     /// `LlmError::NotConfigured` until the operator runs
-    /// `cos agent setup text apply ...` (or the desktop initial-setup
+    /// `yu agent setup text apply ...` (or the desktop initial-setup
     /// AI page). The "mock" provider is registered for tests but is
     /// never picked up automatically.
     #[serde(default = "default_agent_provider")]
@@ -90,7 +90,7 @@ pub struct AgentConfig {
     pub provider_fallbacks: Vec<ProviderFallbackConfig>,
 
     /// Maximum number of agent turns (provider call → tool calls → ...) per
-    /// `cos agent ask` invocation. Stops infinite tool-use loops.
+    /// `yu agent ask` invocation. Stops infinite tool-use loops.
     #[serde(default = "default_agent_max_turns")]
     pub max_turns: u32,
 
@@ -112,11 +112,11 @@ pub struct AgentConfig {
     #[serde(default)]
     pub system_prompt_path: Option<String>,
 
-    /// Name of a credential stored via `cos credential store … --namespace
+    /// Name of a credential stored via `yu credential store … --namespace
     /// agent` that holds the API key for this provider. Looked up at
     /// runtime — never read from the config file directly.
     /// Example: `"openai_api_key"` then store via:
-    ///   `cos credential store openai_api_key sk-... --namespace agent`
+    ///   `yu credential store openai_api_key sk-... --namespace agent`
     #[serde(default)]
     pub api_key_credential: Option<String>,
 
@@ -276,11 +276,11 @@ pub struct AgentConfig {
 
     /// Monthly token-unit budget for the kernel-resident **system
     /// agent** — i.e. the user's authorised agent reachable via
-    /// `cos agent ask`, `cos agent chat`, the cos-agent-bridge HTTP
+    /// `yu agent ask`, `yu agent chat`, the cos-agent-bridge HTTP
     /// service, and friends. The system agent is not an installed
     /// app but it still flows through the same gate as real apps;
     /// usage rolls up under the pseudo-app id `system.agent` and is
-    /// visible alongside other apps in `cos agent budget show`. Set to
+    /// visible alongside other apps in `yu agent budget show`. Set to
     /// `0` to disable the unit cap entirely. Default: 10_000_000.
     #[serde(default = "default_system_budget_units")]
     pub system_budget_monthly_units: u64,
@@ -376,7 +376,7 @@ pub struct AgentConfig {
     //   1. Other providers ignore them — adding new optional fields to
     //      AgentConfig is a no-op for openai/anthropic/gemini/llama_local.
     //   2. Lookup precedence is uniform across providers. Every other
-    //      provider already follows the `*_credential` (cos credential
+    //      provider already follows the `*_credential` (yu credential
     //      store) → `*_env` (env var fallback) ladder, and we want
     //      Bedrock to feel the same.
     //
@@ -390,7 +390,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub aws_region: Option<String>,
 
-    /// Name of a credential stored via `cos credential store …
+    /// Name of a credential stored via `yu credential store …
     /// --namespace agent` that holds the AWS access key ID. Looked up
     /// at runtime — never read from the config file directly.
     #[serde(default)]
@@ -402,7 +402,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub aws_access_key_env: Option<String>,
 
-    /// Name of a credential stored via `cos credential` that holds the
+    /// Name of a credential stored via `yu credential` that holds the
     /// AWS secret access key.
     #[serde(default)]
     pub aws_secret_key_credential: Option<String>,
@@ -412,7 +412,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub aws_secret_key_env: Option<String>,
 
-    /// Name of a credential stored via `cos credential` that holds an
+    /// Name of a credential stored via `yu credential` that holds an
     /// AWS session token (for temporary STS / IAM-role / SSO creds).
     /// Optional — only required when using temporary credentials.
     #[serde(default)]
@@ -560,7 +560,7 @@ pub struct EmbedConfig {
     /// `"none"` (explicit off) | `"openai"` | `"azure"` | `"ollama"` |
     /// `"qwen3-local"` | other self-hosted alias. When `"auto"` and
     /// the bundled local stack is absent, embeddings are disabled until
-    /// the user runs `cos agent setup embed`.
+    /// the user runs `yu agent setup embed`.
     #[serde(default = "default_embed_provider")]
     pub provider: String,
 
@@ -573,7 +573,7 @@ pub struct EmbedConfig {
     /// vector spaces are not interchangeable. `SemanticStore` enforces
     /// this with a stickiness check that returns `ModelMismatch` on the
     /// first row from a new model. To migrate, run
-    /// `cos agent semantic clear-all --yes` and re-index.
+    /// `yu agent semantic clear-all --yes` and re-index.
     #[serde(default = "default_embed_model")]
     pub model: String,
 
@@ -1041,7 +1041,7 @@ pub fn load_from_path(path: &Path) -> CosConfig {
 // `/root/.config/cos/config.json` — empty by default. But the agent
 // jobs it executes were submitted by *user* shells (uid != 0), whose
 // per-user `~/.config/cos/config.json` carries the provider config the
-// user actually set up via `cos agent setup text`.
+// user actually set up via `yu agent setup text`.
 //
 // To bridge the two we install a per-async-task override: clawd's
 // worker resolves the job's owner home, loads that user's config, and
@@ -1073,10 +1073,10 @@ pub fn load_for_home(home: &Path) -> Arc<CosConfig> {
 /// Re-read the standard user config (`~/.config/cos/config.json` or
 /// `$COS_CONFIG_PATH`) into an immutable request snapshot.
 ///
-/// Long-running daemons like `cos agent serve` cache the process-wide
+/// Long-running daemons like `yu agent serve` cache the process-wide
 /// `CONFIG: OnceLock<CosConfig>` at startup and never observe later
 /// writes — including writes the daemon itself makes via
-/// `cos agent setup apply`. Wrap each request handler in
+/// `yu agent setup apply`. Wrap each request handler in
 /// `with_snapshot(load_user_config(), ...)` so every
 /// `config::current_snapshot()`
 /// call in the handler sees the current on-disk state.

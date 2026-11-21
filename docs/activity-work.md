@@ -13,11 +13,11 @@ its [finite execution limits](activity-execution-limits.md). Then use its ID:
 
 ```bash
 activity_id="00000000-0000-4000-8000-000000000001"
-cos activity set-work "$activity_id" \
+yu activity set-work "$activity_id" \
   --task "Research the topic, prepare a draft, and request my review" \
   --check-interval-secs 3600
-cos activity work "$activity_id"
-cos activity start-work "$activity_id" --expected-revision 1
+yu activity work "$activity_id"
+yu activity start-work "$activity_id" --expected-revision 1
 ```
 
 Configuration starts stopped. Starting crosses the existing scheduler consent
@@ -31,8 +31,8 @@ The fetched revision changes as the scheduler reserves work and records
 handoffs. Read it before each control mutation:
 
 ```bash
-cos activity work "$activity_id"
-cos activity stop-work "$activity_id" --expected-revision 4
+yu activity work "$activity_id"
+yu activity stop-work "$activity_id" --expected-revision 4
 ```
 
 Stopping prevents future segments, including a reserved Job that has not been
@@ -68,7 +68,7 @@ seconds, default one hour). An optional exact existing event source/type can
 wake waiting work sooner:
 
 ```bash
-cos activity set-work "$activity_id" --expected-revision 2 \
+yu activity set-work "$activity_id" --expected-revision 2 \
   --task "Inspect incoming material and maintain the draft" \
   --wake-source project-watcher --wake-event artifact.changed
 ```
@@ -97,8 +97,8 @@ hard ceilings; reported progress cannot extend them.
 After inspecting the previous Job and external state, resume explicitly:
 
 ```bash
-cos activity work "$activity_id"
-cos activity start-work "$activity_id" --expected-revision 9 \
+yu activity work "$activity_id"
+yu activity start-work "$activity_id" --expected-revision 9 \
   --next-task "Verify the existing draft; do not repeat the earlier submission" \
   --review-note "Inspected the previous result and checked the destination"
 ```

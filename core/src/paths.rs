@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 // ---------------------------------------------------------------------------
 // Per-task HOME override (mirrors `config::with_override`).
 //
-// `cos agent ask` from a non-root user lands at the clawd socket; clawd
+// `yu agent ask` from a non-root user lands at the clawd socket; clawd
 // runs as root with `HOME=/root`. Every per-user resolver in this file
 // reads the `HOME` env var directly, so without an override clawd
 // looks for the user's config / credentials / consents under `/root/...`
@@ -265,7 +265,7 @@ fn from_env_or_default(env_key: &str, unix_default: &str, subdir: &str) -> PathB
 ///   (see the `Environment=` line in its systemd unit).
 /// * Otherwise default to the per-user data dir
 ///   ([`user_data_dir`]): `$HOME/.local/share/cos` on Linux,
-///   `%APPDATA%\cos\data` on Windows. The `cos` CLI is a user-level
+///   `%APPDATA%\cos\data` on Windows. The `yu` CLI is a user-level
 ///   command; it must never need root to write its own state.
 ///
 /// Callers should treat this as opaque — anything that genuinely
@@ -336,7 +336,7 @@ pub fn user_config_dir() -> PathBuf {
 }
 
 /// Path to the per-user agent config:
-/// `$HOME/.config/cos/config.json`. This is where `cos agent setup`
+/// `$HOME/.config/cos/config.json`. This is where `yu agent setup`
 /// writes the `[agent]`/`[tts]`/`[stt]`/`[imagegen]`/`[embed]` blocks
 /// when the user picks providers, models, and keys from the wizard
 /// or the cosmic-settings agent page. System-wide defaults live in
@@ -352,7 +352,7 @@ pub fn user_config_path() -> PathBuf {
 /// Path to a specific user's agent config given their `$HOME` directory.
 /// Used by clawd (running as root) to read the requesting peer's
 /// `~/.config/cos/config.json` rather than its own — without this,
-/// every `cos agent ask` from a non-root user would silently fall back
+/// every `yu agent ask` from a non-root user would silently fall back
 /// to clawd's default (empty) provider config and fail with
 /// "no LLM provider configured".
 ///
@@ -396,8 +396,8 @@ pub fn user_data_dir() -> PathBuf {
 }
 
 /// Per-user encrypted credential store root:
-/// `$HOME/.local/share/cos/credentials`. Each `cos agent setup` API
-/// key, plus any other secret a user stores via `cos credential
+/// `$HOME/.local/share/cos/credentials`. Each `yu agent setup` API
+/// key, plus any other secret a user stores via `yu credential
 /// store`, lands under here as `<namespace>/<name>.json` (AES-256-GCM
 /// encrypted). Per-user so non-root users can save API keys without
 /// touching `/var/lib/cos`. Override with `COS_CREDENTIALS_DIR`.
@@ -589,14 +589,14 @@ pub fn agent_curation_log_path() -> PathBuf {
 /// Path to the persistent agent-hooks config file. Lives at
 /// `data_dir/agent/hooks.json`. Lists which built-in hook kinds
 /// (`logging`, etc.) should auto-register at the start of every
-/// `cos agent ask` / `cos agent chat` invocation.
+/// `yu agent ask` / `yu agent chat` invocation.
 pub fn agent_hooks_path() -> PathBuf {
     routed_agent_state_dir().join("hooks.json")
 }
 
 /// Path to the agent-runtime audit log. JSONL — one event per
 /// line. Captures pre/post-turn and pre/post-tool events when the
-/// `audit` hook is enabled (see `cos agent hooks enable audit`).
+/// `audit` hook is enabled (see `yu agent hooks enable audit`).
 /// Lives at `log_dir()/agent.jsonl`.
 pub fn agent_audit_log_path() -> PathBuf {
     log_dir().join("agent.jsonl")
@@ -738,7 +738,7 @@ pub fn agent_skills_usage_path() -> PathBuf {
 }
 
 /// JSONL file storing shell-hook records (the user's interactive
-/// shell pre/post-exec events captured by `cos agent shell-hooks
+/// shell pre/post-exec events captured by `yu agent shell-hooks
 /// init`). Lives at `data_dir/agent/shell-hooks.jsonl`. See
 /// [`crate::agent::shell_hooks`].
 pub fn agent_shell_hooks_log_path() -> PathBuf {
@@ -768,7 +768,7 @@ pub fn agent_runtime_socket() -> PathBuf {
 /// engine_name/engine_version/duration/usage/finish_reason plus a
 /// `decision` ("allowed"|"denied") + `denial_reason` so the gate's
 /// rejection attempts show up alongside successful calls. Distinct
-/// from `audit.rs` which logs the parent `cos <app> <cmd>`
+/// from `audit.rs` which logs the parent `yu <app> <cmd>`
 /// invocation; one CLI call may produce many run-record lines.
 pub fn ai_run_log_path() -> PathBuf {
     if let Some(uid) = current_owner_uid_override() {

@@ -22,7 +22,7 @@
 //! field against the snapshot. If anything has changed — budget,
 //! safety, origins — the consent becomes **stale** and the gate
 //! denies with `consent_stale`, listing which fields changed. The
-//! user re-runs `cos app consent grant <app>` to inspect the new ask
+//! user re-runs `yu app consent grant <app>` to inspect the new ask
 //! and re-approve.
 //!
 //! Per-user overrides (`crate::ai::overrides`) are independent: this

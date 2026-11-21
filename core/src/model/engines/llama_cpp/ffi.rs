@@ -1,6 +1,6 @@
 //! Hand-written FFI to a minimal, version-stable subset of `llama.h`.
 //!
-//! As of P2.3 the cos binary no longer statically links `libllama`. The
+//! As of P2.3 the yu binary no longer statically links `libllama`. The
 //! engine package manager installs a prebuilt llama.cpp release into
 //! `<engines_dir>/llama-cpp/<version>/{bin,lib}/` and we resolve the
 //! shared library at runtime via `libloading`. This module therefore
@@ -92,7 +92,7 @@ impl LlamaSyms {
     /// upstream llama.cpp build. The C ABI signatures of the resolved
     /// symbols must match those declared above. Both invariants are
     /// honored by the official llama.cpp prebuilt releases that
-    /// `cos engine` consumes.
+    /// `yu engine` consumes.
     pub unsafe fn resolve(lib: &Library) -> Result<Self, libloading::Error> {
         // `Symbol::into_raw` would let us drop the `Symbol` and keep the
         // raw fn pointer; instead we transmute via the deref. As long as

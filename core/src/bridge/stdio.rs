@@ -128,7 +128,7 @@ fn run_app_stdio_inner(
         .map_err(|error| format!("resolve App launch runner: {error}"))?;
     program_is_trusted(&runner)?;
     program_is_trusted(
-        &Path::new("/usr/local/bin/cos")
+        &Path::new("/usr/local/bin/yu")
             .canonicalize()
             .map_err(|error| format!("resolve App runtime CLI: {error}"))?,
     )?;
@@ -245,7 +245,7 @@ fn program_is_trusted(program: &Path) -> Result<(), String> {
 
 fn validate_runtime_overrides() -> Result<(), String> {
     for (name, expected) in [
-        ("COS_BIN", "/usr/local/bin/cos"),
+        ("COS_BIN", "/usr/local/bin/yu"),
         ("COS_SDK_PYTHON_DIR", "/usr/lib/cos/python"),
     ] {
         if std::env::var_os(name).is_some_and(|value| value != std::ffi::OsStr::new(expected)) {
@@ -300,7 +300,7 @@ fn prepare_stdio_worker(
             "COS_SDK_PYTHON_DIR".to_string(),
             "/usr/lib/cos/python".to_string(),
         ),
-        ("CLAW_COS_BIN".to_string(), "/usr/local/bin/cos".to_string()),
+        ("CLAW_COS_BIN".to_string(), "/usr/local/bin/yu".to_string()),
     ]);
     super::prepare_app_worker(
         session,

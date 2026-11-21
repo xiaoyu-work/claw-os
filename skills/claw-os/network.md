@@ -1,6 +1,6 @@
 # Network Firewall & Rate Limiting
 
-Call the `cos_netfilter` tool — **not the shell** — to manage outbound firewall rules and per-host rate limits. There is no user-facing `cos netfilter` CLI command.
+Call the `cos_netfilter` tool — **not the shell** — to manage outbound firewall rules and per-host rate limits. There is no user-facing `yu netfilter` CLI command.
 
 ## Tool shape
 

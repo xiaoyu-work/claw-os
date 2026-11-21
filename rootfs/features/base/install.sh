@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-# Install Node.js 24 (required by cos apps).
+# Install Node.js 24 (required by yu apps).
 NODE_MAJOR=24
 echo "  :: installing Node.js $NODE_MAJOR"
 chroot "$ROOTFS" bash -c "
@@ -32,7 +32,7 @@ chroot "$ROOTFS" bash -c "
     rm -rf /var/lib/apt/lists/*
 "
 
-# Install Python packages used by cos apps that are not available via apt.
+# Install Python packages used by yu apps that are not available via apt.
 echo "  :: installing Python packages"
 chroot "$ROOTFS" pip3 install --break-system-packages --no-cache-dir \
     pymupdf python-docx openpyxl python-pptx pyyaml

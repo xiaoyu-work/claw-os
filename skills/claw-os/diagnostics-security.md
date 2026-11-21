@@ -43,12 +43,12 @@ Inspect:
 Use Security Center for dedicated evidence:
 
 ```bash
-cos app security-center summary
-cos app security-center auth
-cos app security-center ssh
-cos app security-center sudo
-cos app security-center ports
-cos app security-center events
+yu app security-center summary
+yu app security-center auth
+yu app security-center ssh
+yu app security-center sudo
+yu app security-center ports
+yu app security-center events
 ```
 
 Firewall policy and package-integrity verification remain separate checks;

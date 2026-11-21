@@ -16,7 +16,7 @@
 //!
 //! The CLI's bootstrap code (see [`crate::caps::bootstrap`]) mints a
 //! short-lived in-process session row for every `cos` invocation. Most
-//! invocations are one-shot (`cos app fs read …`, `cos sys info`, …) and
+//! invocations are one-shot (`yu app fs read …`, `yu sys info`, …) and
 //! should never spill onto disk — promoting them all would explode
 //! `$COS_DATA_DIR/sessions/` into millions of empty directories.
 //!

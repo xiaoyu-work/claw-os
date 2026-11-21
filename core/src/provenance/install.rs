@@ -62,7 +62,7 @@ pub enum InstallError {
     Provenance(#[from] ProvenanceError),
     #[error("destination `{0}` already exists; pass --force to replace it")]
     DestinationExists(PathBuf),
-    #[error("App rollback requires the authenticated Root directory controller through `cos provenance rollback --kind app`; local App replacement is refused")]
+    #[error("App rollback requires the authenticated Root directory controller through `yu provenance rollback --kind app`; local App replacement is refused")]
     ManagedAppRollback,
 }
 

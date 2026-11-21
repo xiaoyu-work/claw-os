@@ -4,11 +4,11 @@
 //! function-pointer table. Constructed once per process via
 //! [`LlamaRuntime::shared`], which caches **only successful loads** —
 //! a failure to load now does NOT poison future calls so the daemon can
-//! survive an `cos engine install llama-cpp` happening after startup.
+//! survive an `yu engine install llama-cpp` happening after startup.
 //!
 //! Active-version changes after a successful load are NOT picked up
 //! until the process restarts. This is the documented behavior; a
-//! `cos engine activate` followed by `cos service restart` swaps in
+//! `yu engine activate` followed by `yu service restart` swaps in
 //! the new version.
 
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ impl LlamaRuntime {
     pub fn load(lib_path: &Path) -> Result<Self, EngineError> {
         if !lib_path.is_file() {
             return Err(EngineError::NotInstalled(format!(
-                "expected llama runtime at {} — run `cos engine install llama-cpp` or check `cos engine list`",
+                "expected llama runtime at {} — run `yu engine install llama-cpp` or check `yu engine list`",
                 lib_path.display()
             )));
         }
@@ -96,7 +96,7 @@ impl LlamaRuntime {
         let lib_path =
             crate::engine_pkg::active_library_path("llama-cpp", "llama").ok_or_else(|| {
                 EngineError::NotInstalled(
-                    "no active llama-cpp engine — run `cos engine update llama-cpp` to install"
+                    "no active llama-cpp engine — run `yu engine update llama-cpp` to install"
                         .into(),
                 )
             })?;

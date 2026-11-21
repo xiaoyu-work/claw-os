@@ -1,9 +1,9 @@
-//! `cos ai chat` — App-facing single-shot LLM call.
+//! `yu ai chat` — App-facing single-shot LLM call.
 //!
 //! This is the **only** sanctioned entry point for an installed
 //! third-party App to reach a model. The App-gated path lives under
-//! its own `cos ai …` namespace deliberately: it shares no CLI
-//! surface with `cos agent` (the kernel's own Agent product, with
+//! its own `yu ai …` namespace deliberately: it shares no CLI
+//! surface with `yu agent` (the kernel's own Agent product, with
 //! loop / memory / skills / hooks / recall). Apps get raw LLM
 //! access plus the App–AI Gate; they do not get the Agent.
 //!
@@ -33,11 +33,11 @@
 //!   --tools <list>       Comma-separated catalog tool names to expose
 //!                        to the model (e.g. `fs.read_text,kv.get`).
 //!                        Each name is resolved against
-//!                        `cos ai tools`; unknown names hard-deny.
+//!                        `yu ai tools`; unknown names hard-deny.
 //!                        The model may *propose* calls; the gate
 //!                        returns them in `tool_calls[]` and never
 //!                        executes them. Apps shell back via
-//!                        `cos ai tool <name>` to fulfil whichever
+//!                        `yu ai tool <name>` to fulfil whichever
 //!                        they choose.
 //!
 //! Apps do **not** pick the model — the OS owner configures one
@@ -48,7 +48,7 @@
 //! --------
 //!
 //! Per `docs/app-ai-integration.md` §3, an App's identity is established
-//! **only** when the kernel itself spawns the App (`cos app <id> <op>`).
+//! **only** when the kernel itself spawns the App (`yu app <id> <op>`).
 //! The kernel creates a registered App session and binds it to the spawned
 //! process. `COS_SESSION` routes the request; the broker authenticates the
 //! peer (or its verified worker relay), registered App and live transient
@@ -158,7 +158,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
             }
             other => {
                 return Err(super::invalid_args(format!(
-                    "unknown flag for `cos ai chat`: {other}"
+                    "unknown flag for `yu ai chat`: {other}"
                 )));
             }
         }
@@ -298,7 +298,7 @@ fn broker_chat(req: gate::ChatRequest) -> Result<Value, String> {
 fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> {
     match env_app {
         None => Err(format!(
-            "`cos ai chat` must be invoked by the kernel via `cos app {arg_app} <op>`. \
+            "`yu ai chat` must be invoked by the kernel via `yu app {arg_app} <op>`. \
              COS_APP_ID is not set, so the claimed App identity is missing."
         )),
         Some(env) if env != arg_app => Err(format!(
@@ -309,8 +309,8 @@ fn enforce_identity(arg_app: &str, env_app: Option<&str>) -> Result<(), String> 
     }
 }
 
-/// Convenience wrapper used by sibling subcommands (`cos ai tool`)
-/// that want the same identity enforcement as `cos ai chat`. Reads
+/// Convenience wrapper used by sibling subcommands (`yu ai tool`)
+/// that want the same identity enforcement as `yu ai chat`. Reads
 /// `COS_APP_ID` from the current process env.
 pub fn enforce_identity_for(arg_app: &str) -> Result<(), String> {
     enforce_identity(arg_app, std::env::var("COS_APP_ID").ok().as_deref())?;

@@ -128,6 +128,6 @@ output may have begun.
 ## Tests
 
 ```bash
-cargo test -p cos agent::runtime::turn::tests -- --test-threads=1
-cargo test -p cos agent::runtime::loop_::tests -- --test-threads=1
+cargo test -p yu agent::runtime::turn::tests -- --test-threads=1
+cargo test -p yu agent::runtime::loop_::tests -- --test-threads=1
 ```

@@ -542,7 +542,7 @@ fn resolve_runtime_program(
         || candidate.starts_with("/bin")
         || matches!(
             candidate.to_str(),
-            Some("/usr/local/bin/claw-app-runner" | "/usr/local/bin/cos")
+            Some("/usr/local/bin/claw-app-runner" | "/usr/local/bin/yu")
         );
     if metadata.file_type().is_symlink() && !system_candidate {
         return Err("custom extension executable must not be a symlink".to_string());
@@ -831,7 +831,7 @@ fn is_system_runtime_path(path: &Path) -> bool {
         || path.starts_with("/usr/lib")
         || matches!(
             path.to_str(),
-            Some("/usr/local/bin/claw-app-runner" | "/usr/local/bin/cos")
+            Some("/usr/local/bin/claw-app-runner" | "/usr/local/bin/yu")
         )
 }
 

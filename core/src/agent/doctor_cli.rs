@@ -1,4 +1,4 @@
-//! `cos agent doctor` — single-shot holistic self-check.
+//! `yu agent doctor` — single-shot holistic self-check.
 //!
 //! Aggregates many small checks into one pass/warn/fail summary so
 //! operators can answer "is my agent stack healthy?" in one
@@ -10,11 +10,11 @@
 //! Doctor folds in the data exposed by these (now dev-only)
 //! commands so users don't have to chase them down individually:
 //!
-//! - `cos agent dev providers`         → per-provider config matrix
-//! - `cos agent dev provider-doctor`   → live ping (with `--probe-network`)
-//! - `cos agent usage`                 → token totals
-//! - `cos agent dev insights`          → run-log overall summary
-//! - `cos agent dev audit summary`     → audit log by-kind summary
+//! - `yu agent dev providers`         → per-provider config matrix
+//! - `yu agent dev provider-doctor`   → live ping (with `--probe-network`)
+//! - `yu agent usage`                 → token totals
+//! - `yu agent dev insights`          → run-log overall summary
+//! - `yu agent dev audit summary`     → audit log by-kind summary
 //!
 //! Flags:
 //! - `--quick` skips all log scans (audit, run_log, usage, insights)
@@ -348,7 +348,7 @@ fn check_media_modalities() -> Value {
     let status = if warn { "warn" } else { "ok" };
     json!({
         "status": status,
-        "hint": "configure with `cos agent setup [tts|stt|imagegen|embed]` or `cos agent setup all`",
+        "hint": "configure with `yu agent setup [tts|stt|imagegen|embed]` or `yu agent setup all`",
         "modalities": entries,
     })
 }
@@ -428,13 +428,13 @@ fn check_memory_database(path: &Path) -> Value {
             if report.status != "ok" {
                 value["fix"] = if report.requires_quarantine {
                     json!(
-                        "preview with `cos agent sessions repair --dry-run`; after inspection, \
-                         preserve the damaged files with `cos agent sessions repair --quarantine --yes`"
+                        "preview with `yu agent sessions repair --dry-run`; after inspection, \
+                         preserve the damaged files with `yu agent sessions repair --quarantine --yes`"
                     )
                 } else {
                     json!(
-                        "preview with `cos agent sessions repair --dry-run`, then apply with \
-                         `cos agent sessions repair --yes`"
+                        "preview with `yu agent sessions repair --dry-run`, then apply with \
+                         `yu agent sessions repair --yes`"
                     )
                 };
             }
@@ -444,7 +444,7 @@ fn check_memory_database(path: &Path) -> Value {
             "status": "fail",
             "path": path.display().to_string(),
             "error": error.to_string(),
-            "fix": "inspect directory ownership and permissions, then run `cos agent sessions health`",
+            "fix": "inspect directory ownership and permissions, then run `yu agent sessions health`",
         }),
     }
 }
@@ -454,7 +454,7 @@ fn check_log_file(path: &Path, label: &str) -> Value {
         // Demoted from "warn" to "ok": an empty/absent log on a fresh
         // install just means the user hasn't run agent commands yet,
         // which isn't actionable and was the most common false-alarm
-        // in `cos agent doctor` output.
+        // in `yu agent doctor` output.
         return json!({
             "status": "ok",
             "label": label,
@@ -467,7 +467,7 @@ fn check_log_file(path: &Path, label: &str) -> Value {
     // Stream the line count instead of slurping the whole log.
     // The audit / run log can grow to hundreds of MB on long-lived
     // installs; a `read_to_string` here is enough to OOM a small
-    // container running `cos agent doctor`.
+    // container running `yu agent doctor`.
     let lines = match std::fs::File::open(path) {
         Ok(f) => {
             use std::io::BufRead;
@@ -532,7 +532,7 @@ fn check_audit(path: &Path) -> Value {
             {
                 base["status"] = json!("warn");
                 base["warning"] =
-                    json!("agent audit log is too large for automatic doctor verification; run `cos agent audit verify` explicitly");
+                    json!("agent audit log is too large for automatic doctor verification; run `yu agent audit verify` explicitly");
             } else if summary.pointer("/integrity/valid").and_then(Value::as_bool) == Some(false) {
                 base["status"] = json!("fail");
                 base["error"] = json!("agent audit hash-chain verification failed");
@@ -556,10 +556,10 @@ fn check_audit(path: &Path) -> Value {
 }
 
 /// Run-log usage totals: tokens / requests / errors, last 7 days.
-/// Uses the same owner-scoped query path as `cos agent usage` so doctor and
+/// Uses the same owner-scoped query path as `yu agent usage` so doctor and
 /// the public command agree. Window is 7 days because that's the
 /// most useful "is anything happening on this box?" signal; users
-/// who want all-time can run `cos agent usage overall`.
+/// who want all-time can run `yu agent usage overall`.
 fn check_usage() -> Value {
     use chrono::Utc;
     let since = Utc::now() - chrono::Duration::days(7);

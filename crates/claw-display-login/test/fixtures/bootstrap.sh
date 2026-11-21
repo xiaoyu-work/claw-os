@@ -178,7 +178,7 @@ if [[ "$gui" == 1 ]]; then
     install -d -m0755 /usr/local/bin
     install -m0755 "$registry" /usr/local/bin/claw-gui-broker-fixture
     registry=/usr/local/bin/claw-gui-broker-fixture
-    install -m0755 "$cos" /usr/local/bin/cos
+    install -m0755 "$cos" /usr/local/bin/yu
     if [[ "$native_product" == capture ]]; then
         install -m0755 "$native_capture_helper" /usr/local/bin/clawd
     fi

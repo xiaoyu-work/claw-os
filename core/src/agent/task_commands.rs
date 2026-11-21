@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-/// `cos agent todo [list <session_id>|add <session_id> <id> <title> [--note <text>]|set-status <session_id> <id> <pending|in_progress|completed|cancelled>|remove <session_id> <id>|clear <session_id> --yes|path]`
+/// `yu agent todo [list <session_id>|add <session_id> <id> <title> [--note <text>]|set-status <session_id> <id> <pending|in_progress|completed|cancelled>|remove <session_id> <id>|clear <session_id> --yes|path]`
 ///
 /// Surface for the per-session `TodoStore` (the same store the
 /// `cos_todo` LLM tool writes to). Lets operators inspect or
@@ -33,7 +33,7 @@ fn todo_cmd_at(
             let session = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent todo list <session_id>".to_string())?;
+                .ok_or_else(|| "usage: yu agent todo list <session_id>".to_string())?;
             let list = store.read(&session)?;
             let counts = todo_status_counts(&list);
             Ok(json!({
@@ -47,7 +47,7 @@ fn todo_cmd_at(
             let session = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent todo add <session_id> <id> <title> [--note <text>]".to_string())?;
+                .ok_or_else(|| "usage: yu agent todo add <session_id> <id> <title> [--note <text>]".to_string())?;
             let id = args
                 .get(2)
                 .cloned()
@@ -95,7 +95,7 @@ fn todo_cmd_at(
             let session = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent todo set-status <session_id> <id> <status>".to_string())?;
+                .ok_or_else(|| "usage: yu agent todo set-status <session_id> <id> <status>".to_string())?;
             let id = args
                 .get(2)
                 .cloned()
@@ -117,7 +117,7 @@ fn todo_cmd_at(
             let session = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent todo remove <session_id> <id>".to_string())?;
+                .ok_or_else(|| "usage: yu agent todo remove <session_id> <id>".to_string())?;
             let id = args
                 .get(2)
                 .cloned()
@@ -139,7 +139,7 @@ fn todo_cmd_at(
             let session = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent todo clear <session_id> --yes".to_string())?;
+                .ok_or_else(|| "usage: yu agent todo clear <session_id> --yes".to_string())?;
             let confirmed = args.iter().skip(2).any(|a| a == "--yes");
             if !confirmed {
                 return Err("refusing to clear without --yes".into());
@@ -191,7 +191,7 @@ fn parse_todo_status(raw: &str) -> Result<crate::agent::tools::todo::TodoStatus,
     }
 }
 
-/// `cos agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
+/// `yu agent nudge [list|due|add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]|fire <id>|remove <id>|path]`
 /// — managed periodic-nudge store. `list` shows all nudges; `due`
 /// shows only those with `due_at_epoch_s <= now`. `add` parses a
 /// relative offset in seconds (the most common case for "remind me
@@ -227,14 +227,14 @@ pub(super) fn nudge_cmd(args: &[String]) -> Result<Value, String> {
         "add" => {
             let due_in: i64 = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent nudge add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]".to_string())?
+                .ok_or_else(|| "usage: yu agent nudge add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]".to_string())?
                 .parse()
                 .map_err(|e| format!("due_in_secs must be integer: {e}"))?;
             let message = args
                 .get(2)
                 .cloned()
                 .filter(|m| !m.is_empty())
-                .ok_or_else(|| "usage: cos agent nudge add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]".to_string())?;
+                .ok_or_else(|| "usage: yu agent nudge add <due_in_secs> <message> [--repeat <secs>] [--tag <tag>]".to_string())?;
             let mut repeat_secs: Option<u64> = None;
             let mut tag: Option<String> = None;
             let mut i = 3;
@@ -287,7 +287,7 @@ pub(super) fn nudge_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .cloned()
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "usage: cos agent nudge fire <id>".to_string())?;
+                .ok_or_else(|| "usage: yu agent nudge fire <id>".to_string())?;
             let updated = store
                 .fire(&id, now_epoch_s())
                 .map_err(|e| format!("fire failed: {e}"))?;
@@ -298,7 +298,7 @@ pub(super) fn nudge_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .cloned()
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "usage: cos agent nudge remove <id>".to_string())?;
+                .ok_or_else(|| "usage: yu agent nudge remove <id>".to_string())?;
             let removed = store
                 .remove(&id)
                 .map_err(|e| format!("remove failed: {e}"))?;

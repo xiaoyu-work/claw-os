@@ -30,5 +30,5 @@ are never embedded in model-visible errors.
 ## Tests
 
 ```bash
-cargo test -p cos agent::media:: -- --test-threads=1
+cargo test -p yu agent::media:: -- --test-threads=1
 ```

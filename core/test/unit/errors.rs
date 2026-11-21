@@ -16,7 +16,7 @@ fn error_with_recovery_includes_all_fields() {
         IO_FILE_NOT_FOUND,
         "file not found: /home/cos/missing.txt",
         "Check the path exists",
-        &["cos app fs ls /home/cos"],
+        &["yu app fs ls /home/cos"],
     );
     assert_eq!(e["code"], "io.file_not_found");
     assert!(e["recovery"]["hint"].is_string());

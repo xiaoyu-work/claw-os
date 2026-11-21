@@ -1,14 +1,14 @@
 // AI helper for Claw OS Go apps.
 //
 // Chat is the stable model API and shells out to
-// `cos ai chat --app <id>`. The kernel derives ai.chat or
+// `yu ai chat --app <id>`. The kernel derives ai.chat or
 // ai.chat.untrusted from origin, then runs capability checks, budget,
 // safety, and audit.
 //
 // Apps never name a verb and never pick a model. They describe what
 // they want; the gate picks the verb and the machine owner configures
 // the one provider/model in /etc/cos/agent.toml. Importing a provider
-// SDK directly is refused at install time by `cos app lint` — this is
+// SDK directly is refused at install time by `yu app lint` — this is
 // the only sanctioned route to a model.
 //
 //	res, err := clawossdk.Chat("Summarise this", clawossdk.ChatOptions{
@@ -24,7 +24,7 @@ import (
 	"strings"
 )
 
-// AiUnavailableError: the `cos` binary could not be invoked or returned
+// AiUnavailableError: the `yu` binary could not be invoked or returned
 // garbage (transport failure). Distinct from a gate refusal.
 type AiUnavailableError struct{ Msg string }
 
@@ -126,7 +126,7 @@ func Budget(appID string) (*AiBudget, error) {
 	if app == "" {
 		return nil, &AiUnavailableError{Msg: "Budget: app_id is required"}
 	}
-	out, err := cosCallJSON("cos agent budget show", []string{"agent", "budget", "show", app})
+	out, err := cosCallJSON("yu agent budget show", []string{"agent", "budget", "show", app})
 	if err != nil {
 		if denied, ok := err.(*DeniedError); ok {
 			return nil, &AiUnavailableError{Msg: denied.Error()}
@@ -227,7 +227,7 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 		argv = append(argv, "--tools", strings.Join(a.opts.Tools, ","))
 	}
 
-	out, err := cosCallJSON("cos ai "+a.modality, argv)
+	out, err := cosCallJSON("yu ai "+a.modality, argv)
 	if err != nil {
 		if denied, ok := err.(*DeniedError); ok {
 			return nil, classifyError(denied.Payload)

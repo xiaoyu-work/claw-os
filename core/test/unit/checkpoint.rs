@@ -548,7 +548,7 @@ fn namespace_invalid_name() {
 /// command BEFORE wiping `upper/`. Pre-fix the function counted
 /// pending changes, unmounted overlay, and removed upper/ at
 /// step 2 — long before it tried to resolve the checkpoint id at
-/// step 3. A user who typoed `cos checkpoint rollback abc`
+/// step 3. A user who typoed `yu checkpoint rollback abc`
 /// destroyed all their uncommitted work and got an error.
 #[test]
 fn rollback_invalid_id_does_not_wipe_upper() {

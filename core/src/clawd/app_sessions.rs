@@ -380,7 +380,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             let args = string_array(&params, "args")?;
             let plan = operation_plan(&app, &operation, &args, &delegation, &ceiling)?;
             (
-                format!("cos app {app_id} {operation}"),
+                format!("yu app {app_id} {operation}"),
                 plan,
                 Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)),
             )
@@ -391,7 +391,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             let command = selected.cli_selector();
             let plan = gui_plan(&app, gui_entry.as_deref(), &exec, &delegation, &ceiling)?;
             (
-                format!("cos app {app_id} {command}"),
+                format!("yu app {app_id} {command}"),
                 plan,
                 Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)),
             )
@@ -405,7 +405,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
                 .ok_or_else(|| format!("App `{app_id}` has no MCP tool `{tool}`"))?;
             let invoke = crate::agent::tools::app_gateway::invoke_cap(&app_id, &tool)?;
             (
-                format!("cos app {app_id} mcp {tool}"),
+                format!("yu app {app_id} mcp {tool}"),
                 LaunchPlan::default(),
                 invoke,
             )
@@ -1816,7 +1816,7 @@ fn session_process_is_current(session: &SessionInfo) -> bool {
 /// caller reports.
 ///
 /// A launcher may honestly describe *less* authority than the daemon
-/// resolved for it — `cos proc spawn --role observer` should not hand
+/// resolved for it — `yu proc spawn --role observer` should not hand
 /// an App more than the observer session holds. Because the caller's
 /// set is only ever intersected against the trusted side, an inflated
 /// or fabricated set cannot widen the result.

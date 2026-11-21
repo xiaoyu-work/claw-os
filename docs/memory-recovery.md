@@ -3,10 +3,10 @@
 Agent conversation history lives in SQLite at the path reported by:
 
 ```bash
-cos agent sessions health
+yu agent sessions health
 ```
 
-The focused health command and the `memory` section of `cos agent doctor`
+The focused health command and the `memory` section of `yu agent doctor`
 report these dimensions separately:
 
 - SQLite `integrity_check`;
@@ -84,7 +84,7 @@ insertion slot. The merged request is then checked for ordered raw IDs,
 complete structured or flattened tool pairs, and a real user anchor before it
 can reach a provider. The same checks apply after a non-race compaction.
 
-`cos agent replay <session-id>` continues to export the original message rows
+`yu agent replay <session-id>` continues to export the original message rows
 and now includes the compaction lifecycle metadata and raw-row recovery range.
 It does not substitute the summary for the audit source.
 
@@ -99,19 +99,19 @@ tail always includes at least one genuine user message.
 Preview the exact plan without changing `memory.db`:
 
 ```bash
-cos agent sessions repair --dry-run
+yu agent sessions repair --dry-run
 ```
 
 Apply an in-place repair:
 
 ```bash
-cos agent sessions repair --yes
+yu agent sessions repair --yes
 ```
 
 Force a healthy FTS projection to be rebuilt:
 
 ```bash
-cos agent sessions repair --rebuild-fts --yes
+yu agent sessions repair --rebuild-fts --yes
 ```
 
 In-place repair checkpoints the WAL, restores schema objects and FTS triggers,
@@ -126,7 +126,7 @@ If health reports `requires_quarantine`, preserve the damaged database and
 initialize a replacement with:
 
 ```bash
-cos agent sessions repair --quarantine --yes
+yu agent sessions repair --quarantine --yes
 ```
 
 The main database and any WAL/SHM sidecars are renamed on the same filesystem

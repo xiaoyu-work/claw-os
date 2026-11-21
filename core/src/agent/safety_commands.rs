@@ -1,9 +1,9 @@
 use super::tools;
 use serde_json::{json, Value};
 
-/// `cos agent redact <text> [--strict] [--check]`
-/// `cos agent redact --file <path> [--strict] [--check]`
-/// `cos agent redact --stdin [--strict] [--check]`
+/// `yu agent redact <text> [--strict] [--check]`
+/// `yu agent redact --file <path> [--strict] [--check]`
+/// `yu agent redact --stdin [--strict] [--check]`
 ///
 /// Standalone interface to [`crate::agent::safety::redact::Redactor`].
 /// Useful for grepping a log file before posting to a bug report,
@@ -65,7 +65,7 @@ pub(super) fn redact_cmd(args: &[String]) -> Result<Value, String> {
         std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?
     } else if positional.is_empty() {
         return Err(
-            "usage: cos agent redact <text> | --file <path> | --stdin [--strict] [--check]"
+            "usage: yu agent redact <text> | --file <path> | --stdin [--strict] [--check]"
                 .to_string(),
         );
     } else {
@@ -99,7 +99,7 @@ pub(super) fn redact_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent tools [list [--unfiltered]|show <name>|llm-list]`
+/// `yu agent tools [list [--unfiltered]|show <name>|llm-list]`
 /// — read-only tool registry inspection. `list` (default) returns the
 /// permitted set under the runtime's guardrails (mirrors what the LLM
 /// sees), with `--unfiltered` showing every registered tool including
@@ -110,7 +110,7 @@ pub(super) fn redact_cmd(args: &[String]) -> Result<Value, String> {
 ///
 /// All three subcommands construct the *same* registry+guardrails
 /// pair the runtime would build, so what you see here is what the
-/// model would see if you ran `cos agent ask` in the same env.
+/// model would see if you ran `yu agent ask` in the same env.
 pub(super) fn tools_cmd(args: &[String]) -> Result<Value, String> {
     let config = crate::config::current_snapshot();
     let cfg = &config.agent;
@@ -162,7 +162,7 @@ pub(super) fn tools_cmd(args: &[String]) -> Result<Value, String> {
             let name = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent tools show <name>".to_string())?;
+                .ok_or_else(|| "usage: yu agent tools show <name>".to_string())?;
             let tool = registry
                 .get_unfiltered(&name)
                 .ok_or_else(|| format!("tool '{name}' not registered"))?;
@@ -195,7 +195,7 @@ pub(super) fn tools_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent guardrails [show|check <tool>]`
+/// `yu agent guardrails [show|check <tool>]`
 /// — surface the allow/deny tool guardrails the runtime would build
 /// from the current `AgentConfig`. `show` (default) reports the
 /// active allow + deny lists. `check <tool>` runs the decision for
@@ -233,7 +233,7 @@ pub(super) fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
             let tool = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| "usage: cos agent guardrails check <tool>".to_string())?;
+                .ok_or_else(|| "usage: yu agent guardrails check <tool>".to_string())?;
             let decision = g.decide(&tool);
             let (verdict, reason) = match &decision {
                 Decision::Allow => ("allow", None),
@@ -252,7 +252,7 @@ pub(super) fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent approval [show|check <tool> [--input '<json>']]`
+/// `yu agent approval [show|check <tool> [--input '<json>']]`
 /// — surface the approval gate the runtime would build from the
 /// current `AgentConfig` (auto_approve_tools / auto_deny_tools /
 /// dangerous_tools). `show` lists the three sets. `check <tool>`
@@ -292,7 +292,7 @@ pub(super) fn approval_cmd(args: &[String]) -> Result<Value, String> {
         }
         "check" => {
             let tool = args.get(1).cloned().ok_or_else(|| {
-                "usage: cos agent approval check <tool> [--input '<json>']".to_string()
+                "usage: yu agent approval check <tool> [--input '<json>']".to_string()
             })?;
             let mut input: Value = Value::Null;
             let mut i = 2usize;
@@ -337,7 +337,7 @@ pub(super) fn approval_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent binary-ext <list [--limit N]|check <path>|extensions>`
+/// `yu agent binary-ext <list [--limit N]|check <path>|extensions>`
 ///
 /// Surfaces [`crate::agent::safety::binary_ext`] so operators can:
 ///   * `check <path>` — quickly classify whether a file would be
@@ -399,7 +399,7 @@ pub(super) fn binary_ext_cmd(args: &[String]) -> Result<Value, String> {
         "check" => {
             let raw = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent binary-ext check <path-or-extension>".to_string())?;
+                .ok_or_else(|| "usage: yu agent binary-ext check <path-or-extension>".to_string())?;
             let c = crate::agent::safety::binary_ext::BinaryExtensions::default();
             // Heuristic: if it looks like a bare extension (no path
             // separator, at most one leading `.`), treat it as such;
@@ -437,12 +437,12 @@ pub(super) fn binary_ext_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent file-safety [check <path>|batch <path>...|categories]`
+/// `yu agent file-safety [check <path>|batch <path>...|categories]`
 pub(super) fn file_safety_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
     match sub {
         "" => Err(
-            "usage: cos agent file-safety [check <path> | batch <path>... | categories]"
+            "usage: yu agent file-safety [check <path> | batch <path>... | categories]"
                 .to_string(),
         ),
         "check" => file_safety_check_cmd(&args[1..]),
@@ -464,7 +464,7 @@ pub(super) fn file_safety_cmd(args: &[String]) -> Result<Value, String> {
 
 fn file_safety_check_cmd(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos agent file-safety check <path>".to_string());
+        return Err("usage: yu agent file-safety check <path>".to_string());
     }
     if args.len() > 1 {
         return Err(
@@ -478,7 +478,7 @@ fn file_safety_check_cmd(args: &[String]) -> Result<Value, String> {
 
 fn file_safety_batch_cmd(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos agent file-safety batch <path>...".to_string());
+        return Err("usage: yu agent file-safety batch <path>...".to_string());
     }
     let mut results: Vec<Value> = Vec::with_capacity(args.len());
     let mut allow_count = 0u64;
@@ -513,12 +513,12 @@ fn file_safety_to_json(path: &str, v: &crate::agent::safety::file_safety::FileSa
     })
 }
 
-/// `cos agent osv [parse <file>|check <file>|query <name>@<version> --ecosystem <eco>|ecosystems]`
+/// `yu agent osv [parse <file>|check <file>|query <name>@<version> --ecosystem <eco>|ecosystems]`
 pub(super) fn osv_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
     match sub {
         "" => Err(
-            "usage: cos agent osv [parse <file> | check <file> | query <name>@<version> --ecosystem <eco> | ecosystems]"
+            "usage: yu agent osv [parse <file> | check <file> | query <name>@<version> --ecosystem <eco> | ecosystems]"
                 .to_string(),
         ),
         "parse" => osv_parse_cmd(&args[1..]),
@@ -546,7 +546,7 @@ pub(super) fn osv_cmd(args: &[String]) -> Result<Value, String> {
 
 fn osv_parse_cmd(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos agent osv parse <lockfile>".to_string());
+        return Err("usage: yu agent osv parse <lockfile>".to_string());
     }
     if args.len() > 1 {
         return Err("osv parse accepts a single file argument".to_string());
@@ -564,7 +564,7 @@ fn osv_parse_cmd(args: &[String]) -> Result<Value, String> {
 
 fn osv_check_cmd(args: &[String]) -> Result<Value, String> {
     if args.is_empty() {
-        return Err("usage: cos agent osv check <lockfile>".to_string());
+        return Err("usage: yu agent osv check <lockfile>".to_string());
     }
     if args.len() > 1 {
         return Err("osv check accepts a single file argument".to_string());
@@ -579,7 +579,7 @@ fn osv_check_cmd(args: &[String]) -> Result<Value, String> {
         .map_err(|e| format!("osv: build runtime: {e}"))?;
     // Sequential per-package querying was the dominant cost here.
     // A typical Cargo.lock contains hundreds of crates; at ~300 ms
-    // round-trip per OSV.dev call that's a 30+ s `cos agent osv
+    // round-trip per OSV.dev call that's a 30+ s `yu agent osv
     // check`. Fan out to a small worker pool — capped at 8 to stay
     // under OSV.dev's polite-client guidance and to keep memory
     // bounded — and merge results in the original order so the
@@ -660,7 +660,7 @@ fn osv_query_cmd(args: &[String]) -> Result<Value, String> {
         i += 1;
     }
     let coord = name_at_version.ok_or_else(|| {
-        "usage: cos agent osv query <name>@<version> --ecosystem <eco>".to_string()
+        "usage: yu agent osv query <name>@<version> --ecosystem <eco>".to_string()
     })?;
     let (name, version) = coord
         .rsplit_once('@')

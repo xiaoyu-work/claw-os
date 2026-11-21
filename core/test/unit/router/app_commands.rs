@@ -92,7 +92,7 @@ fn lint_cli_projects_the_shared_violations_and_preserves_its_envelope() {
         "ok": false,
         "hint": "Lint failed. Apps must (a) route AI calls through `claw_os_sdk.ai` (not direct provider SDKs) \
                  and (b) ship every package-relative file referenced by their `mcp.entry` so the kernel agent can spawn \
-                 the MCP server. Run `cos app tool list <app>` to inspect the declared tool surface.",
+                 the MCP server. Run `yu app tool list <app>` to inspect the declared tool surface.",
     });
     for target in [None, Some("linted")] {
         assert_eq!(parse(lint_apps(&discovered, target).unwrap()), expected);
@@ -160,8 +160,8 @@ fn install_generates_desktop_entry_for_gui_app() {
     assert!(entry.is_file(), "expected {} to exist", entry.display());
     let body = std::fs::read_to_string(&entry).unwrap();
     assert!(
-        body.contains("Exec=cos app notes --gui %F"),
-        "Exec must route through `cos app`; got:\n{body}"
+        body.contains("Exec=yu app notes --gui %F"),
+        "Exec must route through `yu app`; got:\n{body}"
     );
     assert!(body.contains("Categories=ClawOS;Utility;"), "got:\n{body}");
     assert!(body.contains("MimeType=text/markdown;"), "got:\n{body}");

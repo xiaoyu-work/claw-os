@@ -123,7 +123,7 @@ def probe():
 
 
 def policy(verb, name):
-    binary = os.environ.get("CLAW_COS_BIN", "cos")
+    binary = os.environ.get("CLAW_COS_BIN", "yu")
     proc = subprocess.run(
         [binary, "__policy", "check", verb, "--name", name],
         capture_output=True,
@@ -709,7 +709,7 @@ impl SessionRow {
         cos::proc::register_session(cos::proc::SessionInfo {
             session_id: id.to_string(),
             pid: std::process::id(),
-            command: vec!["cos app probe-fixture session".to_string()],
+            command: vec!["yu app probe-fixture session".to_string()],
             started_at: chrono::Utc::now().to_rfc3339(),
             stdout_path: String::new(),
             stderr_path: String::new(),
@@ -751,7 +751,7 @@ fn a_transient_grant_is_answered_only_while_the_call_holds_it() {
     let (package, data) = fixture_package();
     let proc_dir = tempfile::tempdir().expect("proc dir");
     let row = SessionRow::install("app-transient", proc_dir.path());
-    std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_cos"));
+    std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_yu"));
 
     let mut session = open_session(package.path(), data.path(), "app-transient", CapSet::new());
 

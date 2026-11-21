@@ -1829,7 +1829,7 @@ const REVOKE_SPEC_ENV: &str = "COS_TEST_REVOKE_SPEC";
 /// costs nothing in an ordinary run. When the parent re-executes this
 /// binary with `COS_TEST_REVOKE_SPEC` set, this is a *different
 /// process* rewriting the owner's trust file and bumping the domain's
-/// durable generation — exactly what `cos provenance trust revoke`
+/// durable generation — exactly what `yu provenance trust revoke`
 /// does, and with no channel back to the process under test.
 #[test]
 fn revoker_helper() {

@@ -1,13 +1,13 @@
-//! cos primitive proxy tools.
+//! yu primitive proxy tools.
 //!
-//! Every cos kernel primitive (sandbox, proc, sysinfo, credential, cron,
+//! Every yu kernel primitive (sandbox, proc, sysinfo, credential, cron,
 //! checkpoint, service, ...) exposes the same uniform contract:
 //!
 //! ```ignore
 //! pub fn run(command: &str, args: &[String]) -> Result<serde_json::Value, String>;
 //! ```
 //!
-//! That contract is identical to how the cos CLI is dispatched. This module
+//! That contract is identical to how the yu CLI is dispatched. This module
 //! lifts each of those primitives into an LLM-callable [`Tool`] with one
 //! function pointer per primitive — no hand-written wrappers, no per-tool
 //! IPC.
@@ -43,10 +43,10 @@ use super::{Tool, ToolResult};
 use crate::agent::runtime::approval::ApprovalBoundary;
 use crate::caps::Verb;
 
-/// Function pointer matching the uniform cos primitive `run` signature.
+/// Function pointer matching the uniform yu primitive `run` signature.
 pub type PrimitiveFn = fn(&str, &[String]) -> Result<Value, String>;
 
-/// Generic LLM-facing wrapper around a cos primitive.
+/// Generic LLM-facing wrapper around a yu primitive.
 pub struct CosPrimitiveTool {
     name: &'static str,
     description: &'static str,
@@ -157,12 +157,12 @@ impl Tool for CosPrimitiveTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "Subcommand to dispatch on this cos primitive.",
+                    "description": "Subcommand to dispatch on this yu primitive.",
                     "enum": self.commands,
                 },
                 "args": {
                     "type": "array",
-                    "description": "Positional / flag args, exactly as you would type after `cos <primitive> <command>`.",
+                    "description": "Positional / flag args, exactly as you would type after `yu <primitive> <command>`.",
                     "items": { "type": "string" },
                     "default": [],
                 }
@@ -283,7 +283,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_proc",
-        description: "Manage long-running processes registered with cos: spawn, \
+        description: "Manage long-running processes registered with yu: spawn, \
                       query status/output, kill/signal, list, wait, renice, \
                       stats, result.",
         primitive: crate::proc::run,
@@ -341,7 +341,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_credential",
-        description: "Manage the encrypted local cos credential store on any \
+        description: "Manage the encrypted local yu credential store on any \
                       Linux host, including Ubuntu. Commands store/load/revoke/list \
                       manage secrets; oauth-refresh refreshes an existing Google or \
                       Microsoft login. Initial interactive authorization uses the \
@@ -495,7 +495,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     PrimitiveSpec {
         name: "cos_usage",
         description: "Read the current user's AI token usage. This is the \
-                      model-facing equivalent of `cos agent usage`. Choose \
+                      model-facing equivalent of `yu agent usage`. Choose \
                       overall, provider, model, session, app, or verb as the \
                       command; pass the selected value and optional --since, \
                       --until, --ok, --error, --app, or --verb filters in args.",
@@ -519,7 +519,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
 ];
 
-/// Register every cos primitive proxy on the supplied registry, plus the
+/// Register every yu primitive proxy on the supplied registry, plus the
 /// dedicated OAuth-login and `cos_memory` tools. Does NOT register
 /// `cos_recall` — the caller must supply a `MemoryDb` via [`register_recall`].
 /// Keeps the proxy registration pure (no IO during test setup).
@@ -594,7 +594,7 @@ pub fn register_recall_semantic(
     )));
 }
 
-/// Number of cos primitive tools shipped, *not* counting the higher-level
+/// Number of yu primitive tools shipped, *not* counting the higher-level
 /// tools (cos_memory etc.). Useful for tests that want to know specifically
 /// how many primitives were wired.
 pub const fn count() -> usize {

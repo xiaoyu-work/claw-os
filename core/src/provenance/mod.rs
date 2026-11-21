@@ -16,14 +16,14 @@
 //! | [`sign`] | Publisher/developer signing workflow |
 //! | [`install`] | Bounded staging, atomic content-addressed publication |
 //! | [`fsec`] | Ownership/mode gating and TOCTOU-resistant reads |
-//! | [`cli`] | `cos provenance …` |
+//! | [`cli`] | `yu provenance …` |
 //!
 //! ## Secure by default
 //!
 //! User-installed extensions require a valid signature from a trusted,
 //! non-revoked key. There is no environment variable that turns
 //! verification off or adds a trust root; unsigned local development
-//! goes through `cos provenance dev-trust`, which records a persistent
+//! goes through `yu provenance dev-trust`, which records a persistent
 //! decision in a segregated developer root and caps what the package
 //! may do.
 
@@ -150,7 +150,7 @@ pub fn audit(event: &str, facts: serde_json::Value) {
 pub fn quarantine_reason(kind: PackageKind, id: &str, error: &ProvenanceError) -> String {
     format!(
         "{} `{id}` is quarantined: {error}. Re-install a signed package, \
-         or run `cos provenance dev-trust --kind {} --id {id} --path <dir>` \
+         or run `yu provenance dev-trust --kind {} --id {id} --path <dir>` \
          to accept an unsigned development tree with a restricted ceiling.",
         kind.as_str(),
         kind.as_str()

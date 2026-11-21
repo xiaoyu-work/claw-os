@@ -17,7 +17,7 @@
     "entry": { "type": "string", "description": "Entry file relative to the app dir. Defaults to the runtime's default (main.py / main.js / main.sh / main)." },
     "operations": {
       "type": "object",
-      "description": "Optional human CLI operations keyed by command name. Each is invokable as `cos app <id> <op>` but is never an Agent tool. Values conform to #/$defs/operation.",
+      "description": "Optional human CLI operations keyed by command name. Each is invokable as `yu app <id> <op>` but is never an Agent tool. Values conform to #/$defs/operation.",
       "additionalProperties": { "$ref": "#/$defs/operation" }
     },
     "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation, MCP tool or GUI entry declares an ai.* need." },
@@ -29,7 +29,7 @@
       "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$(?![\\s\\S])", "maxLength": 64 },
       "additionalProperties": { "$ref": "#/$defs/objectType" }
     },
-    "desktop": { "$ref": "#/$defs/desktop", "description": "Optional desktop GUI surface. Declaring it makes the app a launchable GUI; the installer generates a .desktop entry whose Exec routes through `cos app <id> --gui` so the GUI process is kernel-spawned and shares the app's identity, caps, consent, and audit." },
+    "desktop": { "$ref": "#/$defs/desktop", "description": "Optional desktop GUI surface. Declaring it makes the app a launchable GUI; the installer generates a .desktop entry whose Exec routes through `yu app <id> --gui` so the GUI process is kernel-spawned and shares the app's identity, caps, consent, and audit." },
     "dependencies": { "type": "object", "additionalProperties": true, "description": "Free-form dependency declarations (e.g. {\"binaries\": [...]}) consumed by the bridge's resolver." }
   },
   "allOf": [
@@ -185,7 +185,7 @@
       "properties": {
         "name": { "type": "string", "description": "Identifier referenced by from-arg scope bindings." },
         "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "integer", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/integer/bool cannot." },
-        "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional. On an MCP tool arg this is CLI-only metadata: it keeps `cos app <id> <command>` syntax stable without operations and is never emitted into the model-facing MCP inputSchema." },
+        "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional. On an MCP tool arg this is CLI-only metadata: it keeps `yu app <id> <command>` syntax stable without operations and is never emitted into the model-facing MCP inputSchema." },
         "required": { "type": "boolean" },
         "required_when": { "$ref": "#/$defs/needCondition", "description": "Require and accept this argument only when an earlier declared argument satisfies the condition." },
         "repeatable": { "type": "boolean", "description": "Bind every occurrence in order and expose an array value. Repeatable positional args must be last; repeatable booleans are rejected." },
@@ -426,7 +426,7 @@
         "args": {
           "type": "array",
           "items": { "$ref": "#/$defs/arg" },
-          "description": "Declared input parameters. Same shape as an operation arg. An optional `binding` (positional/flag) is one-shot CLI metadata only: it keeps `cos app <id> <command>` syntax stable when the App has no operations and is never surfaced in the model-facing MCP inputSchema."
+          "description": "Declared input parameters. Same shape as an operation arg. An optional `binding` (positional/flag) is one-shot CLI metadata only: it keeps `yu app <id> <command>` syntax stable when the App has no operations and is never surfaced in the model-facing MCP inputSchema."
         },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } },
         "effects": {
@@ -473,7 +473,7 @@
           "x-python-type": "Dict[str, \"DesktopEntry\"]",
           "x-ts-type": "Record<string, DesktopEntry>",
           "x-go-type": "map[string]DesktopEntry",
-          "description": "Additional GUI surfaces, selected only by cos app <id> --gui:<name> [literal user args...]. No executable/path input or capability inheritance from other surfaces."
+          "description": "Additional GUI surfaces, selected only by yu app <id> --gui:<name> [literal user args...]. No executable/path input or capability inheritance from other surfaces."
         },
         "name": { "$ref": "#/$defs/localizedText", "description": "Display name for the launcher entry. Defaults to the manifest name." },
         "icon": { "type": "string", "description": "Icon name (XDG icon theme) or path for the .desktop Icon= field. Defaults to com.clawos.<Id>." },

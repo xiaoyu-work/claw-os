@@ -2,9 +2,9 @@
 //!
 //! `data_dir/agent/hooks.json` lists which built-in hook kinds
 //! (currently only `logging`) should auto-register at the start of
-//! every `cos agent ask` / `cos agent chat` invocation. This is the
+//! every `yu agent ask` / `yu agent chat` invocation. This is the
 //! piece that makes the hooks system useful from the CLI — without
-//! it, a `cos agent hooks enable logging` command would only affect
+//! it, a `yu agent hooks enable logging` command would only affect
 //! the single short-lived process that ran the command.
 //!
 //! Schema (forward-compatible — unknown fields preserved):
@@ -221,7 +221,7 @@ pub fn register_into_at(
 }
 
 /// RAII guard that unregisters hook names on drop. Used to keep
-/// auto-loaded hooks scoped to a single `cos agent ask` invocation
+/// auto-loaded hooks scoped to a single `yu agent ask` invocation
 /// so repeated invocations / tests don't accumulate registrations.
 pub struct AutoHookGuard {
     registry: HookRegistry,

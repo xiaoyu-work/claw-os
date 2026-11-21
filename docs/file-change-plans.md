@@ -9,7 +9,7 @@ path. A plan is App-owned data, not write authority.
 Inside Linux or WSL Claw OS:
 
 ```bash
-cos app fs plan_write /home/user/project/config.txt \
+yu app fs plan_write /home/user/project/config.txt \
   --content "proposed content" --ttl-seconds 3600
 ```
 
@@ -31,8 +31,8 @@ private baseline/proposed contents are not included as separate public fields.
 Use the returned values:
 
 ```bash
-cos app fs plan_show /home/user/project/config.txt --plan PLAN_UUID
-cos object resolve 'app://fs/change-plan?id=%2Fhome%2Fuser%2Fproject%2Fconfig.txt&revision=PLAN_UUID'
+yu app fs plan_show /home/user/project/config.txt --plan PLAN_UUID
+yu object resolve 'app://fs/change-plan?id=%2Fhome%2Fuser%2Fproject%2Fconfig.txt&revision=PLAN_UUID'
 ```
 
 The object ID is the absolute target path and its revision selects a specific
@@ -43,7 +43,7 @@ the target, plus `data.db.read` for the plan store.
 ## Apply explicitly
 
 ```bash
-cos app fs plan_apply /home/user/project/config.txt \
+yu app fs plan_apply /home/user/project/config.txt \
   --plan PLAN_UUID --review 'sha256:REVIEW_FINGERPRINT' --confirm=true
 ```
 
@@ -97,11 +97,11 @@ All OS forms use the same Files App and broker implementation. Attach the
 plan through the existing shared Activity object contract:
 
 ```bash
-cos activity attach-object ACTIVITY_UUID --label "Config proposal" \
+yu activity attach-object ACTIVITY_UUID --label "Config proposal" \
   --app fs --type change-plan \
   --object-id /home/user/project/config.txt --revision PLAN_UUID
 
-cos operation execute fs plan_show --activity ACTIVITY_UUID -- \
+yu operation execute fs plan_show --activity ACTIVITY_UUID -- \
   /home/user/project/config.txt --plan PLAN_UUID
 ```
 
@@ -133,7 +133,7 @@ target. Lifetime is 60 seconds to 24 hours, default one hour.
 Consumed or expired records can be pruned explicitly:
 
 ```bash
-cos app fs plan_prune /home/user/project/config.txt --keep 10 --confirm=true
+yu app fs plan_prune /home/user/project/config.txt --keep 10 --confirm=true
 ```
 
 Pruning never deletes the target and preserves live or indeterminate plans.

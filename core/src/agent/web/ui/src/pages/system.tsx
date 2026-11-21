@@ -1,5 +1,5 @@
 /**
- * System info page. Live data from `cos sysinfo` via `/api/sysinfo/{cmd}`.
+ * System info page. Live data from `yu sysinfo` via `/api/sysinfo/{cmd}`.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -55,7 +55,7 @@ export function SystemPage() {
       <div>
         <h1 className="text-xl font-semibold">System</h1>
         <p className="text-xs text-muted-foreground">
-          Live system info from <code className="font-mono">cos sysinfo</code>.
+          Live system info from <code className="font-mono">yu sysinfo</code>.
         </p>
       </div>
 

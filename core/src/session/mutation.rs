@@ -13,7 +13,7 @@
 //! cannot ask the OS to undo it without knowing what the file
 //! contained before. A mutation record carries the **inverse** —
 //! literally the bytes / state needed to roll it back — which lets us
-//! ship `cos agent undo <sid>` without an LLM in the loop.
+//! ship `yu agent undo <sid>` without an LLM in the loop.
 //!
 //! ## Layout
 //!
@@ -116,7 +116,7 @@ pub struct MutationRecord {
     /// Optional turn this mutation was caused by (so the UI can
     /// group: "during turn 14 the agent did these three things").
     /// `None` for mutations recorded outside an LLM turn (e.g. a
-    /// user-driven `cos app fs rm`).
+    /// user-driven `yu app fs rm`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_seq: Option<u64>,
 

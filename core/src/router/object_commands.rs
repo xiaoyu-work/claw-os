@@ -65,7 +65,7 @@ fn run_with(
             Ok(value)
         }
         _ => Err(
-            "usage: cos object catalog [APP] | reference APP TYPE ID [--revision REV] | describe URI | resolve URI"
+            "usage: yu object catalog [APP] | reference APP TYPE ID [--revision REV] | describe URI | resolve URI"
                 .to_string(),
         ),
     }

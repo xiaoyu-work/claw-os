@@ -200,7 +200,7 @@ impl OrtGenaiSyms {
     /// `lib` must point at a real `libonnxruntime-genai`
     /// produced by an upstream onnxruntime-genai build. Each symbol
     /// must match the C signature declared above. Both invariants are
-    /// honored by the official prebuilt releases that `cos engine`
+    /// honored by the official prebuilt releases that `yu engine`
     /// consumes.
     pub unsafe fn resolve(lib: &libloading::Library) -> Result<Self, libloading::Error> {
         macro_rules! sym {

@@ -49,7 +49,7 @@ use crate::model::registry::{EngineRequirement, Manifest};
 pub enum CompatError {
     /// The model declared a `requires_engine.name` but no engine of
     /// that name has any active version in the registry.
-    #[error("model requires engine \"{required}\" but no active version is installed (run `cos engine update {required}`)")]
+    #[error("model requires engine \"{required}\" but no active version is installed (run `yu engine update {required}`)")]
     NoActiveEngine { required: String },
 
     /// An active engine exists but its name does not match what the
@@ -119,7 +119,7 @@ pub fn check_engine_compat(model: &Manifest) -> Result<(), CompatError> {
 }
 
 /// Reusable inner check that doesn't require a full Manifest — used by
-/// `cos model check` before the manifest is fully assembled and by
+/// `yu model check` before the manifest is fully assembled and by
 /// tests.
 pub fn check_against_active_engine(
     req: &EngineRequirement,

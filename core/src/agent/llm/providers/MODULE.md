@@ -62,7 +62,7 @@ only poisoned/unavailable pool state maps to infrastructure failure.
 ## Tests
 
 ```bash
-cargo test -p cos agent::llm::providers::<provider>::tests -- --test-threads=1
-cargo test -p cos agent::llm::accumulate::tests -- --test-threads=1
-cargo test -p cos agent::setup::tests -- --test-threads=1
+cargo test -p yu agent::llm::providers::<provider>::tests -- --test-threads=1
+cargo test -p yu agent::llm::accumulate::tests -- --test-threads=1
+cargo test -p yu agent::setup::tests -- --test-threads=1
 ```

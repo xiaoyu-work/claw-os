@@ -199,7 +199,7 @@ copy. Owner-scoped task responses disclose attachment metadata only.
 Activity adapters retain Main's authenticated owner transport and local/remote
 Web session provenance. Task submission, safe retry, App-service admission and
 protected owner App review remain backend responsibilities. The existing
-capability-approval Web page is not a replacement for `cos review` or the native
+capability-approval Web page is not a replacement for `yu review` or the native
 OS review authority, and Activity text remains labelled untrusted owner data.
 The Web is a presentation for separate `PackageImpact` reviews through that
 same protected OS authority. App frames receive neither its token nor new
@@ -268,8 +268,8 @@ Run relevant Rust route tests and, for UI changes, the existing UI package
 build/test commands from `ui/`.
 
 ```bash
-cargo test -p cos agent::web:: -- --test-threads=1
-cargo test -p cos agent::web::routes::activities::tests -- --test-threads=1
+cargo test -p yu agent::web:: -- --test-threads=1
+cargo test -p yu agent::web::routes::activities::tests -- --test-threads=1
 ```
 
 Activity adapter tests cover authentication, bounded/closed request decoding,

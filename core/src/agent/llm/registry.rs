@@ -47,7 +47,7 @@ pub const REGISTERED: &[&str] = &[
 /// (which would print the misleading message `unknown provider ''`).
 /// This is the default state on a fresh install — `AgentConfig::default()`
 /// leaves `provider` empty so the OS owner is forced to pick one via
-/// `cos agent setup text apply ...` or the desktop initial-setup AI page.
+/// `yu agent setup text apply ...` or the desktop initial-setup AI page.
 pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn Provider>> {
     let context = ProviderBuildContext::from_process()?;
     build_with_context(name, model, agent_cfg, &context)
@@ -62,7 +62,7 @@ pub fn build_with_context(
 ) -> Result<Arc<dyn Provider>> {
     if name.is_empty() {
         return Err(LlmError::NotConfigured(
-            "no text-model provider configured. Run `cos agent setup text apply \
+            "no text-model provider configured. Run `yu agent setup text apply \
              --provider <name> --model <id> [--api-key <key>]` or open the \
              desktop initial-setup AI page to pick one."
                 .into(),

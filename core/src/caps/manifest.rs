@@ -147,9 +147,9 @@ pub struct Manifest {
 
     /// Optional desktop GUI surface. Presence of this block is the
     /// single signal that the app wants a graphical entry: at
-    /// `cos app install` the kernel emits a
+    /// `yu app install` the kernel emits a
     /// `/usr/share/applications/com.clawos.<Id>.desktop` launcher whose
-    /// `Exec` routes through `cos app <id> <exec>` so the GUI process is
+    /// `Exec` routes through `yu app <id> <exec>` so the GUI process is
     /// kernel-spawned (identity/audit/consent apply exactly as they do
     /// for the headless path). Absent means the app is CLI/agent-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,7 +206,7 @@ pub struct AiPolicy {
     pub origins: Vec<PromptOrigin>,
 
     /// Allowlist of catalog tool names the app may expose to a model
-    /// via `cos ai chat --tools`. Each entry must be a known tool in
+    /// via `yu ai chat --tools`. Each entry must be a known tool in
     /// `crate::ai::tools::CATALOG`; unknown names are rejected at
     /// install time so a typo can never reach the gate.
     ///
@@ -575,7 +575,7 @@ pub(crate) fn argument_is_required(
 /// needs its tools. The agent attaches to this server through the
 /// kernel's MCP bridge; every `tools/call` it makes is caps-gated
 /// using the manifest's per-tool `needs[]` and audited the same way
-/// `cos ai chat` is.
+/// `yu ai chat` is.
 ///
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -668,7 +668,7 @@ pub struct McpTool {
     pub name: String,
 
     /// One-line description surfaced to the model and to
-    /// `cos app tool list`.
+    /// `yu app tool list`.
     pub summary: LocalizedText,
 
     /// Declared input parameters. Same semantics as
@@ -701,7 +701,7 @@ pub struct McpTool {
 /// time and the kernel's long-lived `--gui` launch path.
 ///
 /// The generated launcher's `Exec` is
-/// `cos app <id> <exec> %F`, so the GUI is kernel-spawned and inherits
+/// `yu app <id> <exec> %F`, so the GUI is kernel-spawned and inherits
 /// the same `COS_APP_ID` identity, audit, and consent machinery as the
 /// headless operation path. A hand-written `.desktop` that ran the app
 /// binary directly would bypass that — hence generation is mandatory.
@@ -1058,7 +1058,7 @@ pub enum ManifestError {
     AiBypassNotAllowedForApps { field: &'static str },
     #[error(
         "manifest `ai.tools[]`: unknown tool `{name}` — not in the kernel \
-         catalog. Run `cos ai tools` to list known tools."
+         catalog. Run `yu ai tools` to list known tools."
     )]
     AiUnknownTool { name: String },
     #[error("manifest `ai.tools[]`: tool `{name}` declared twice")]

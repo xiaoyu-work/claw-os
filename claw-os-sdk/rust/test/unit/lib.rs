@@ -174,14 +174,14 @@ fn build_command_uses_env_override() {
 fn build_command_default_is_path_lookup() {
     std::env::remove_var("CLAW_COS_BIN");
     let cmd = build_command("fs", "ls", std::iter::empty::<&str>());
-    assert_eq!(cmd.get_program(), "cos");
+    assert_eq!(cmd.get_program(), "yu");
 }
 
-/// Fake `cos` binary that emits a fixed JSON object so we can
+/// Fake `yu` binary that emits a fixed JSON object so we can
 /// exercise the parsing path without a real backend. Used by
 /// several integration-style tests.
 fn write_fake_cos(dir: &std::path::Path, json: &str, exit_code: i32) -> std::path::PathBuf {
-    let script = dir.join("cos");
+    let script = dir.join("yu");
     std::fs::write(
         &script,
         format!("#!/bin/sh\ncat <<'EOF'\n{json}\nEOF\nexit {exit_code}\n"),

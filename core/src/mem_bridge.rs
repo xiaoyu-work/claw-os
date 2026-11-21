@@ -1,9 +1,9 @@
 //! Internal app→agent-memory bridge for bundled and user apps.
 //!
 //! This module is **not** a user-facing CLI namespace. Apps shell out
-//! through `cos __memory <subcommand>` to push a structured summary
+//! through `yu __memory <subcommand>` to push a structured summary
 //! into the agent's memory; the user inspects or redacts what has
-//! been stored from `cos agent memory`.
+//! been stored from `yu agent memory`.
 //!
 //! Output envelope is a single JSON object on stdout. Errors are
 //! returned as `Err(String)` by [`run`] which the router maps to a
@@ -81,7 +81,7 @@ fn permission_denied(action: &str, denial: Value) -> String {
     .to_string()
 }
 
-/// Entry point for the hidden `cos __memory` bridge. The first
+/// Entry point for the hidden `yu __memory` bridge. The first
 /// argument is the subcommand (`remember` | `list` | `show` |
 /// `search` | `forget`); the rest are subcommand-specific.
 ///
@@ -352,7 +352,7 @@ fn forget(auth: &dyn MemoryAuthority, args: &[String]) -> Result<Value, String> 
 // ---------------------------------------------------------------------------
 
 /// Lazily-initialised single-threaded tokio runtime for the
-/// bridge process. The bridge is invoked once per `cos __memory`
+/// bridge process. The bridge is invoked once per `yu __memory`
 /// call (one subprocess), so a current-thread runtime is enough and
 /// avoids spinning up a worker pool we'd immediately tear down.
 fn runtime() -> &'static tokio::runtime::Runtime {

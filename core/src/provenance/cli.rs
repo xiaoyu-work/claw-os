@@ -1,4 +1,4 @@
-//! `cos provenance …` — the operator and developer surface.
+//! `yu provenance …` — the operator and developer surface.
 //!
 //! Commands:
 //!
@@ -41,7 +41,7 @@ fn require_unix(command: &str) -> Result<(), String> {
     Err(crate::errors::error(
         "provenance.unsupported",
         &format!(
-            "`cos provenance {command}` requires a Unix host: package verification depends on \
+            "`yu provenance {command}` requires a Unix host: package verification depends on \
              POSIX ownership/mode checks, `openat`-based reads and durable renames that this \
              platform cannot provide. No partial or advisory result is offered."
         ),
@@ -206,7 +206,7 @@ fn trust_cmd(args: &[String]) -> Result<Value, String> {
         "add" => trust_add(rest),
         "record-system" => {
             if !rest.is_empty() {
-                return Err("usage: cos provenance trust record-system".into());
+                return Err("usage: yu provenance trust record-system".into());
             }
             let domain_generation = trust::record_system_generation()?;
             super::audit(
@@ -607,7 +607,7 @@ pub fn withdrawal_command(command: &str, args: &[String]) -> Result<Option<Withd
             if args.len() != 2 || args[1].len() != 32
                 || !args[1].bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             {
-                return Err("usage: cos provenance trust status|recover <32-lowercase-hex-request-id>".into());
+                return Err("usage: yu provenance trust status|recover <32-lowercase-hex-request-id>".into());
             }
             if args[0] == "status" { WithdrawalCommand::Status(args[1].clone()) }
             else { WithdrawalCommand::Recover(args[1].clone()) }
@@ -799,7 +799,7 @@ fn artifacts(args: &[String]) -> Result<Value, String> {
 /// retained artifact.
 ///
 /// Artifact directories are named with a 32-character prefix, so a
-/// caller who copies the short name out of `cos provenance artifacts`
+/// caller who copies the short name out of `yu provenance artifacts`
 /// would otherwise get "no retained artifact" for a digest that plainly
 /// exists. A unique prefix resolves; an ambiguous one lists the
 /// candidates instead of guessing.
@@ -812,7 +812,7 @@ fn resolve_artifact_digest(kind: PackageKind, id: &str, supplied: &str) -> Resul
     if bare.is_empty() || !bare.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!(
             "`{supplied}` is not a hex digest; pass the full `sha256:<64 hex>` value \
-             from `cos provenance artifacts --kind {} --id {id}`",
+             from `yu provenance artifacts --kind {} --id {id}`",
             kind.as_str()
         ));
     }
@@ -832,7 +832,7 @@ fn resolve_artifact_digest(kind: PackageKind, id: &str, supplied: &str) -> Resul
         1 => Ok(matches.remove(0)),
         0 => Err(format!(
             "no retained, still-verifiable artifact for {} `{id}` matches digest `{supplied}`; \
-             run `cos provenance artifacts --kind {} --id {id}` to list them",
+             run `yu provenance artifacts --kind {} --id {id}` to list them",
             kind.as_str(),
             kind.as_str()
         )),

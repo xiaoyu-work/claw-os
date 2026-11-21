@@ -83,7 +83,7 @@ The APT publisher merges all selected package families
 once, preserving the authenticated candidates for families not rebuilt.
 
 The coordinated first transfer is strictly below `1:0.2.1`; runtime ABI stays
-1. Agent's versioned `claw-os-app-runtime-v1` Provides is rendered from
+1. Agent's versioned `yuos-app-runtime-v1` Provides is rendered from
 `app-platform.json` (0.2.1 implementation), and App packages require `>= 0.2.1`.
 Agent recommends `claw-apps-agent`. Desktop requires that headless set, the
 independently owned graphical App packages and Mail's Thunderbird integration.
@@ -125,7 +125,7 @@ control without requiring the chat client or a Desktop dependency.
 
 Agent depends on `pkexec` and `polkitd`, which provide the polkit runtime and
 password verifier used by the installed `claw-approval-helper`. Headless/WSL Web
-review and the protected `cos review` path need these without a Desktop package.
+review and the protected `yu review` path need these without a Desktop package.
 The Web process supplies a process-bound authentication dialog, not permission
 authority; ordinary attended TUI one-shot decisions stay inline.
 
@@ -135,7 +135,7 @@ that interface.
 The session launches it directly under the authenticated PAM/kernel login,
 not through the user manager. Agent installs no FileManager1 D-Bus activation file, user unit,
 autostart entry or GNOME/Nautilus configuration. The helper routes bounded
-same-owner URI intents through ordinary `cos app --gui`; package/review,
+same-owner URI intents through ordinary `yu app --gui`; package/review,
 delegation, capability, sandbox and GUI lifetime checks remain Root-owned.
 The product owns the UI, separate ELFs and resources. See
 [intent acceptance versus GUI outcomes](README.md#file-manager-desktop-intents).

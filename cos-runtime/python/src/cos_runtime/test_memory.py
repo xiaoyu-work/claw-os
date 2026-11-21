@@ -37,7 +37,7 @@ def _wire_error(error: str, code: str, *, detail: dict | None = None) -> str:
 
 
 def _write_fake_cos(tmp_dir: str, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> str:
-    """Drop a fake `cos` binary into tmp_dir that echoes the requested
+    """Drop a fake `yu` binary into tmp_dir that echoes the requested
     streams and exits with the requested code. Returns the path."""
     script = textwrap.dedent(
         f"""
@@ -113,7 +113,7 @@ class SubprocessShellOutTests(unittest.TestCase):
 
     def test_unstructured_failure_becomes_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            cos = _write_fake_cos(tmp, stderr="cos: catastrophic kernel oops", exit_code=2)
+            cos = _write_fake_cos(tmp, stderr="yu: catastrophic kernel oops", exit_code=2)
             with mock.patch.dict(os.environ, {"CLAW_COS_BIN": cos}):
                 with self.assertRaises(memory.MemoryUnavailable):
                     memory.remember(text="hi", source="expense-tracker")
@@ -139,12 +139,12 @@ class SubprocessShellOutTests(unittest.TestCase):
             captured["cmd"] = list(cmd)
             return _FakeProc(_wire_success(envelope), "", 0)
 
-        with mock.patch.dict(os.environ, {"CLAW_COS_BIN": "/usr/bin/cos"}):
+        with mock.patch.dict(os.environ, {"CLAW_COS_BIN": "/usr/bin/yu"}):
             with mock.patch("subprocess.run", side_effect=fake_run):
                 got = memory.forget(source="expense-tracker")
         self.assertEqual(got, envelope)
         argv = captured["cmd"]
-        self.assertEqual(argv[:2], ["/usr/bin/cos", "--wire=1"])
+        self.assertEqual(argv[:2], ["/usr/bin/yu", "--wire=1"])
         self.assertIn("__memory", argv)
         self.assertIn("forget", argv)
         self.assertIn("--source", argv)

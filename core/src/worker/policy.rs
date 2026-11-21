@@ -122,7 +122,7 @@ pub enum MountClass {
     System,
     /// The worker's own package directory, read-only.
     Package,
-    /// Kernel-owned runtime assets (the `cos` binary, SDK trees).
+    /// Kernel-owned runtime assets (the `yu` binary, SDK trees).
     Runtime,
     /// The operation's private writable data directory.
     AppData,

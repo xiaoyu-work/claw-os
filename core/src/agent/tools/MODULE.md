@@ -49,7 +49,7 @@ which tool calls are exposed and executed.
 | `registry.rs` | Tool registration, filtering, lookup, and explicit registry resources/paths |
 | `progressive.rs` | Deferred-tool classification, compact catalog, bridge schemas, and envelope validation |
 | `guardrails.rs` | Tool exposure/dispatch policy |
-| `cos_help.rs` | Read-only progressive discovery over the shared public `cos` command tree |
+| `cos_help.rs` | Read-only progressive discovery over the shared public `yu` command tree |
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
 | `cos_apps_session.rs` | Authenticated MCP App tool registration, task-Host relay, reusable/single-call placement, and calls through the daemon service Host |
@@ -130,5 +130,5 @@ Explicit CLI operation capture stays outside the model's App tool projection.
 ## Tests
 
 ```bash
-cargo test -p cos agent::tools:: -- --test-threads=1
+cargo test -p yu agent::tools:: -- --test-threads=1
 ```

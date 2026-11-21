@@ -1826,14 +1826,14 @@ async fn end_to_end_includes_extra_headers() {
     c.base_url = Some(base_url);
     c.extra_headers
         .insert("HTTP-Referer".into(), "https://cos.example".into());
-    c.extra_headers.insert("X-Title".into(), "cos agent".into());
+    c.extra_headers.insert("X-Title".into(), "yu agent".into());
     c.request_timeout = 5;
 
     let provider = OpenAICompatProvider::from_agent_config("openrouter", "openrouter/auto", &c);
     let _ = provider.chat(req_text("hi")).await; // success or not, we want to inspect req
     let request = String::from_utf8_lossy(&handle.await.unwrap()).to_lowercase();
     assert!(request.contains("http-referer: https://cos.example"));
-    assert!(request.contains("x-title: cos agent"));
+    assert!(request.contains("x-title: yu agent"));
 }
 
 // ---- credential pool wiring ------------------------------------------

@@ -105,7 +105,7 @@ fn isolate() -> tempfile::TempDir {
     ).unwrap();
     fs::write("/etc/group", "root:x:0:\nstdio:x:42424:\n").unwrap();
     fs::write("/etc/ld.so.cache", loader_cache).unwrap();
-    for binary in ["cos", "claw-app-runner"] {
+    for binary in ["yu", "claw-app-runner"] {
         let destination = Path::new("/usr/local/bin").join(binary);
         fs::copy(binaries.join(binary), &destination)
             .unwrap_or_else(|error| panic!("build matching {binary} first: {error}"));
@@ -292,7 +292,7 @@ impl Running {
         let session = format!("stdio-caller-{}", uuid::Uuid::new_v4().simple());
         let stderr = root.join(format!("{session}.stderr"));
         let mut child = std::process::Command::new("/usr/local/bin/claw-app-runner")
-            .args(["--launch-gate", GATE, "--", "/usr/local/bin/cos"])
+            .args(["--launch-gate", GATE, "--", "/usr/local/bin/yu"])
             .args(args)
             .current_dir(root)
             .env_clear()

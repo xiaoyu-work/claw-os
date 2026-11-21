@@ -930,7 +930,7 @@ fn cmd_top(args: &[String]) -> Result<Value, String> {
 
         // The performance diagnosis consumes this output directly. Include
         // enough provenance to answer "what owns this process?" without
-        // forcing the model to guess whether an OS PID is a cos session id or
+        // forcing the model to guess whether an OS PID is a yu session id or
         // to fall back to shell/App execution.
         let users = passwd_users();
         let mut visible_rows = Vec::with_capacity(rows.len());

@@ -57,7 +57,7 @@ pub enum PolicyError {
     #[error("policy unavailable: {0}")]
     Unavailable(String),
 
-    /// Transport failure (cos binary, JSON decode, …).
+    /// Transport failure (yu binary, JSON decode, …).
     #[error(transparent)]
     Bridge(#[from] BridgeError),
 }

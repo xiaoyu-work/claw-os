@@ -31,7 +31,7 @@ an authenticated publisher signature, or record an explicit digest-bound
 development decision:
 
 ```bash
-cos app install adapters/<id> --dev-trust
+yu app install adapters/<id> --dev-trust
 ```
 
 See [`../docs/extension-provenance.md`](../docs/extension-provenance.md).

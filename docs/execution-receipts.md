@@ -15,7 +15,7 @@ receipt to complete an Activity.
 Inside an installed Linux or WSL Claw OS environment:
 
 ```bash
-cos operation execute kv get \
+yu operation execute kv get \
   --activity 00000000-0000-4000-8000-000000000001 \
   -- release.status
 ```
@@ -23,7 +23,7 @@ cos operation execute kv get \
 Use an existing Activity ID. The Activity must be active before starting the
 operation. This command validates the App and invocation, then uses the same
 `agent.invoke`, App permission, provenance, sandbox, and audit path as
-`cos app`. It does not run App code inside root `clawd`, bypass approval, or
+`yu app`. It does not run App code inside root `clawd`, bypass approval, or
 start an LLM to decide what to execute. Caller stdin is not forwarded through
 this entry point; use explicitly declared arguments.
 
@@ -68,8 +68,8 @@ labels are preserved; terminal goals do not acquire new resources from late
 results. Attachment failures preserve the original result and require only a
 metadata retry, never another App execution.
 
-Human `cos app` calls do not enable automatic task capture. The explicit
-`cos operation execute --activity` path owns its single receipt even when the
+Human `yu app` calls do not enable automatic task capture. The explicit
+`yu operation execute --activity` path owns its single receipt even when the
 human caller's session is already associated with that Activity.
 
 The reporting-only adapter also accepts bounded task reports over the worker's
@@ -117,7 +117,7 @@ execution receipts.
 ## Read the same receipts everywhere
 
 ```bash
-cos activity receipts 00000000-0000-4000-8000-000000000001 --limit 50
+yu activity receipts 00000000-0000-4000-8000-000000000001 --limit 50
 ```
 
 Activity Web and native desktop display the same broker records. Reports
@@ -145,7 +145,7 @@ and includes a bounded, redacted `report` object. **Do not rerun the operation
 just to retry recording.** Save that report object and submit it through stdin:
 
 ```bash
-cos activity record-receipt 00000000-0000-4000-8000-000000000001 \
+yu activity record-receipt 00000000-0000-4000-8000-000000000001 \
   --stdin < report.json
 ```
 

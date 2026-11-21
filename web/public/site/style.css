@@ -1634,7 +1634,7 @@ code, .mono, pre {
   font-size: 14.5px;
 }
 .stack-layer-agent  { background: linear-gradient(95deg, rgba(124,58,237,.06), rgba(37,99,235,.03), #ffffff 70%); }
-.stack-layer-cos    { background: linear-gradient(95deg, rgba(37,99,235,.06),  rgba(8,145,178,.04), #ffffff 70%); }
+.stack-layer-yu    { background: linear-gradient(95deg, rgba(37,99,235,.06),  rgba(8,145,178,.04), #ffffff 70%); }
 .stack-layer-clawd  { background: linear-gradient(95deg, rgba(8,145,178,.06),  rgba(16,185,129,.04), #ffffff 70%); }
 .stack-layer-linux  { background: linear-gradient(95deg, var(--bg-elev-2), #ffffff 70%); }
 

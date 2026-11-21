@@ -13,8 +13,8 @@ only with the OS and supported only for its bundled/trusted clients:
 |---|---|---|
 | `cos_runtime::policy` | `cos_runtime.policy` | Shell out to the hidden policy bridge for self-gating capability enforcement |
 | (not applicable) | `cos_runtime.memory` | Bounded wire-v1 requests to OS-owned memory with exact source-scope authorization; no App-local memory provider |
-| `cos_runtime::fs` | (not applicable) | Route every `fs.*` op through `cos app fs <verb>` so audit / snapshots / caps apply |
-| `cos_runtime::exec` | (not applicable) | Route every `exec.*` op through `cos app exec <verb>` |
+| `cos_runtime::fs` | (not applicable) | Route every `fs.*` op through `yu app fs <verb>` so audit / snapshots / caps apply |
+| `cos_runtime::exec` | (not applicable) | Route every `exec.*` op through `yu app exec <verb>` |
 | `cos_runtime::pkg` | (not applicable) | Route `pkg.*` ops similarly |
 | `cos_runtime::notify` | (not applicable) | Route `notify.*` ops similarly |
 | `cos_runtime::net` | (not applicable) | Route `net.*` ops similarly |
@@ -70,12 +70,12 @@ directories, and installed delivery still uses the OS package. See
   embeds the Rust crate via `path = ` in workspace deps. There is no scenario
   where someone installs `cos-runtime` separately.
 - Importing `cos_runtime` from a non-claw-os process **will fail loudly**
-  (`cos` binary not on PATH, no `COS_SESSION` env, etc.) — by design.
+  (`yu` binary not on PATH, no `COS_SESSION` env, etc.) — by design.
 
 ## Guarded file replacement
 
 `cos_runtime.file_changes.replace_file(path: str, expected: dict | None,
-content: bytes, *, session_id: str | None = None) -> dict` calls the fixed `cos __file replace` bridge using the
+content: bytes, *, session_id: str | None = None) -> dict` calls the fixed `yu __file replace` bridge using the
 runtime's existing executable discovery. It sends the closed JSON request on
 stdin, never content in arguments or environment, and has no direct-write
 fallback. The bridge derives `COS_SESSION` and forwards to `system.file.replace`.

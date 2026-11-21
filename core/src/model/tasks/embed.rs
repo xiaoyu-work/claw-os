@@ -38,7 +38,7 @@ pub use claw_embed::{EmbedError, EmbedRequest, EmbedResponse, EmbedUsage, Embedd
 /// differs (`text-embedding-3-small` is 1536, `-large` is 3072).
 /// `SemanticStore` enforces this with a stickiness check that returns
 /// `ModelMismatch` on the first row from a new model. To migrate, run
-/// `cos agent semantic clear-all --yes` and re-index.
+/// `yu agent semantic clear-all --yes` and re-index.
 pub const MODEL_NAME: &str = "text-embedding-3-small";
 
 // =====================================================================

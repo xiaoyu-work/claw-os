@@ -7,8 +7,8 @@
 //! Intentionally tiny: only emits init scripts (zero deps) +
 //! appends/reads a JSONL log via `crate::paths::agent_state_dir()`.
 //! No daemon, no IPC, no per-session correlation. The shell
-//! integration calls back into `cos agent shell-hooks record-pre
-//! / record-post`, so the cos binary is the single source of
+//! integration calls back into `yu agent shell-hooks record-pre
+//! / record-post`, so the yu binary is the single source of
 //! truth for the schema.
 //!
 //! Threat model: the log is local-only, written under the cos data
@@ -39,7 +39,7 @@ const MAX_ROTATIONS: u32 = 2;
 const HOOK_TIMEOUT_SECS: u32 = 60;
 
 /// Supported init-script shells. New shells are explicit (no
-/// auto-detect) so an operator who runs `cos agent shell-hooks
+/// auto-detect) so an operator who runs `yu agent shell-hooks
 /// init` always knows which dialect they're getting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
@@ -92,10 +92,10 @@ pub fn default_log_path() -> PathBuf {
 }
 
 /// Render the init script for `shell`. The script defines the
-/// preexec / postexec hook(s) and routes them into `cos agent
+/// preexec / postexec hook(s) and routes them into `yu agent
 /// shell-hooks record-pre / record-post`.
 ///
-/// stderr is silenced so a missing `cos` binary doesn't pollute
+/// stderr is silenced so a missing `yu` binary doesn't pollute
 /// the user's prompt; the cost of a silent miss is acceptable
 /// since this is ambient telemetry, not an authoritative trace.
 ///
@@ -112,7 +112,7 @@ pub fn render_init(shell: Shell) -> String {
 }
 
 fn render_bash() -> String {
-    format!(r#"# cos agent shell-hooks (bash)
+    format!(r#"# yu agent shell-hooks (bash)
 __cos_call() {{
     if command -v timeout >/dev/null 2>&1; then
         timeout {timeout} cos "$@" >/dev/null 2>&1 || true
@@ -136,7 +136,7 @@ esac
 }
 
 fn render_zsh() -> String {
-    format!(r#"# cos agent shell-hooks (zsh)
+    format!(r#"# yu agent shell-hooks (zsh)
 function __cos_call() {{
     if command -v timeout >/dev/null 2>&1; then
         timeout {timeout} cos "$@" >/dev/null 2>&1 || true
@@ -158,7 +158,7 @@ add-zsh-hook precmd __cos_precmd
 }
 
 fn render_fish() -> String {
-    format!(r#"# cos agent shell-hooks (fish)
+    format!(r#"# yu agent shell-hooks (fish)
 function __cos_call
     if command -v timeout >/dev/null 2>&1
         timeout {timeout} cos $argv >/dev/null 2>&1

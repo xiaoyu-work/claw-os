@@ -19,7 +19,7 @@
 //!   *unknown* (not a pass), but can still enforce engine-name and
 //!   version range based on the registry directory name.
 //! - **Synthesized**: produced in memory (never written) by
-//!   [`EngineManifest::synthesize`] for UI views like `cos engine info`,
+//!   [`EngineManifest::synthesize`] for UI views like `yu engine info`,
 //!   to give users *something* to look at when no manifest is shipped.
 //!   Carries `source: "synthesized"` so consumers know it's a guess.
 //!

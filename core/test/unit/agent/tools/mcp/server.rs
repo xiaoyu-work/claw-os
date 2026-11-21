@@ -170,7 +170,7 @@ fn registry_with_blocking() -> (
 }
 
 fn bounded_server(registry: Arc<ToolRegistry>, active: usize, queued: usize) -> McpServer {
-    McpServer::new("cos", "0", registry).with_limits(McpServerLimits::new(active, queued).unwrap())
+    McpServer::new("yu", "0", registry).with_limits(McpServerLimits::new(active, queued).unwrap())
 }
 
 async fn send_blocking_call(transport: &InMemoryTransport, id: u64, sequence: u64, fail: bool) {
@@ -249,7 +249,7 @@ async fn initialize_returns_tools_capability() {
 #[tokio::test]
 async fn tools_list_reflects_registry() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     let client = McpClient::new(client_t);
@@ -263,7 +263,7 @@ async fn tools_list_reflects_registry() {
 #[tokio::test]
 async fn tools_call_executes_registered_tool() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     let client = McpClient::new(client_t);
@@ -374,7 +374,7 @@ async fn unavailable_tools_are_neither_listed_nor_callable() {
 #[tokio::test]
 async fn unknown_method_yields_method_not_found() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     let client = McpClient::new(client_t);
@@ -393,7 +393,7 @@ async fn unknown_method_yields_method_not_found() {
 #[tokio::test]
 async fn unknown_tool_yields_invalid_params() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     let client = McpClient::new(client_t);
@@ -412,7 +412,7 @@ async fn unknown_tool_yields_invalid_params() {
 #[tokio::test]
 async fn parse_error_does_not_kill_server() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     // Send a junk frame.
@@ -433,7 +433,7 @@ async fn parse_error_does_not_kill_server() {
 #[tokio::test]
 async fn valid_json_with_invalid_request_shape_is_not_a_parse_error() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     client_t.send("[]".into()).await.unwrap();
@@ -449,7 +449,7 @@ async fn valid_json_with_invalid_request_shape_is_not_a_parse_error() {
 #[tokio::test]
 async fn malformed_idless_envelope_is_not_silently_dropped() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     client_t
@@ -468,7 +468,7 @@ async fn malformed_idless_envelope_is_not_silently_dropped() {
 #[tokio::test]
 async fn explicit_null_arguments_are_invalid_params() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     client_t
@@ -489,7 +489,7 @@ async fn explicit_null_arguments_are_invalid_params() {
 #[tokio::test]
 async fn primitive_params_are_invalid_before_notification_suppression() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     for (frame, expected_id, expected_code) in [
@@ -523,7 +523,7 @@ async fn primitive_params_are_invalid_before_notification_suppression() {
 #[tokio::test]
 async fn fractional_and_large_numeric_ids_round_trip() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     for request in [
@@ -544,7 +544,7 @@ async fn fractional_and_large_numeric_ids_round_trip() {
 #[tokio::test]
 async fn initialize_rejects_null_or_malformed_known_capabilities() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     for capabilities in [
@@ -573,7 +573,7 @@ async fn initialize_rejects_null_or_malformed_known_capabilities() {
 #[tokio::test]
 async fn ping_and_tools_list_validate_method_specific_params() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     for request in [
@@ -607,7 +607,7 @@ async fn ping_and_tools_list_validate_method_specific_params() {
 #[tokio::test]
 async fn invalid_id_precedes_null_method_params() {
     let (client_t, server_t) = in_memory_pair();
-    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server = McpServer::new("yu", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
 
     client_t

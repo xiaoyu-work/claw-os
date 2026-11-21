@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/envelope.schema.json",
   "title": "Envelope",
-  "description": "Common wrapper around every wire v1 reply requested with `cos --wire=1`.",
+  "description": "Common wrapper around every wire v1 reply requested with `yu --wire=1`.",
   "type": "object",
   "required": ["ok", "wire_version"],
   "additionalProperties": false,

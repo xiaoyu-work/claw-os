@@ -1,9 +1,9 @@
-//! `cos agent service` — filesystem-based job queue for the agent.
+//! `yu agent service` — filesystem-based job queue for the agent.
 //!
 //! This is the kernel-native answer to "run an agent in the background":
 //! a small queue of JSON job files lives under
 //! `data_dir/agent/jobs/{pending,running,done}/`, and any number of
-//! `cos agent service work` workers consume them. State transitions are
+//! `yu agent service work` workers consume them. State transitions are
 //! atomic `fs::rename`s between the three subdirectories, so two
 //! workers can race for the same job without corrupting it — at most
 //! one will win the rename.
@@ -29,10 +29,10 @@
 //!
 //! Composition with the rest of the OS:
 //!
-//!   - `cos cron` can `cos agent service submit "summarise yesterday's
+//!   - `yu cron` can `yu agent service submit "summarise yesterday's
 //!     logs"` on a schedule.
-//!   - `cos service start cos-agent-worker` (where the service
-//!     definition runs `cos agent service work`) gives you a managed,
+//!   - `yu service start cos-agent-worker` (where the service
+//!     definition runs `yu agent service work`) gives you a managed,
 //!     restart-on-failure worker pool with health checks.
 //!   - Telegram/Discord adapters (Q1 plan) can drop jobs without
 //!     opening sockets — the FS is the message bus.
@@ -712,7 +712,7 @@ impl Store {
     /// resolved via `SO_PEERCRED` + `getpwuid_r` so the worker can
     /// load that user's `~/.config/cos/config.json` instead of the
     /// daemon's. Both fields are optional and default to `None`
-    /// (matches `cos agent service submit` from the same shell, where
+    /// (matches `yu agent service submit` from the same shell, where
     /// no peer lookup is needed).
     pub fn submit(
         &self,
@@ -1339,7 +1339,7 @@ impl Store {
     /// finishing them (crash, `kill -9`, OOM, power loss, container
     /// restart). Without this, such a job sits in `running/` forever:
     /// `claim_one` only ever looks at `pending/`, so the work is never
-    /// retried and `cos agent task <id>` blocks until its deadline.
+    /// retried and `yu agent task <id>` blocks until its deadline.
     ///
     /// For each `running/` job we verify both `worker_pid` and the kernel
     /// process start-time captured at claim:
@@ -3208,7 +3208,7 @@ fn now_iso() -> String {
 }
 
 /// Resolve the running process's uid + `$HOME` for stamping onto
-/// jobs submitted via `cos agent service submit`. clawd-routed
+/// jobs submitted via `yu agent service submit`. clawd-routed
 /// submits go through `clawd::tasks::submit`, which uses the peer
 /// credentials of the unix socket instead.
 fn current_owner_identity() -> (Option<u32>, Option<String>) {
@@ -3332,9 +3332,9 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
     }
     let prompt = prompt
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--after-task ID] [--workspace PATH] [--max-turns N]")?;
+        .ok_or("usage: yu agent service submit \"<prompt>\" [--session ID] [--after-task ID] [--workspace PATH] [--max-turns N]")?;
     let store = Store::open_default().map_err(|e| e.to_string())?;
-    // `cos agent service submit` runs in the user's own process, so
+    // `yu agent service submit` runs in the user's own process, so
     // the worker (which is also in this process in single-shot mode)
     // will load that user's config naturally — but stamping owner_*
     // anyway keeps the on-disk job document complete for ops/audit.
@@ -3461,7 +3461,7 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
     let id = args
         .first()
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service result <job_id> [--wait-secs N]")?
+        .ok_or("usage: yu agent service result <job_id> [--wait-secs N]")?
         .clone();
     let mut wait_secs: u64 = 0;
     let mut i = 1usize;
@@ -3504,7 +3504,7 @@ fn cmd_cancel(args: &[String]) -> Result<Value, String> {
     let id = args
         .first()
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service cancel <job_id>")?;
+        .ok_or("usage: yu agent service cancel <job_id>")?;
     let store = Store::open_default().map_err(|e| e.to_string())?;
     match store
         .request_cancel_for_owner(id, None)
@@ -3597,7 +3597,7 @@ fn run_worker_loop_inner(
     install_signals: bool,
 ) -> Result<Value, String> {
     // The in-process loop is the model/tool runtime. It exists for
-    // stand-alone `cos agent service work` operators; inside `clawd`
+    // stand-alone `yu agent service work` operators; inside `clawd`
     // agent work is spawned into an unprivileged `claw-agentd` process
     // by `agentd::supervisor` instead.
     crate::agentd::guard::ensure_agent_runtime_allowed("in-process agent worker loop")?;
@@ -3808,7 +3808,7 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // gate, and the delegate tool — will see the user's
     // provider/model/keys rather than the daemon's defaults.
     //
-    // Without this, `cos agent ask` from a non-root user fails either
+    // Without this, `yu agent ask` from a non-root user fails either
     // "no LLM provider configured" (config not loaded) or, post
     // config-override fix, "GitHub Copilot is not signed in" because
     // clawd (uid=0, HOME=/root) reads

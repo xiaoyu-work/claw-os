@@ -195,8 +195,8 @@ module tags. It does not publish to PyPI, npm, or crates.io.
 
 ```bash
 # Point cos to local apps directory
-COS_APPS_DIR=./apps COS_DATA_DIR=/tmp/cos-data ./core/target/debug/cos sys info
-COS_APPS_DIR=./apps COS_DATA_DIR=/tmp/cos-data ./core/target/debug/cos fs ls .
+COS_APPS_DIR=./apps COS_DATA_DIR=/tmp/cos-data ./core/target/debug/yu sys info
+COS_APPS_DIR=./apps COS_DATA_DIR=/tmp/cos-data ./core/target/debug/yu fs ls .
 ```
 
 ### Run Tests

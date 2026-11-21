@@ -24,10 +24,10 @@
 //!
 //! | Module        | Wire family | Equivalent CLI                  |
 //! |---------------|-------------|---------------------------------|
-//! | [`ai`]        | `ai`        | stable `cos ai chat`            |
+//! | [`ai`]        | `ai`        | stable `yu ai chat`            |
 //! | [`applet`]    | data v1     | public OS App data services      |
 //! | [`mcp`]       | MCP         | App-hosted tools over JSON-RPC  |
-//! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
+//! | [`tools`]     | `tool`      | `yu ai tool <name> --app <id>` |
 //! | [`envelope`]  | shared      | the common reply envelope       |
 //! | [`objects`]   | object_ref  | pure App object identifiers; no dispatch |
 //! | [`generated`] | shared      | typed structs codegen'd from `wire/v1/*.schema.json` |
@@ -47,7 +47,7 @@
 //!
 //! ## Transport
 //!
-//! Transport-backed calls shell out to the `cos` binary on `$PATH`. The
+//! Transport-backed calls shell out to the `yu` binary on `$PATH`. The
 //! subprocess model is intentional — identity, audit, and session
 //! context come from process ancestry. Set `CLAW_COS_BIN` to override
 //! the resolved binary (used by tests + dev setups). Installed native clients
@@ -83,15 +83,15 @@ pub use objects::ObjectRefError;
 /// Errors returned by every bridge call.
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {
-    /// The `cos` binary couldn't be spawned. Usually means it's not
+    /// The `yu` binary couldn't be spawned. Usually means it's not
     /// on `$PATH` and `CLAW_COS_BIN` is unset.
-    #[error("cos binary not found (set CLAW_COS_BIN or install cos): {0}")]
+    #[error("yu binary not found (set CLAW_COS_BIN or install cos): {0}")]
     BinaryNotFound(std::io::Error),
 
     /// The app dispatcher returned a structured JSON error
     /// (`{"error": "...", "code": "..."}`). This is the common case —
     /// e.g. a denied capability or a missing file.
-    #[error("cos app {app} {verb}: {message}")]
+    #[error("yu app {app} {verb}: {message}")]
     AppError {
         app: String,
         verb: String,
@@ -101,7 +101,7 @@ pub enum BridgeError {
 
     /// The subprocess exited non-zero but stdout didn't parse as a
     /// structured error. Stderr is bubbled up for diagnostics.
-    #[error("cos app {app} {verb} exited {status}: {stderr}")]
+    #[error("yu app {app} {verb} exited {status}: {stderr}")]
     NonZeroExit {
         app: String,
         verb: String,
@@ -111,7 +111,7 @@ pub enum BridgeError {
 
     /// stdout produced bytes but they couldn't be parsed as JSON, or
     /// the JSON shape didn't match the typed wrapper's expectation.
-    #[error("invalid response from cos app {app} {verb}: {message}")]
+    #[error("invalid response from yu app {app} {verb}: {message}")]
     Decode {
         app: String,
         verb: String,
@@ -171,13 +171,13 @@ pub type Error = BridgeError;
 
 /// Build the command invocation but don't run it. Tests use this to
 /// inspect the argv that would be spawned without actually shelling
-/// out to a `cos` binary.
+/// out to a `yu` binary.
 fn build_command<A>(app: &str, verb: &str, args: A) -> Command
 where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
-    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
+    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "yu".into());
     let mut cmd = Command::new(bin);
     cmd.arg(WIRE_V1_FLAG).arg("app").arg(app).arg(verb);
     for a in args {
@@ -186,7 +186,7 @@ where
     cmd
 }
 
-/// Invoke `cos --wire=1 app <app> <verb> <args...>` and return the
+/// Invoke `yu --wire=1 app <app> <verb> <args...>` and return the
 /// request-specific success payload.
 ///
 /// This is a human CLI/desktop client, not an App-to-App transport.
@@ -239,7 +239,7 @@ where
         let written = match writer {
             Some(writer) => writer
                 .join()
-                .unwrap_or_else(|_| Err(std::io::Error::other("cos stdin writer panicked"))),
+                .unwrap_or_else(|_| Err(std::io::Error::other("yu stdin writer panicked"))),
             None => Ok(()),
         };
         (output, written)
@@ -279,12 +279,12 @@ where
 
 // ---------------------------------------------------------------------------
 // Raw cos-CLI call — used by ai/policy/tools modules whose request
-// surface lives outside `cos app <id> <verb>`. The `family` and
+// surface lives outside `yu app <id> <verb>`. The `family` and
 // `verb` strings are propagated into [`BridgeError`] for diagnostics.
 // ---------------------------------------------------------------------------
 
 /// Invoke any `cos` sub-command through wire v1 and return its success
-/// data. Used by [`ai`] and [`tools`] for `cos ai ...`.
+/// data. Used by [`ai`] and [`tools`] for `yu ai ...`.
 ///
 /// `family` and `verb` are surfaced in [`BridgeError`] variants when
 /// the call fails — pass any human-meaningful strings.
@@ -593,7 +593,7 @@ where
     A::Item: AsRef<OsStr>,
 {
     let bin = binary.map(OsStr::to_os_string).unwrap_or_else(|| {
-        std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into()).into()
+        std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "yu".into()).into()
     });
     let mut cmd = Command::new(bin);
     cmd.arg(WIRE_V1_FLAG);

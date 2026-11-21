@@ -40,9 +40,9 @@ target, explain recoverability, and use checkpoints or backups where possible.
 Use Storage Manager for device-level evidence:
 
 ```bash
-cos app storage-manager status
-cos app storage-manager health /dev/sdb
-cos app storage-manager check /dev/sdb1
+yu app storage-manager status
+yu app storage-manager health /dev/sdb
+yu app storage-manager check /dev/sdb1
 ```
 
 SMART health does not replace a backup, and a clean SMART result does not prove

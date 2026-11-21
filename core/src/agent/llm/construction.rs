@@ -319,7 +319,7 @@ pub fn try_resolve_api_credentials(
             return Err(LlmError::NotConfigured(format!(
                 "credential pool '{pool_name}' was declared but no usable key resolved; \
                  unresolved credential names: {:?}; unresolved environment variables: {:?}. \
-                 Store a listed credential with `cos credential store <name> <key> \
+                 Store a listed credential with `yu credential store <name> <key> \
                  --namespace agent` or set a listed environment variable",
                 cfg.pool_credentials, cfg.pool_environments
             )));
@@ -328,7 +328,7 @@ pub fn try_resolve_api_credentials(
         let mut pool = Pool::from_entries(pool_name, entries, strategy).map_err(|error| {
             LlmError::NotConfigured(format!(
                 "{error}. Fix the declared pool sources, then run \
-                 `cos agent setup text --verify-only`"
+                 `yu agent setup text --verify-only`"
             ))
         })?;
         pool.set_cooldown(cfg.pool_cooldown);

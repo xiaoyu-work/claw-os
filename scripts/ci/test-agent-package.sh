@@ -11,7 +11,7 @@ tui() {
     fi
     cos_fixture="$(mktemp /tmp/claw-agent-tui-cos.XXXXXX)"
     trap 'rm -f "$cos_fixture"' EXIT
-    install -m 0755 "target/$RUST_TARGET/release/cos" "$cos_fixture"
+    install -m 0755 "target/$RUST_TARGET/release/yu" "$cos_fixture"
     original_namespace="$(readlink /proc/self/ns/mnt)"
     for scenario in complete slow-progress cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
         unshare --user --map-current-user --keep-caps --mount --net \
@@ -77,7 +77,7 @@ installed() {
     original_network="$(readlink /proc/self/ns/net)"
     sudo unshare --mount --pid --fork --mount-proc --net \
         python3 -B core/tests/approval_polkit_process.py \
-        --cos /usr/local/bin/cos \
+        --cos /usr/local/bin/yu \
         --clawd /usr/local/bin/clawd \
         --helper /usr/local/bin/claw-approval-helper \
         --policy /usr/share/polkit-1/actions/org.clawos.approval.policy \
@@ -86,12 +86,12 @@ installed() {
         --original-network-namespace "$original_network"
     test ! -e /usr/local/bin/cos-browser
     COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
-        /usr/local/bin/cos agent skills list \
+        /usr/local/bin/yu agent skills list \
         | python3 -c 'import json,sys; data=json.load(sys.stdin); assert "claw-os" in data["names"]'
     COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
-        /usr/local/bin/cos agent skills info claw-os \
+        /usr/local/bin/yu agent skills info claw-os \
         | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["source"] == "builtin"'
-    timeout 15s sudo /usr/local/bin/cos agent service status \
+    timeout 15s sudo /usr/local/bin/yu agent service status \
         | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "running", data; assert data["daemon"] == "clawd", data'
     service_cgroup=/sys/fs/cgroup/system.slice/clawd.service
     main_pid="$(systemctl show clawd.service --property MainPID --value)"

@@ -1,4 +1,4 @@
-//! `cos agent replay` — re-render a saved conversation from the
+//! `yu agent replay` — re-render a saved conversation from the
 //! SQLite-FTS memory store.
 //!
 //! Pure read; never mutates state. Useful for:
@@ -11,8 +11,8 @@
 //! ### CLI shape
 //!
 //! ```text
-//! cos agent replay <session_id> [--limit N] [--role R]
-//! cos agent replay --last [--limit N] [--role R]
+//! yu agent replay <session_id> [--limit N] [--role R]
+//! yu agent replay --last [--limit N] [--role R]
 //! ```
 //!
 //! Flags:
@@ -107,7 +107,7 @@ fn parse_args(args: &[String]) -> Result<ReplayOpts, String> {
     }
     if opts.session_id.is_none() && !opts.use_last {
         return Err(
-            "missing session id. usage: cos agent replay <session_id> [--limit N] | --last".into(),
+            "missing session id. usage: yu agent replay <session_id> [--limit N] | --last".into(),
         );
     }
     Ok(opts)

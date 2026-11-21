@@ -50,7 +50,7 @@ fn import(args: &[String]) -> Result<Value, String> {
         ImportInput::Stdin => {
             if std::io::stdin().is_terminal() {
                 return Err(
-                    "cos activity import --stdin requires piped or redirected JSON input".into(),
+                    "yu activity import --stdin requires piped or redirected JSON input".into(),
                 );
             }
             read_bounded(std::io::stdin().lock())?
@@ -95,7 +95,7 @@ fn parse_export(args: &[String]) -> Result<ExportOptions, String> {
     let activity_id = args
         .first()
         .filter(|value| !value.starts_with("--"))
-        .ok_or("cos activity export requires a valid Activity ID")?;
+        .ok_or("yu activity export requires a valid Activity ID")?;
     crate::activities::validate_id(activity_id).map_err(|error| error.to_string())?;
     let mut output = None;
     let mut overwrite = false;
@@ -122,7 +122,7 @@ fn parse_export(args: &[String]) -> Result<ExportOptions, String> {
             }
             other => {
                 return Err(format!(
-                    "unsupported argument for cos activity export: {other}"
+                    "unsupported argument for yu activity export: {other}"
                 ))
             }
         }
@@ -190,14 +190,14 @@ fn parse_import(args: &[String]) -> Result<ImportOptions, String> {
             }
             other => {
                 return Err(format!(
-                    "unsupported argument for cos activity import: {other}"
+                    "unsupported argument for yu activity import: {other}"
                 ))
             }
         }
     }
     Ok(ImportOptions {
-        placement: placement.ok_or("cos activity import requires --placement local")?,
-        input: input.ok_or("cos activity import requires exactly one of --file PATH or --stdin")?,
+        placement: placement.ok_or("yu activity import requires --placement local")?,
+        input: input.ok_or("yu activity import requires exactly one of --file PATH or --stdin")?,
     })
 }
 

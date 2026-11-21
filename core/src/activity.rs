@@ -23,7 +23,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     if command == "record-receipt" {
         use std::io::IsTerminal;
         if args.len() != 2 || args[1] != "--stdin" || std::io::stdin().is_terminal() {
-            return Err("usage: pipe report JSON to cos activity record-receipt ID --stdin".into());
+            return Err("usage: pipe report JSON to yu activity record-receipt ID --stdin".into());
         }
         crate::activities::validate_id(&args[0]).map_err(|error| error.to_string())?;
         let report = read_receipt(std::io::stdin().lock())?;
@@ -105,7 +105,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
         "pause" | "resume" | "complete" | "cancel" => Command::ActivityTransition,
         other => {
             return Err(format!(
-                "unknown Activity command: {other}; try cos activity --help"
+                "unknown Activity command: {other}; try yu activity --help"
             ))
         }
     };
@@ -116,7 +116,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
             .ok_or_else(|| {
                 format!(
-                    "cos activity {command} requires a {}",
+                    "yu activity {command} requires a {}",
                     if command == "create" {
                         "title"
                     } else {
@@ -174,7 +174,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             ("complete", "--note") => "completion_note",
             _ => {
                 return Err(format!(
-                    "unsupported argument for cos activity {command}: {flag}"
+                    "unsupported argument for yu activity {command}: {flag}"
                 ))
             }
         };
@@ -218,7 +218,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             .is_some_and(|note| !note.trim().is_empty())
     {
         return Err(
-            "cos activity complete requires --note with an explicit completion confirmation".into(),
+            "yu activity complete requires --note with an explicit completion confirmation".into(),
         );
     }
 

@@ -10,7 +10,7 @@
 //!
 //! A rule is `when {source? / event_type? / contains?} then run <prompt>`.
 //! Rules are JSON at `<data>/triggers/rules/<id>.json`. [`run`] exposes
-//! the `cos triggers <add|list|remove|enable|disable|run|tick>` CLI.
+//! the `yu triggers <add|list|remove|enable|disable|run|tick>` CLI.
 //!
 //! `tick` is meant to be called every minute by the same external
 //! scheduler that drives `cron tick` (or by clawd). It scans
@@ -109,7 +109,7 @@ fn rule_path(id: &str) -> PathBuf {
 /// prompt; we ship example rules that react to the system-vitals
 /// heartbeat events). They are disabled by design — turning the agent
 /// loose to act on system events is the operator's explicit choice
-/// (`cos triggers enable <id>`). A sentinel ensures we seed exactly once
+/// (`yu triggers enable <id>`). A sentinel ensures we seed exactly once
 /// and never recreate a rule the user has deleted.
 fn ensure_seeded() -> Result<(), String> {
     let sentinel = seeded_sentinel_path();
@@ -366,7 +366,7 @@ fn validate_arguments(command: &str, args: &[String]) -> Result<(), String> {
         return Err("supply a positional trigger id or --id, not both".to_string());
     }
     if command == "add" && (!seen.contains("id") || !seen.contains("prompt")) {
-        return Err("usage: cos triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N] [--activity UUID]".to_string());
+        return Err("usage: yu triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N] [--activity UUID]".to_string());
     }
     if seen.iter().any(|name| name.starts_with("work-"))
         && !seen.contains("activity-work")
@@ -377,7 +377,7 @@ fn validate_arguments(command: &str, args: &[String]) -> Result<(), String> {
         return Err("automatic work requires --activity and --work-revision".into());
     }
     if accepts_id && positional.is_none() && !seen.contains("id") {
-        return Err(format!("usage: cos triggers {command} <id>"));
+        return Err(format!("usage: yu triggers {command} <id>"));
     }
     Ok(())
 }
@@ -444,7 +444,7 @@ pub(crate) fn preflight_activity_command(
     Ok(())
 }
 
-/// CLI entry — dispatched from the router under `cos triggers`.
+/// CLI entry — dispatched from the router under `yu triggers`.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     validate_arguments(command, args)?;
     match command {
@@ -589,7 +589,7 @@ pub(crate) fn fired_prompt(rule: &TriggerRule, ev: &Value) -> String {
     )
 }
 
-/// Enqueue an agent job. The agent-service worker (clawd / `cos agent`
+/// Enqueue an agent job. The agent-service worker (clawd / `yu agent`
 /// runner) claims and executes it; this only submits.
 struct TriggerExecutionOwner {
     uid: u32,
@@ -808,7 +808,7 @@ fn quarantine_invalid_rule(rule_id: &str, error: &str) {
 
 fn cmd_add(args: &[String]) -> Result<Value, String> {
     let id = flag(args, "id").ok_or_else(|| {
-        "usage: cos triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N] [--activity UUID]"
+        "usage: yu triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N] [--activity UUID]"
             .to_string()
     })?;
     let id = sanitize_id(&id)
@@ -931,7 +931,7 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
 
 fn cmd_remove(args: &[String]) -> Result<Value, String> {
     crate::caps::require(Verb::TIME_CRON, Scope::Wild).map_err(|denial| denial.summary())?;
-    let id = positional_or_id(args).ok_or_else(|| "usage: cos triggers remove <id>".to_string())?;
+    let id = positional_or_id(args).ok_or_else(|| "usage: yu triggers remove <id>".to_string())?;
     let id = sanitize_id(&id).ok_or_else(|| format!("invalid id '{id}'"))?;
     let owner_uid = current_owner()?.uid;
     with_trigger_lock(|| {
@@ -952,7 +952,7 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
 
 fn cmd_set_enabled(args: &[String], enabled: bool) -> Result<Value, String> {
     let verb = if enabled { "enable" } else { "disable" };
-    let id = positional_or_id(args).ok_or_else(|| format!("usage: cos triggers {verb} <id>"))?;
+    let id = positional_or_id(args).ok_or_else(|| format!("usage: yu triggers {verb} <id>"))?;
     let owner = current_owner()?;
     if enabled {
         preflight_activity_command(owner.uid, "enable", args)?;
@@ -991,7 +991,7 @@ fn cmd_set_enabled(args: &[String], enabled: bool) -> Result<Value, String> {
 }
 
 fn cmd_run(args: &[String]) -> Result<Value, String> {
-    let id = positional_or_id(args).ok_or_else(|| "usage: cos triggers run <id>".to_string())?;
+    let id = positional_or_id(args).ok_or_else(|| "usage: yu triggers run <id>".to_string())?;
     let owner_uid = current_owner()?.uid;
     with_trigger_lock(|| {
         let rule = load_rule(&id)?;

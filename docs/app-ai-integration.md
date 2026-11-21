@@ -77,7 +77,7 @@ add a tool, change a schema, widen a capability, or choose its caller identity.
 The removed top-level `session` field is rejected rather than translated.
 
 `operations` may still be declared for direct human CLI commands such as
-`cos app notes export`. They receive validated argv and are not another typed
+`yu app notes export`. They receive validated argv and are not another typed
 App service protocol. Desktop metadata remains in the same manifest and uses the
 same App identity.
 
@@ -262,7 +262,7 @@ App-origin system Agent task and proactive-job admission.
 
 Apps may use controlled system services, shared libraries, and the public
 SDK's gated AI when their manifests declare the corresponding capabilities.
-`tools.call` addresses the fixed `cos ai tool` primitive catalog, not arbitrary
+`tools.call` addresses the fixed `yu ai tool` primitive catalog, not arbitrary
 App tools. Provider credentials,
 model selection, budgets, prompt-origin policy, and model-visible logging stay
 inside the core Agent.

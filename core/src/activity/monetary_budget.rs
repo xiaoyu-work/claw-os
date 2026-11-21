@@ -62,7 +62,7 @@ pub(super) fn parse(command: &str, args: &[String]) -> Result<(Command, Value), 
             }
             _ => {
                 return Err(format!(
-                    "unsupported argument for cos activity {command}: {flag}"
+                    "unsupported argument for yu activity {command}: {flag}"
                 ))
             }
         }

@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-/// `cos agent interrupt <subcmd>` — signal a running agent session
+/// `yu agent interrupt <subcmd>` — signal a running agent session
 /// so its loop unwinds cleanly between turns.
 ///
 ///   list                 — registered (live) session ids
@@ -13,14 +13,14 @@ use serde_json::{json, Value};
 /// auto-unregister on exit, so the live list mirrors what's actively
 /// running in this `cos` process. Note that this does NOT cross
 /// process boundaries — to interrupt sessions running under a
-/// separate `cos agent service` worker, use the IPC `service cancel`
+/// separate `yu agent service` worker, use the IPC `service cancel`
 /// surface (different mechanism, persisted job-cancellation
 /// semantics).
 pub(super) fn interrupt_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args
         .first()
         .map(|s| s.as_str())
-        .ok_or("usage: cos agent interrupt <list|signal> ...")?;
+        .ok_or("usage: yu agent interrupt <list|signal> ...")?;
     match sub {
         "list" => {
             let mut sessions = crate::agent::runtime::interrupt::registered_sessions();
@@ -34,7 +34,7 @@ pub(super) fn interrupt_cmd(args: &[String]) -> Result<Value, String> {
             let sid = args
                 .get(1)
                 .map(|s| s.as_str())
-                .ok_or("usage: cos agent interrupt signal <session-id>")?;
+                .ok_or("usage: yu agent interrupt signal <session-id>")?;
             let signaled = crate::agent::runtime::interrupt::signal(sid);
             if signaled {
                 Ok(json!({
@@ -55,7 +55,7 @@ pub(super) fn interrupt_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent hooks <subcmd>` — manage the runtime hook registry
+/// `yu agent hooks <subcmd>` — manage the runtime hook registry
 /// and the persistent `data_dir/agent/hooks.json` config that
 /// auto-registers hooks on every agent invocation.
 ///
@@ -153,8 +153,8 @@ pub(super) fn hooks_cmd(args: &[String]) -> Result<Value, String> {
 }
 
 /// Pull the kind out of `<kind>` or `--kind <kind>` positional/flag
-/// forms. `cos agent hooks enable logging` and
-/// `cos agent hooks enable --kind logging` both work.
+/// forms. `yu agent hooks enable logging` and
+/// `yu agent hooks enable --kind logging` both work.
 fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
     let mut iter = rest.iter();
     match iter.next().map(String::as_str) {
@@ -168,7 +168,7 @@ fn parse_kind_arg(rest: &[String]) -> Result<String, String> {
     }
 }
 
-/// `cos agent context <subcommand>` — surface for the
+/// `yu agent context <subcommand>` — surface for the
 /// [`crate::agent::context`] modules:
 ///
 ///   * `hints [--cwd <path>] [--depth N=0] [--render]` — scan for
@@ -185,7 +185,7 @@ pub(super) fn context_cmd(args: &[String]) -> Result<Value, String> {
         "markers" => context_markers_cmd(&args[1..]),
         "build" => context_build_cmd(&args[1..]),
         "" => Err(
-            "usage: cos agent context <hints|refs|markers|build> ... \
+            "usage: yu agent context <hints|refs|markers|build> ... \
              (e.g. hints [--cwd <p>] [--depth N] [--render] | refs --text <body> [--unique] | markers | build [--cwd <p>] [--depth N] [--text <body>] [--note <line>...] [--max-refs N] [--max-hints N])"
                 .to_string(),
         ),
@@ -346,7 +346,7 @@ fn context_markers_cmd(_args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// `cos agent context build [--cwd <p>] [--depth N] [--text <body>] [--note <line>...] [--max-refs N] [--max-hints N] [--no-dedup]`
+/// `yu agent context build [--cwd <p>] [--depth N] [--text <body>] [--note <line>...] [--max-refs N] [--max-hints N] [--no-dedup]`
 fn context_build_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::context::engine::{build, ContextOptions};
 

@@ -161,7 +161,7 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
             serde_json::to_value(request).map_err(|error| error.to_string())?,
         ),
     ).map_err(|error| format!(
-        "Root package intent response is unconfirmed: {error}. Query `cos package-transactions --invocation {}` outside Store; do not replay effects.", args[2]
+        "Root package intent response is unconfirmed: {error}. Query `yu package-transactions --invocation {}` outside Store; do not replay effects.", args[2]
     ))?;
     if response.ok {
         response.result.ok_or_else(|| "Root package intent response is missing".into())

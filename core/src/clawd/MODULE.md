@@ -85,7 +85,7 @@ and agent tasks.
 | `system_review.rs`, `system_review/presentation.rs` | Shared App/capability review projection, owner-scoped display revisions, root-only choices, fresh package verification and one-use App confirmation |
 | `app_services.rs`, `app_services/retirement.rs` | Persistent owner/App service manager, retained cleanup custody, lifecycle policy, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
-| `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
+| `scheduler.rs` | Proactive-scheduler authority: validates `yu cron` / `yu triggers` requests and derives what a job may carry |
 | `notifications.rs` | Owner-scoped notification RPC and atomic read-all, non-authoritative conversation-view hints, due-nudge fanout, and external delivery dispatcher |
 | `nearby/` | Owner/window-bound AirDrop sharing, exact human offer decisions, private uploads/snapshots, isolated transport and checked radio retirement; see `nearby/MODULE.md` |
 | `app_notifications.rs` | Capability-gated App post/close/send and own-source list, sealed App/owner attribution, no business-name entitlement or user-bus access |
@@ -209,7 +209,7 @@ native/resource and independent CLI/trust/package-path acceptance remain
 publication prerequisites, not consequences of this source implementation.
 
 `system.package.query` is the App-session interface for APT catalog
-search/details and installed dpkg state. `cos __package_query`
+search/details and installed dpkg state. `yu __package_query`
 uses the same ordinary Host proxy and public generic SDK call primitive.
 Search/list require `sys.observe:packages`; one package's details require
 its exact named observation scope. Critical package mutation authority
@@ -248,7 +248,7 @@ harmless processes, never real Settings, polkit or user grants.
 ## Wire Protocol
 
 `system.clipboard.control` retains the selection actions and adds four closed
-history actions through `cos __clipboard history-{list,restore,remove,clear}
+history actions through `yu __clipboard history-{list,restore,remove,clear}
 --deadline <unix-ms> [--identity <packed-item-sha256-base64>] [--confirm]`.
 Only restore/remove accept a canonical SHA-256 identity; clear requires exact
 true confirmation. History requests reject MIME, source, primary selection,
@@ -716,7 +716,7 @@ source/target/mode/class and device/inode snapshot, which the worker must match
 before launch.
 
 Authenticated local **CLI** App calls arrive through a separate
-`app_service.cli_call` route (`Access::User`). It is the human `cos app <id>
+`app_service.cli_call` route (`Access::User`). It is the human `yu app <id>
 <command>` counterpart to `app_service.call` and never overlaps it: the request
 body carries only the exact App id, tool, and arguments. The daemon derives the
 caller principal (`McpPrincipalKind::Cli`), call context, capability ceiling,
@@ -812,7 +812,7 @@ phase and `indeterminate` never authorize another publication, even of identical
 bytes. Records require `schema_version: 1`; missing or unknown schemas fail
 closed without prototype migration.
 Only pre-publication `retiring`/`cleanup_pending` may retry checked retirement
-with the same package and current review. `cos app install --recover <app-id>`
+with the same package and current review. `yu app install --recover <app-id>`
 holds the fence and protected dpkg lock, re-verifies the original destination's
 exact package/manifest and absence of transaction scratch, then records
 `installed`. It neither reads the original source nor copies, renames, removes

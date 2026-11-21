@@ -39,7 +39,7 @@ def result(path=PATH, content=CONTENT, changed=True):
 
 @pytest.fixture
 def transport():
-    with mock.patch.object(file_changes, "_cos_binary", return_value="/usr/local/bin/cos"):
+    with mock.patch.object(file_changes, "_cos_binary", return_value="/usr/local/bin/yu"):
         with mock.patch.object(file_changes.subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess([], 0, json.dumps(result()), "")
             yield run
@@ -48,7 +48,7 @@ def transport():
 def test_file_replace_uses_only_fixed_bridge_args_and_json_stdin(transport):
     assert file_changes.replace_file(PATH, state(), CONTENT) == result()
     args, kwargs = transport.call_args
-    assert args == (["/usr/local/bin/cos", "__file", "replace"],)
+    assert args == (["/usr/local/bin/yu", "__file", "replace"],)
     payload = json.loads(kwargs["input"])
     assert set(payload) == {"path", "expected", "content_base64"}
     assert payload["expected"] == state()
@@ -137,7 +137,7 @@ def test_file_replace_fingerprint_is_closed_without_namespace_uid_gid(transport)
 @pytest.mark.parametrize("failure", [
     FileNotFoundError("cos missing"),
     OSError("transport lost"),
-    subprocess.TimeoutExpired(["cos", "__file", "replace"], 60),
+    subprocess.TimeoutExpired(["yu", "__file", "replace"], 60),
     UnicodeError("invalid output"),
 ])
 def test_file_replace_transport_failure_is_uncertain_and_never_retried(transport, failure, tmp_path):
@@ -208,7 +208,7 @@ def test_file_replace_discovery_failure_never_invokes_or_writes(transport):
 
 @pytest.mark.parametrize("call_session", [None, "transport-call-session"])
 def test_file_replace_real_subprocess_uses_stdin_without_a_direct_write_fallback(tmp_path, monkeypatch, call_session):
-    binary = tmp_path / "cos"
+    binary = tmp_path / "yu"
     binary.write_text(
         f"#!{sys.executable}\n"
         "import base64, hashlib, json, os, sys\n"

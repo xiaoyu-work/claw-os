@@ -27,9 +27,9 @@ operation or `main.py` entry.
 Inside an installed Linux or WSL Claw OS system:
 
 ```bash
-cos operation preview fs write -- /home/user/draft.md --content Draft
-cos operation preview kv get -- release.status
-cos operation preview fs stat --activity ACTIVITY_ID -- /home/user/draft.md
+yu operation preview fs write -- /home/user/draft.md --content Draft
+yu operation preview kv get -- release.status
+yu operation preview fs stat --activity ACTIVITY_ID -- /home/user/draft.md
 ```
 
 Replace `ACTIVITY_ID` with an existing Activity UUID. The delimiter separates

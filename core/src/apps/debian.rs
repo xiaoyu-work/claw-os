@@ -408,7 +408,7 @@ pub(crate) fn validate_exports(
                 .and_then(|value| value.to_str())
                 .ok_or("GUI entry has no canonical exported program")?;
             let body = format!(
-                "#!/bin/sh\nexec /usr/local/bin/cos app {} {} \"$@\"\n",
+                "#!/bin/sh\nexec /usr/local/bin/yu app {} {} \"$@\"\n",
                 shell_word(&app.manifest.id),
                 shell_word(&gui.cli_selector())
             );

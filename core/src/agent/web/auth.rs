@@ -1,4 +1,4 @@
-//! Token-based auth for `cos agent serve`.
+//! Token-based auth for `yu agent serve`.
 
 use std::fs;
 use std::path::PathBuf;

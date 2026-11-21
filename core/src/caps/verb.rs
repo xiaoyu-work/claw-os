@@ -140,7 +140,7 @@ impl Verb {
     // `self:<app_id>` by convention; the bridge constrains every write to
     // the app's own namespace (`app/<source>`) so a granted app cannot
     // pollute other apps' or the agent's session memory. The user
-    // inspects and forgets these rows via `cos agent memory`.
+    // inspects and forgets these rows via `yu agent memory`.
     pub const MEMORY_WRITE: Verb = Verb::new("memory.write");
     /// Read entries the app itself wrote. Scope is `self:<app_id>` —
     /// an app cannot peek into another app's namespace. The agent
@@ -205,7 +205,7 @@ impl Verb {
     // Scope is the `.desktop` AppID (e.g. `com.clawos.Files`); the kernel
     // never lets the agent name a binary path or pass a `-e bash` payload
     // — args are restricted to URI/path substitutions in the entry's
-    // `Exec=` line. `cos app exec start <binary>` is the power-user path
+    // `Exec=` line. `yu app exec start <binary>` is the power-user path
     // and is gated separately by `proc.spawn`.
     pub const DESKTOP_LAUNCH: Verb = Verb::new("desktop.launch");
     pub const DESKTOP_WINDOW: Verb = Verb::new("desktop.window");

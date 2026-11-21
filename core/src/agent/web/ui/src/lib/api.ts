@@ -1,5 +1,5 @@
 /**
- * Single source of truth for cos agent web API access. The persistent
+ * Single source of truth for yu agent web API access. The persistent
  * bootstrap secret is exchanged once; normal requests use only the returned
  * short-lived Bearer token.
  *

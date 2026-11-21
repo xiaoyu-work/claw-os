@@ -11,7 +11,7 @@
 # Optional:       gzip, find, install, sed.
 #
 # Inputs:
-#   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
+#   target/<RUST_TARGET>/release/yu          (built by cargo for $ARCH)
 #   build/app-packages/                       (authenticated independent App APT inputs)
 #   skills/                                               (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
@@ -469,7 +469,7 @@ install -d -m 755 "$AGENT_STAGE/usr/lib/cos/extensions"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
     "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
 
-COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
+COS_BIN="$(ensure_bin yu cos)" || { echo "error: yu binary not built" >&2; exit 1; }
 CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
 # The unprivileged agent worker. clawd refuses to run agent tasks without
 # it, so it ships in lockstep with the broker it is spawned by.
@@ -511,7 +511,7 @@ MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
 SECURITY_FLOOR_BIN="$(ensure_bin claw-security-floor cos)" || {
     echo "error: claw-security-floor binary not built" >&2; exit 1; }
 
-echo "  :: cos                    <- $COS_BIN"
+echo "  :: yu                     <- $COS_BIN"
 echo "  :: clawd                  <- $CLAWD_BIN"
 echo "  :: claw-agentd            <- $AGENTD_BIN"
 echo "  :: claw-extension-host    <- $EXTENSION_HOST_BIN"
@@ -526,7 +526,7 @@ echo "  :: claw-app-apt-hook      <- $APP_APT_HOOK_BIN"
 echo "  :: pam_claw_display.so    <- $PAM_DISPLAY_MODULE"
 echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
 echo "  :: claw-security-floor    <- $SECURITY_FLOOR_BIN"
-install -m 755 "$COS_BIN" "$AGENT_STAGE/usr/local/bin/cos"
+install -m 755 "$COS_BIN" "$AGENT_STAGE/usr/local/bin/yu"
 install -m 755 "$CLAWD_BIN" "$AGENT_STAGE/usr/local/bin/clawd"
 install -m 755 "$AGENTD_BIN" "$AGENT_STAGE/usr/local/bin/claw-agentd"
 install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-host"

@@ -205,7 +205,7 @@ metadata inspection. Provider limits remain explicit errors rather than a
 reason to silently resize the owner's image.
 
 Voice uploads are staged as private runtime files and transcribed via
-the configured `cos model transcribe` provider. App/window context is handed to the UI through an inherited AF_UNIX socketpair
+the configured `yu model transcribe` provider. App/window context is handed to the UI through an inherited AF_UNIX socketpair
 rather than argv, environment, pipes, or a pathname. Public SDKs first connect
 to the packaged helper's abstract Unix listener; the helper authenticates its
 captured direct parent with `SO_PEERCRED`. The host, helper, and UI fail closed
@@ -224,7 +224,7 @@ private context launches accept no executable override or `PATH` lookup.
 ## Activities
 
 The standalone Agent window has an **Activities** entry above Sessions. It
-lists the same owner-scoped goals as `cos activity` and the Agent Web client;
+lists the same owner-scoped goals as `yu activity` and the Agent Web client;
 there is no desktop Activity database or separate lifecycle implementation.
 The compact private overlay remains chat/voice-only.
 

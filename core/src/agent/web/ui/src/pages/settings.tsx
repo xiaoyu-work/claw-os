@@ -4,7 +4,7 @@
  *
  * Each modality form is built dynamically from the response of
  * `GET /api/setup/providers/{modality}`, which returns the same shape
- * `cos agent setup providers <modality>` prints. Apply hits
+ * `yu agent setup providers <modality>` prints. Apply hits
  * `POST /api/setup/apply`. Verify hits `POST /api/setup/test/{modality}`.
  * OAuth flows for `text` use `oauth/start` + `oauth/poll`.
  */
@@ -506,7 +506,7 @@ function ModalityPanel({ modality }: { modality: string }) {
         <div>
           <h1 className="text-xl font-semibold capitalize">{modality}</h1>
           <p className="text-xs text-muted-foreground">
-            Configure the {modality} provider for cos agent.
+            Configure the {modality} provider for yu agent.
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs">
@@ -760,8 +760,8 @@ function AboutPanel({ meta }: { meta: any }) {
     <div className="mx-auto max-w-2xl p-6">
       <h1 className="text-xl font-semibold">About</h1>
       <p className="mt-1 text-xs text-muted-foreground">
-        cos agent web — running locally, served by{" "}
-        <code className="font-mono">cos agent serve</code>.
+        yu agent web — running locally, served by{" "}
+        <code className="font-mono">yu agent serve</code>.
       </p>
       <Card className="mt-4 p-5">
         <dl className="grid grid-cols-[120px_1fr] gap-y-2 text-sm">

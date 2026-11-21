@@ -225,7 +225,7 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
     mount_tmpfs(c"/usr/local/bin");
     copy_executable(
         Path::new(&std::env::var("COS_APP_DATA_TEST_COS").unwrap()),
-        Path::new("/usr/local/bin/cos"),
+        Path::new("/usr/local/bin/yu"),
     );
     copy_executable(
         Path::new(&std::env::var("COS_APP_DATA_TEST_RUNNER").unwrap()),
@@ -344,7 +344,7 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
             .env("COS_DATA_DIR", paths.control_dir.join("data"))
             .env("COS_LOG_DIR", paths.control_dir.join("log"))
             .env("COS_CACHE_DIR", paths.control_dir.join("cache"))
-            .env("COS_BIN", "/usr/local/bin/cos")
+            .env("COS_BIN", "/usr/local/bin/yu")
             .env("COS_APPS_DIR", "/run/task-apps")
             .env("COS_PROC_DATA_DIR", format!("/run/cos/caps/{}", owner.uid))
             .env("COS_SESSION", "task-host")

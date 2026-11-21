@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-/// `cos agent vision <subcommand>` — surface for the
+/// `yu agent vision <subcommand>` — surface for the
 /// [`crate::agent::media::vision::routing`] policy layer.
 ///
 /// Currently only `route` is implemented: given an image
@@ -27,7 +27,7 @@ pub(super) fn vision_cmd(args: &[String]) -> Result<Value, String> {
         "route" => vision_route_cmd(&args[1..]),
         "sniff" => vision_sniff_cmd(&args[1..]),
         "analyze" => vision_analyze_cmd(&args[1..]),
-        "" => Err("usage: cos agent vision <route|sniff|analyze> ... \
+        "" => Err("usage: yu agent vision <route|sniff|analyze> ... \
              (e.g. route --file <p> | sniff --file <p> | analyze --file <p> --prompt <t>)"
             .to_string()),
         other => Err(format!(
@@ -36,7 +36,7 @@ pub(super) fn vision_cmd(args: &[String]) -> Result<Value, String> {
     }
 }
 
-/// `cos agent vision sniff --file <path> | --url <url>`
+/// `yu agent vision sniff --file <path> | --url <url>`
 ///
 /// Read the head of an image (file or URL), report the magic-byte
 /// MIME, the byte length, and whether it's a "widely-supported"
@@ -128,7 +128,7 @@ fn vision_sniff_cmd(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-/// `cos agent vision analyze --file <path> | --url <url> | --base64 <data> --mime <m>
+/// `yu agent vision analyze --file <path> | --url <url> | --base64 <data> --mime <m>
 ///                           --prompt <text> [--system <text>] [--max-tokens N]
 ///                           [--provider <name>] [--model <name>]
 ///                           [--fetch-timeout-ms N]`

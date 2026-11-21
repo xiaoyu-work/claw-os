@@ -1,6 +1,6 @@
 # Agent Web App Store
 
-`cos agent serve --open` provides **App Store** and **Apps** navigation on the
+`yu agent serve --open` provides **App Store** and **Apps** navigation on the
 existing authenticated Agent Web UI. It does not use the static marketing
 desktop. Ordinary App controls use `clawd` App services without creating an
 Agent task or contacting a model.

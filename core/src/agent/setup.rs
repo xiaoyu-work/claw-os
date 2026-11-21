@@ -1,6 +1,6 @@
-//! `cos agent setup` — per-modality config wizard.
+//! `yu agent setup` — per-modality config wizard.
 //!
-//! Replaces the previous `cos agent onboarding` family. Pick a
+//! Replaces the previous `yu agent onboarding` family. Pick a
 //! modality (text / tts / stt / imagegen / embed / all), then walk
 //! through provider → model → API key → persist → optional probe.
 //! Each modality writes to its own `~/.config/cos/config.json` block
@@ -46,7 +46,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
     //   oauth-poll  --provider copilot --device-code <code> | --device-code-stdin
     //   models      --provider copilot
     //
-    // Bare `cos agent setup` (no positional, no flags) opens an
+    // Bare `yu agent setup` (no positional, no flags) opens an
     // interactive modality picker on a TTY and prints help otherwise —
     // we deliberately do NOT auto-pick `text` for the user.
     let mut verify_after = true;
@@ -202,7 +202,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
             Some("reset") => reset_cmd(Modality::All),
             Some("providers") => providers_cmd(Modality::All),
             Some("apply") => Err(
-                "`apply` requires a modality: cos agent setup <text|tts|stt|imagegen|embed> apply ..."
+                "`apply` requires a modality: yu agent setup <text|tts|stt|imagegen|embed> apply ..."
                     .into(),
             ),
             Some("test") => verify_cmd(Modality::All),
@@ -220,12 +220,12 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                     dispatch_wizard(picked, verify_after)
                 } else {
                     Err(json!({
-                        "error": "cos agent setup requires a modality",
+                        "error": "yu agent setup requires a modality",
                         "hint": "pick one of: text | tts | stt | imagegen | embed | all",
                         "examples": [
-                            "cos agent setup text",
-                            "cos agent setup tts",
-                            "cos agent setup all",
+                            "yu agent setup text",
+                            "yu agent setup tts",
+                            "yu agent setup all",
                         ],
                     })
                     .to_string())
@@ -276,7 +276,7 @@ fn dispatch_wizard(modality: Modality, verify_after: bool) -> Result<Value, Stri
 fn pick_modality_interactively() -> Result<Modality, String> {
     let stderr = std::io::stderr();
     let mut e = stderr.lock();
-    let _ = writeln!(e, "cos agent setup — pick a modality to configure");
+    let _ = writeln!(e, "yu agent setup — pick a modality to configure");
     let _ = writeln!(e);
     let options = [
         (
@@ -314,7 +314,7 @@ fn pick_modality_interactively() -> Result<Modality, String> {
     Ok(options[idx - 1].0)
 }
 
-/// Which model class this invocation of `cos agent setup` targets.
+/// Which model class this invocation of `yu agent setup` targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modality {
     /// Conversational LLM under `[agent]`. The default — the agent
@@ -358,14 +358,14 @@ impl Modality {
 
 pub(crate) fn help_doc() -> Value {
     json!({
-        "command": "cos agent setup <MODALITY> [SUBCOMMAND]",
+        "command": "yu agent setup <MODALITY> [SUBCOMMAND]",
         "summary": "Per-modality config wizard: pick a provider, a model, store an API key, and verify it works.",
         "modalities": {
-            "text":      "Conversational text model (stored under [agent]). Required for `cos agent ask`/`chat`.",
-            "tts":       "Text-to-speech (under [tts]). Used by voice output / `cos agent voice`.",
-            "stt":       "Speech-to-text (under [stt]). Used by voice input / `cos model transcribe`.",
-            "imagegen":  "Image generation (under [imagegen]). Used by `cos agent image`.",
-            "embed":     "Text embeddings (under [embed]). Used by semantic memory / `cos agent recall`.",
+            "text":      "Conversational text model (stored under [agent]). Required for `yu agent ask`/`chat`.",
+            "tts":       "Text-to-speech (under [tts]). Used by voice output / `yu agent voice`.",
+            "stt":       "Speech-to-text (under [stt]). Used by voice input / `yu model transcribe`.",
+            "imagegen":  "Image generation (under [imagegen]). Used by `yu agent image`.",
+            "embed":     "Text embeddings (under [embed]). Used by semantic memory / `yu agent recall`.",
             "all":       "Walk every modality in order, prompting before each.",
         },
         "subcommands": {
@@ -393,23 +393,23 @@ pub(crate) fn help_doc() -> Value {
             "--device-code-stdin": "(oauth-poll only) Read the opaque device code from stdin to keep it out of process arguments.",
         },
         "examples": [
-            "cos agent setup text                                                 # wizard for conversational text",
-            "cos agent setup all                                                  # walk every modality, asking before each",
-            "cos agent setup --status                                             # report readiness across all modalities",
-            "cos agent setup --providers                                          # JSON catalogue of all providers + models",
-            "cos agent setup text apply --provider openai --model gpt-4o --api-key-stdin  < key.txt",
-            "cos agent setup text apply --provider azure --model my-deployment \\",
+            "yu agent setup text                                                 # wizard for conversational text",
+            "yu agent setup all                                                  # walk every modality, asking before each",
+            "yu agent setup --status                                             # report readiness across all modalities",
+            "yu agent setup --providers                                          # JSON catalogue of all providers + models",
+            "yu agent setup text apply --provider openai --model gpt-4o --api-key-stdin  < key.txt",
+            "yu agent setup text apply --provider azure --model my-deployment \\",
             "    --base-url https://acme.openai.azure.com/openai/deployments/my-deployment \\",
             "    --api-version 2024-12-01-preview --api-key-stdin                # Azure OpenAI",
-            "cos agent setup tts apply --provider edge --model en-US-AriaNeural   # no key needed",
-            "cos agent setup imagegen test                                        # probe configured imagegen provider",
-            "cos agent setup text oauth-start --provider copilot                  # GitHub Copilot device-flow start",
-            "cos agent setup text oauth-poll  --provider copilot --device-code D  # poll until status=ok",
-            "cos agent setup text apply       --provider copilot --model gpt-4o   # reuse stored token (no --api-key)",
-            "cos agent setup text models      --provider copilot                  # refresh Copilot model list",
+            "yu agent setup tts apply --provider edge --model en-US-AriaNeural   # no key needed",
+            "yu agent setup imagegen test                                        # probe configured imagegen provider",
+            "yu agent setup text oauth-start --provider copilot                  # GitHub Copilot device-flow start",
+            "yu agent setup text oauth-poll  --provider copilot --device-code D  # poll until status=ok",
+            "yu agent setup text apply       --provider copilot --model gpt-4o   # reuse stored token (no --api-key)",
+            "yu agent setup text models      --provider copilot                  # refresh Copilot model list",
         ],
         "notes": [
-            "Bare `cos agent setup` (no args) opens an interactive picker on a TTY; on a non-TTY it errors and lists the modalities.",
+            "Bare `yu agent setup` (no args) opens an interactive picker on a TTY; on a non-TTY it errors and lists the modalities.",
             "All subcommands emit JSON on success; errors are plain strings on stderr.",
         ],
     })
@@ -451,7 +451,7 @@ fn verify_llm() -> Result<Value, String> {
             "ok": false,
             "attempted": false,
             "reason": reason_val,
-            "hint": "run `cos agent setup text` to configure a provider first",
+            "hint": "run `yu agent setup text` to configure a provider first",
         }));
     }
     if !provider_needs_credential(&cfg.provider) {
@@ -479,7 +479,7 @@ fn verify_llm() -> Result<Value, String> {
         if let Some(msg) = verdict.get("error_message").and_then(|v| v.as_str()) {
             let _ = writeln!(e, "  {msg}");
         }
-        let _ = writeln!(e, "  hint: re-run `cos agent setup text` or fix the credential, then `cos agent setup text --verify-only`");
+        let _ = writeln!(e, "  hint: re-run `yu agent setup text` or fix the credential, then `yu agent setup text --verify-only`");
     }
     Ok(json!({
         "modality": "text",
@@ -495,25 +495,25 @@ fn verify_llm() -> Result<Value, String> {
 // Readiness gate (used by ask/chat/live/stream)
 // ---------------------------------------------------------------------------
 
-/// Whether `cos agent {ask,chat,live,stream}` can usefully run.
+/// Whether `yu agent {ask,chat,live,stream}` can usefully run.
 ///
 /// Returns `Err(json)` with a structured payload pointing at
-/// `cos agent setup text` when the agent is still on the mock provider or
+/// `yu agent setup text` when the agent is still on the mock provider or
 /// the configured provider has no resolvable credential.
 pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     if cfg.provider.is_empty() {
         return Err(json!({
             "error": "agent not configured",
-            "fix": "cos agent setup text",
-            "details": "no text-model provider is configured. Run `cos agent setup text` to pick one (or use the desktop initial-setup AI page).",
+            "fix": "yu agent setup text",
+            "details": "no text-model provider is configured. Run `yu agent setup text` to pick one (or use the desktop initial-setup AI page).",
         })
         .to_string());
     }
     if cfg.provider == "mock" {
         return Err(json!({
             "error": "agent not configured",
-            "fix": "cos agent setup text",
-            "details": "the `mock` provider returns canned answers. Run `cos agent setup text` to pick a real provider.",
+            "fix": "yu agent setup text",
+            "details": "the `mock` provider returns canned answers. Run `yu agent setup text` to pick a real provider.",
         })
         .to_string());
     }
@@ -542,7 +542,7 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     Err(json!({
         "error": "agent provider configured but no credential found",
         "provider": cfg.provider,
-        "fix": "cos agent setup text",
+        "fix": "yu agent setup text",
         "details": format!(
             "no credential resolvable for provider `{}` (checked credential store namespace `agent` and env vars).",
             cfg.provider
@@ -571,7 +571,7 @@ pub(super) fn provider_configuration_error(
                 "credential": credential,
                 "namespace": "agent",
                 "fix": format!(
-                    "cos credential revoke {credential} --namespace agent"
+                    "yu credential revoke {credential} --namespace agent"
                 ),
                 "details": details,
         }),
@@ -586,7 +586,7 @@ pub(super) fn provider_configuration_error(
                 "credential_names": cfg.api_key_credentials,
                 "environment_variables": cfg.api_key_envs,
                 "namespace": "agent",
-                "fix": "cos agent setup text",
+                "fix": "yu agent setup text",
                 "details": details,
             })
         }
@@ -594,14 +594,14 @@ pub(super) fn provider_configuration_error(
             "error": "agent provider is not configured",
             "kind": "not_configured",
             "provider": cfg.provider,
-            "fix": "cos agent setup text",
+            "fix": "yu agent setup text",
             "details": details,
         }),
         _ => json!({
             "error": "agent provider configuration error",
             "kind": "provider_configuration",
             "provider": cfg.provider,
-            "fix": "cos agent setup text",
+            "fix": "yu agent setup text",
             "details": details,
         }),
     }
@@ -613,7 +613,7 @@ pub fn provider_needs_credential(name: &str) -> bool {
 
 /// Returns a structured description of which credential/env actually
 /// resolved a non-empty API key for `cfg`, or `None` if no source
-/// resolved. Used by both the readiness gate and `cos agent status`
+/// resolved. Used by both the readiness gate and `yu agent status`
 /// so they agree on what "key present" means.
 pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> llm::Result<Option<KeySource>> {
     let source = llm::construction::ProcessCredentialSource;
@@ -854,7 +854,7 @@ fn reset_llm() -> Result<Value, String> {
 fn wizard_llm(verify_after: bool) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err(json!({
-            "error": "cos agent setup requires an interactive TTY",
+            "error": "yu agent setup requires an interactive TTY",
             "hint": "run it in a terminal, or write ~/.config/cos/config.json and the `agent` credential manually",
         })
         .to_string());
@@ -862,7 +862,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
 
     let stderr = std::io::stderr();
     let mut e = stderr.lock();
-    let _ = writeln!(e, "cos agent setup text — conversational text-model wizard");
+    let _ = writeln!(e, "yu agent setup text — conversational text-model wizard");
     let _ = writeln!(e);
 
     // ---- Step 1: provider ------------------------------------------------
@@ -1110,7 +1110,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
                 );
                 let _ = writeln!(
                     e,
-                    "a privileged session (e.g. `sudo COS_CONFIG_PATH=$COS_CONFIG_PATH cos agent setup text`)."
+                    "a privileged session (e.g. `sudo COS_CONFIG_PATH=$COS_CONFIG_PATH yu agent setup text`)."
                 );
                 credential_env = Some(env_name);
             }
@@ -1182,7 +1182,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         let _ = writeln!(e);
         let _ = writeln!(
             e,
-            "(skipping live probe; re-run with `cos agent setup text --verify-only` to confirm later)"
+            "(skipping live probe; re-run with `yu agent setup text --verify-only` to confirm later)"
         );
     } else if !needs_probe {
         let _ = writeln!(e);
@@ -1200,7 +1200,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         // does not reflect what we just persisted. Construct a probe
         // config in-memory by cloning the cached one and overriding the
         // fields the wizard just wrote — this matches exactly what
-        // `cos agent {ask,chat}` will see on next process start.
+        // `yu agent {ask,chat}` will see on next process start.
         let mut probe_cfg = crate::config::current_snapshot().agent.clone();
         probe_cfg.provider = provider.clone();
         probe_cfg.model = model.clone();
@@ -1217,7 +1217,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
             }
             let _ = writeln!(
                 e,
-                "  hint: fix the credential, then run `cos agent setup text --verify-only` to retest (no re-wizard)."
+                "  hint: fix the credential, then run `yu agent setup text --verify-only` to retest (no re-wizard)."
             );
         }
         probe_ok = Some(ok);
@@ -1225,7 +1225,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
     }
 
     let _ = writeln!(e);
-    let _ = writeln!(e, "Done. Try: cos agent chat");
+    let _ = writeln!(e, "Done. Try: yu agent chat");
 
     Ok(json!({
         "ok": true,
@@ -1234,7 +1234,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         "api_key_credential": credential_name,
         "api_key_env": credential_env,
         "config_path": path.display().to_string(),
-        "next": "cos agent chat",
+        "next": "yu agent chat",
         "verified": probe_ok,
         "probe": probe_value,
     }))
@@ -1244,7 +1244,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
 fn wizard_all(verify_after: bool) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err(json!({
-            "error": "cos agent setup all requires an interactive TTY",
+            "error": "yu agent setup all requires an interactive TTY",
             "hint": "set up each modality non-interactively by editing ~/.config/cos/config.json",
         })
         .to_string());
@@ -1252,7 +1252,7 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
 
     let stderr = std::io::stderr();
     let mut e = stderr.lock();
-    let _ = writeln!(e, "cos agent setup all — walking every modality");
+    let _ = writeln!(e, "yu agent setup all — walking every modality");
     let _ = writeln!(e);
 
     let modalities = [
@@ -1325,11 +1325,11 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
     Ok(json!({
         "ok": true,
         "modalities": results,
-        "next": "cos agent setup all --status",
+        "next": "yu agent setup all --status",
     }))
 }
 
-/// Public façade over per-modality status — used by `cos agent doctor`
+/// Public façade over per-modality status — used by `yu agent doctor`
 /// (and any other caller that wants a uniform snapshot without going
 /// through the CLI surface).
 pub fn status_for(modality: Modality) -> Value {
@@ -1422,11 +1422,11 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
     }
 }
 
-/// Providers shown in user-facing pickers (`cos agent setup text` wizard,
+/// Providers shown in user-facing pickers (`yu agent setup text` wizard,
 /// the desktop catalogue consumed by cosmic-settings, the initial-setup
 /// AI page). Filters out `mock` (test-only) and `llama_local` (managed
-/// via `cos model load`, not the standard credential flow). Power users
-/// can still address these by name via `cos agent setup text apply
+/// via `yu model load`, not the standard credential flow). Power users
+/// can still address these by name via `yu agent setup text apply
 /// --provider mock ...` or by editing ~/.config/cos/config.json directly —
 /// only the lists are hidden, not the registry.
 fn user_facing_providers() -> Vec<&'static str> {
@@ -1697,7 +1697,7 @@ fn apply_media(spec: &'static media::ModalitySpec, args: ApplyArgs) -> Result<Va
             return Err(json!({
                 "error": "local embedding stack unavailable",
                 "details": media::local_embed_unavailable_details(&err),
-                "fix": "cos agent setup embed",
+                "fix": "yu agent setup embed",
             })
             .to_string());
         }
@@ -1821,7 +1821,7 @@ fn resolve_oauth_credential(
     if args.api_key.is_some() || args.api_key_stdin {
         return Err(format!(
             "provider `{provider_name}` uses OAuth device flow; \
-             use `cos agent setup text oauth-start` instead of --api-key/--api-key-stdin. \
+             use `yu agent setup text oauth-start` instead of --api-key/--api-key-stdin. \
              (--api-key-env is still accepted for non-interactive overrides.)"
         ));
     }
@@ -1847,7 +1847,7 @@ fn resolve_oauth_credential(
     if !exists {
         return Err(format!(
             "provider `{provider_name}` is not signed in yet. \
-             Run `cos agent setup text oauth-start --provider {provider_name}` first \
+             Run `yu agent setup text oauth-start --provider {provider_name}` first \
              (or use the desktop AI settings page), or pass --api-key-env <ENV> to use \
              a GitHub token from the environment."
         ));

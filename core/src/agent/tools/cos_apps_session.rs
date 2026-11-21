@@ -47,9 +47,9 @@
 //!    before the app server sees the call.
 //! 4. On both allow and deny the kernel emits one
 //!    [`LlmRunRecord`] to `ai.jsonl` with `provider="app:<id>"` and
-//!    `model="tool:<tool_name>"`, matching the `cos ai tool` audit
+//!    `model="tool:<tool_name>"`, matching the `yu ai tool` audit
 //!    shape. App-internal calls that re-enter the kernel (e.g. the
-//!    server shells `cos ai chat`) carry the app's `COS_APP_ID` and
+//!    server shells `yu ai chat`) carry the app's `COS_APP_ID` and
 //!    are audited under that identity too.
 //!
 //! The app's MCP server therefore never sees a call its manifest

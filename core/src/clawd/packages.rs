@@ -372,7 +372,7 @@ pub(crate) fn request_control(mut params: Value) -> Result<Value, String> {
         super::protocol::Request::build(super::routes::Command::SystemPackageControl, params),
     ).map_err(|error| {
         if payload && error.may_have_dispatched() {
-            format!("Root package acceptance is unconfirmed: {error}. Query `cos package-transactions --invocation {invocation}`; do not resubmit effects")
+            format!("Root package acceptance is unconfirmed: {error}. Query `yu package-transactions --invocation {invocation}`; do not resubmit effects")
         } else { error.to_string() }
     })?;
     if !response.ok {

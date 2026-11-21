@@ -24,7 +24,7 @@ still use the same Host, capability and sandbox gates.
   digest is pinned on first use so post-install tampering is detected.
 * **Nothing third-party is trusted by default.** A signed package from
   a hub or any other publisher stays **quarantined** until an operator
-  deliberately installs that publisher's public key. `cos app`, the
+  deliberately installs that publisher's public key. `yu app`, the
   skill loader and MCP discovery all report the package with its reason
   instead of running it.
 * **No fallback publisher is selected.** The packaging contract checks
@@ -42,10 +42,10 @@ Trust is a human decision, taken out of band:
 ```bash
 # Operator-wide (root): drop the entry into the system root.
 sudo install -m 0644 publisher.json /etc/cos/trust/publishers.d/
-sudo cos provenance trust record-system
+sudo yu provenance trust record-system
 
 # Or for one user only:
-cos provenance trust add --file publisher.json
+yu provenance trust add --file publisher.json
 ```
 
 Both paths take a `claw.trust/v1` document containing **public** key
@@ -90,7 +90,7 @@ in this directory contains a `private_key` field.
 Generate a key pair with:
 
 ```bash
-cos provenance keygen --out ~/.secrets/publisher.json --comment "example 2026"
+yu provenance keygen --out ~/.secrets/publisher.json --comment "example 2026"
 ```
 
 and publish only the printed `trust_entry` object. **Never commit the
@@ -119,6 +119,6 @@ for that exact package without invalidating the publisher.
 
 The Agent post-install script records the combined system generation.
 For local operator changes, review the publisher files and run
-`sudo cos provenance trust record-system`. Per-user trust changes record
+`sudo yu provenance trust record-system`. Per-user trust changes record
 their own generation automatically. An unrecorded edit fails its domain
 closed.

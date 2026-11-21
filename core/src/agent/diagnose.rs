@@ -1,6 +1,6 @@
 //! Deterministic system-diagnosis orchestration.
 //!
-//! `cos agent diagnose` and the `cos_diagnose` agent tool use the same
+//! `yu agent diagnose` and the `cos_diagnose` agent tool use the same
 //! read-only pipeline:
 //!
 //! 1. Route the symptom to a diagnostic domain.
@@ -238,14 +238,14 @@ where
 
 fn help() -> Value {
     json!({
-        "command": "cos agent diagnose",
+        "command": "yu agent diagnose",
         "summary": "Collect bounded system evidence and return confidence-linked findings.",
-        "usage": "cos agent diagnose [--quick] [--domain <domain>] [--path <path>] <symptom>",
+        "usage": "yu agent diagnose [--quick] [--domain <domain>] [--path <path>] <symptom>",
         "domains": DOMAINS,
         "examples": [
-            "cos agent diagnose \"why is my computer slow?\"",
-            "cos agent diagnose --domain network \"网络为什么很慢\"",
-            "cos agent diagnose --domain storage --path /home/cos \"what is using disk space?\""
+            "yu agent diagnose \"why is my computer slow?\"",
+            "yu agent diagnose --domain network \"网络为什么很慢\"",
+            "yu agent diagnose --domain storage --path /home/cos \"what is using disk space?\""
         ],
     })
 }
@@ -296,7 +296,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let symptom = symptom_parts.join(" ").trim().to_string();
     if symptom.is_empty() {
         return Err(
-            "usage: cos agent diagnose [--quick] [--domain <domain>] [--path <path>] <symptom>"
+            "usage: yu agent diagnose [--quick] [--domain <domain>] [--path <path>] <symptom>"
                 .to_string(),
         );
     }
@@ -652,9 +652,9 @@ where
 
 fn format_command(probe: &ProbeSpec) -> String {
     if probe.args.is_empty() {
-        format!("cos sys {}", probe.command)
+        format!("yu sys {}", probe.command)
     } else {
-        format!("cos sys {} {}", probe.command, probe.args.join(" "))
+        format!("yu sys {} {}", probe.command, probe.args.join(" "))
     }
 }
 

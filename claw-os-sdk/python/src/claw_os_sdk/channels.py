@@ -28,7 +28,7 @@ def control(
     if len(data) > 20 * 1024:
         raise ValueError("channel control exceeds 20 KiB")
     return call_json_with_stdin_binary(
-        binary if binary is not None else os.environ.get("CLAW_COS_BIN", "/usr/local/bin/cos"),
+        binary if binary is not None else os.environ.get("CLAW_COS_BIN", "/usr/local/bin/yu"),
         ["__channel", "control"], data,
         deadline_unix_ms=time.time_ns() // 1_000_000 + 30_000 if deadline_unix_ms is None else deadline_unix_ms,
         check_cancelled=check_cancelled,

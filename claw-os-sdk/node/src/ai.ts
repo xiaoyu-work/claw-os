@@ -1,7 +1,7 @@
 // AI helper for Claw OS Node apps.
 //
 // `chat` is the stable model API and shells out to
-// `cos ai chat --app <id>`. The kernel derives `ai.chat` or
+// `yu ai chat --app <id>`. The kernel derives `ai.chat` or
 // `ai.chat.untrusted` from origin, then runs capability checks, budget,
 // safety, and audit.
 //
@@ -9,7 +9,7 @@
 // they want; the gate picks the verb and the machine owner configures
 // the one provider/model in /etc/cos/agent.toml. Importing a provider
 // SDK directly (openai, anthropic, ...) is refused at install time by
-// `cos app lint` — this module is the only sanctioned route to a model.
+// `yu app lint` — this module is the only sanctioned route to a model.
 //
 //   import { ai } from "@claw-os/sdk";
 //   const res = ai.chat("Summarise this", { origin: "external-content" });
@@ -36,7 +36,7 @@ import {
 
 /** Base class for every error this module raises. */
 export class AiError extends BridgeError {}
-/** The `cos` binary could not be invoked or returned garbage. */
+/** The `yu` binary could not be invoked or returned garbage. */
 export class AiUnavailable extends AiError {}
 /** A gate (capability / origin / budget / safety) refused the call.
  * `payload` is the structured envelope the kernel returned. */
@@ -134,7 +134,7 @@ export function budget(appId?: string): Budget {
   if (!app) throw new AiError("budget: app_id is required");
   let data: unknown;
   try {
-    data = cosCallJson("cos agent budget show", ["agent", "budget", "show", app]);
+    data = cosCallJson("yu agent budget show", ["agent", "budget", "show", app]);
   } catch (error) {
     if (error instanceof Denied || error instanceof Unavailable) {
       throw new AiUnavailable(error.message);
@@ -186,7 +186,7 @@ function dispatch(a: DispatchArgs): AiResponse {
 
     let data: unknown;
     try {
-      data = cosCallJson(`cos ai ${a.modality}`, argv);
+      data = cosCallJson(`yu ai ${a.modality}`, argv);
     } catch (e) {
       if (e instanceof Denied) raiseForError(e.payload);
       if (e instanceof Unavailable) throw new AiUnavailable(e.message);

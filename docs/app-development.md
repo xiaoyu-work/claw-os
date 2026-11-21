@@ -1,9 +1,9 @@
 # Writing Your First Claw OS App
 
 End-to-end walkthrough for app authors: scaffold → run → install. The
-SDK is pre-installed on every Claw OS system, the `cos` CLI discovers
+SDK is pre-installed on every Claw OS system, the `yu` CLI discovers
 your code automatically, and every invocation re-reads your source from
-disk — so the dev loop is `$EDITOR` ➜ `cos app …` and nothing more.
+disk — so the dev loop is `$EDITOR` ➜ `yu app …` and nothing more.
 
 For the architectural background see
 [`app-ai-integration.md`](app-ai-integration.md) (AI gate, manifest,
@@ -13,7 +13,7 @@ of agent-callable tools). This document is the **how to** counterpart.
 Agent-to-App integration uses `schema_version: 2` and one
 top-level `mcp` service containing lifecycle, caller access, tools, and exact
 capability needs. The removed `session` block is rejected. Optional
-`operations` remain the human-facing `cos app <id> <operation>` CLI surface;
+`operations` remain the human-facing `yu app <id> <operation>` CLI surface;
 they are not a second Agent tool contract.
 
 Apps do not call other Apps. Cross-App workflows are orchestrated by the
@@ -104,7 +104,7 @@ exposed to the caller.
 
 A staged migration is moving ordinary App calls onto `mcp.tools`, while
 explicit manifest operations remain available. The human
-`cos app <id> <command>` selects a declared ordinary operation first. Otherwise
+`yu app <id> <command>` selects a declared ordinary operation first. Otherwise
 it resolves exactly one tool by the `<app-id>.<command>` convention and dispatches
 through the authenticated MCP gateway. Adding a distinct operation, including
 an opaque stdio host, does not hide the App's MCP commands. Execution errors
@@ -113,7 +113,7 @@ MCP tool arg may carry the same optional one-shot CLI
 `binding` (`positional`/`flag`) as an operation arg. `binding` is CLI-only
 metadata: it never appears in the model-facing MCP `inputSchema`, and the
 default binding is unchanged (`bool` → flag, everything else → positional).
-MCP-only commands reject raw `--stdin`. Use `cos app <id> <command> --args-stdin`
+MCP-only commands reject raw `--stdin`. Use `yu app <id> <command> --args-stdin`
 to send one JSON object of manifest-declared business arguments instead of
 ordinary tool arguments. The marker must be the only tool argument; malformed,
 empty, non-object, unknown-field, and oversized input is rejected before a tool
@@ -168,9 +168,9 @@ separate signed, out-of-process
 That ABI cannot mutate prompts or authorization and does not trust an
 installed directory without [package provenance](extension-provenance.md).
 
-The `cos` CLI recursively scans `$COS_APPS_DIR` (default
+The `yu` CLI recursively scans `$COS_APPS_DIR` (default
 `/usr/lib/cos/apps/`) for valid `app.json` files, then exposes each operation
-as `cos app <id> <op>` ([`core/src/apps.rs`](../core/src/apps.rs)).
+as `yu app <id> <op>` ([`core/src/apps.rs`](../core/src/apps.rs)).
 
 The manifest id must equal the app directory's **normalized path relative to
 `$COS_APPS_DIR`**, with path segments joined by `-`. For example,
@@ -357,7 +357,7 @@ argparse and gateway parsers consume the same inline flags and `--` delimiter
 directly.
 
 An explicitly declared opaque host instead uses
-`cos app stdio <id> <operation> [args...]`. It requires that operation's
+`yu app stdio <id> <operation> [args...]`. It requires that operation's
 `stdin: true` and a held, authenticated primary entry. This human/host-only,
 non-model-callable frontend forwards incremental bytes rather than collecting
 one-shot input; it does not parse or reformat stdout or append a newline.
@@ -382,13 +382,13 @@ handlers in `server.py` and typed behavior in `main.py`. Human CLI calls use
 the same tools:
 
 ```bash
-cos app fs write /workspace/out.txt --content='hello'
-cos app fs write /workspace/empty.txt --content=
-cos app fs write_bytes /workspace/out.bin --content=AAEC
-printf '%s' '{"path":"/workspace/out.txt","content":"hello\u0000world"}' | cos app fs write --args-stdin
-cos app fs read /workspace/out.txt --offset=0 --limit=1000
-cos app fs read /workspace/out.txt --start=1 --end=20
-cos app fs tag /workspace/out.txt reviewed blue
+yu app fs write /workspace/out.txt --content='hello'
+yu app fs write /workspace/empty.txt --content=
+yu app fs write_bytes /workspace/out.bin --content=AAEC
+printf '%s' '{"path":"/workspace/out.txt","content":"hello\u0000world"}' | yu app fs write --args-stdin
+yu app fs read /workspace/out.txt --offset=0 --limit=1000
+yu app fs read /workspace/out.txt --start=1 --end=20
+yu app fs tag /workspace/out.txt reviewed blue
 ```
 
 `write` and `write_bytes` require explicit string `content`; neither reads
@@ -480,7 +480,7 @@ for the declaration vocabulary and its limits.
 
 ## 4. The dev loop — no rebuild, no restart
 
-Every one-shot `cos app <id> <op>` invocation launches the app entry point
+Every one-shot `yu app <id> <op>` invocation launches the app entry point
 through the runtime selected by its manifest. Python apps run in a fresh
 subprocess and are imported from disk for every call, so there is no module
 cache or daemon to restart. **Save the file, re-run the command, see the
@@ -495,10 +495,10 @@ $EDITOR ~/my-apps/hello/app.json    # paste the manifest from §3
 $EDITOR ~/my-apps/hello/main.py     # paste the run() from §3
 
 export COS_APPS_DIR=~/my-apps
-cos app                              # shows hello in the list
-cos app hello say --foo bar          # runs it
+yu app                              # shows hello in the list
+yu app hello say --foo bar          # runs it
 $EDITOR ~/my-apps/hello/main.py      # change the return value
-cos app hello say                    # new behaviour, no reinstall
+yu app hello say                    # new behaviour, no reinstall
 ```
 
 Or work from a copy of a bundled app as a starting point:
@@ -625,7 +625,7 @@ an `auth_required` error with a constrained Agent action:
             "tool": "cos_oauth_login",
             "input": {"provider": "google"},
         },
-        "login_command": "cos credential oauth-login google",
+        "login_command": "yu credential oauth-login google",
     },
 }
 ```
@@ -638,7 +638,7 @@ refresh tokens, authorization codes, or browser state in App output.
 
 ## 6. Manifest-derived schema and help
 
-`cos app <id> --schema` and `cos app <id> <op> --schema` generate their
+`yu app <id> --schema` and `yu app <id> <op> --schema` generate their
 output **only from `app.json`**. Schema inspection never imports or executes
 the app entry point, so listing an untrusted app remains side-effect free.
 
@@ -697,7 +697,7 @@ Three things this triggers:
 2. Each op that calls AI must include the matching `ai.*` verb in
    `needs[]`.
 3. The user must grant consent for the app's current AI-policy snapshot before
-   any call is allowed: `cos app consent grant <id>`. Changing the app's
+   any call is allowed: `yu app consent grant <id>`. Changing the app's
    budget, safety profile, origins, or tool allowlist makes the saved consent
    stale and requires a new grant.
 
@@ -707,30 +707,30 @@ catalog, budget envelope, audit surface — read
 
 ## 8. Developer commands
 
-The `cos` CLI ships with everything you need to introspect, validate,
+The `yu` CLI ships with everything you need to introspect, validate,
 and ship an app
 ([`core/src/router.rs:107-187`](../core/src/router.rs)).
 
 | Command | Effect |
 |---|---|
-| `cos app` | List every discovered app under `$COS_APPS_DIR`. |
-| `cos app <id>` | Show ops + version for one app. |
-| `cos app <id> <op> [args…]` | Run an op. |
-| `cos app <id> --schema` | Full manifest-derived schema for the app. |
-| `cos app <id> <op> --schema` | Schema for one op. |
-| `cos app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
-| `cos app tool list [<id>]` | Show the manifest-declared MCP tools this App exposes through the private Gateway. |
-| `cos app install <dir> --review` | Verify the package and return its requested permissions, scopes, conditions, AI policy and execution surfaces as JSON, without installing or granting anything. |
-| `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Authenticate and disclose the App's permission requests before publishing into `$COS_APPS_DIR/<id>/`. Ordinary installs require an OS review decision; `--yes` can use existing OS confirmation but cannot replace first review or grant capabilities/AI consent. `--no-consent` only defers AI consent. Copying is skipped only when source and destination are the same directory. `--dev-trust` retains its separate interactive, digest-bound development-trust workflow. |
-| `cos review pending` | List and present the current user's App reviews and existing capability requests using the shared OS review contract. |
-| `cos review show <id>` | Display one owner-scoped review and its authenticated permission disclosure. |
-| `cos review approve <id>` | Confirm an App package and choose any newly requested, supported GUI permissions, or decide a separate capability request through the interactive OS helper. |
-| `cos review deny <id>` | Cancel the current user's pending review through the owner-scoped OS route, without a privilege prompt or capability grant. |
-| `cos app consent list` | Which apps you have granted AI consent to. |
-| `cos app consent show <id>` | Display the manifest's AI block. |
-| `cos app consent grant <id> [--yes]` | Grant AI consent. |
-| `cos app consent revoke <id>` | Revoke it. |
-| `cos app consent path <id>` | Print the consent record path. |
+| `yu app` | List every discovered app under `$COS_APPS_DIR`. |
+| `yu app <id>` | Show ops + version for one app. |
+| `yu app <id> <op> [args…]` | Run an op. |
+| `yu app <id> --schema` | Full manifest-derived schema for the app. |
+| `yu app <id> <op> --schema` | Schema for one op. |
+| `yu app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
+| `yu app tool list [<id>]` | Show the manifest-declared MCP tools this App exposes through the private Gateway. |
+| `yu app install <dir> --review` | Verify the package and return its requested permissions, scopes, conditions, AI policy and execution surfaces as JSON, without installing or granting anything. |
+| `yu app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Authenticate and disclose the App's permission requests before publishing into `$COS_APPS_DIR/<id>/`. Ordinary installs require an OS review decision; `--yes` can use existing OS confirmation but cannot replace first review or grant capabilities/AI consent. `--no-consent` only defers AI consent. Copying is skipped only when source and destination are the same directory. `--dev-trust` retains its separate interactive, digest-bound development-trust workflow. |
+| `yu review pending` | List and present the current user's App reviews and existing capability requests using the shared OS review contract. |
+| `yu review show <id>` | Display one owner-scoped review and its authenticated permission disclosure. |
+| `yu review approve <id>` | Confirm an App package and choose any newly requested, supported GUI permissions, or decide a separate capability request through the interactive OS helper. |
+| `yu review deny <id>` | Cancel the current user's pending review through the owner-scoped OS route, without a privilege prompt or capability grant. |
+| `yu app consent list` | Which apps you have granted AI consent to. |
+| `yu app consent show <id>` | Display the manifest's AI block. |
+| `yu app consent grant <id> [--yes]` | Grant AI consent. |
+| `yu app consent revoke <id>` | Revoke it. |
+| `yu app consent path <id>` | Print the consent record path. |
 
 ### Installation permission review
 
@@ -793,7 +793,7 @@ the terminal and desktop share the typed
 
 The reusable [directory-install backend](../core/src/apps/installation.rs)
 owns source validation, private staging, in-place revalidation and filesystem
-replacement/recovery. It and `cos app lint` use the same
+replacement/recovery. It and `yu app lint` use the same
 [static lint implementation](../core/src/apps/lint.rs), without executing App
 entrypoints. CLI flags, OS review presentation and AI consent remain in the
 router; actual signed publication uses the closed Root-only
@@ -807,7 +807,7 @@ the configured empty App-root leaf beneath its existing verified Root-owned
 parent. This creates no App payload and never uses a caller-selected target.
 Root records publication dispatch durably before any installation tree writes.
 After dispatch or an indeterminate outcome, do not repeat installation, even
-with the same package or `--force`. Run `cos app install --recover <app-id>` for
+with the same package or `--force`. Run `yu app install --recover <app-id>` for
 a read-only outcome check. It requires the exact installed package/manifest,
 original destination, unchanged directory delivery ownership and no transaction
 scratch before reopening admission. It does not need the original source and
@@ -873,10 +873,10 @@ Set explicitly only when overriding defaults
 | `COS_APPS_DIR` | Apps root the kernel scans. | `/usr/lib/cos/apps` |
 | `COS_DATA_DIR` | Where the current process persists Claw OS data. Inside a sandboxed operation this is the app's own partition, `<data-root>/apps/<app-id>` — never the owner's data root. | `$XDG_DATA_HOME/cos`, normally `~/.local/share/cos`; clawd overrides this to `/var/lib/cos` |
 | `COS_OWNER_HOME` | Verified home path of the user the App service represents. Use it only to resolve a manifest-approved `~/...` resource; the path grants no access by itself, and `$HOME` remains private App state. | (auto) |
-| `COS_APPLICATIONS_DIR` | Where `cos app install` writes generated desktop launchers. | `/usr/share/applications` |
+| `COS_APPLICATIONS_DIR` | Where `yu app install` writes generated desktop launchers. | `/usr/share/applications` |
 | `COS_SDK_PYTHON_DIR` | Force the SDK lookup to a specific dir. Must contain both `claw_os_sdk/` and `cos_runtime/` as subdirs. | unset → kernel probes `/usr/lib/cos/python` + sibling dev paths |
 | `COS_APP_ID` | The id of the calling app. **Auto-set by the bridge** from `app.json`; do not override. | (auto) |
-| `COS_BIN` | Path to the `cos` binary the SDK shells back to. | `cos` (from `$PATH`) |
+| `COS_BIN` | Path to the `yu` binary the SDK shells back to. | `cos` (from `$PATH`) |
 | `COS_SESSION` | Session id for grouped multi-call audit. | unset |
 | `COS_WORKER_SANDBOX` | Set to `1` inside every sandboxed operation. Read it to detect the sandbox; do not rely on it for security. | (auto) |
 | `COS_EGRESS_SOCKET` | HTTP `CONNECT` proxy socket, present only when the operation was granted exact `net.dial` hosts. | unset |
@@ -895,7 +895,7 @@ Operations run inside a namespace/seccomp/cgroup sandbox
 this while writing the manifest:
 
 * **Filesystem.** Only the app package (read-only), the app data
-  directory (read-write), the `cos` binary and SDK trees (read-only),
+  directory (read-write), the `yu` binary and SDK trees (read-only),
   and the paths the operation's `needs[]` actually granted. A
   `fs.read` grant is a read-only mount, `fs.write` and `fs.delete` are
   read-write, and a `from-arg` scope is mounted at the same absolute
@@ -979,9 +979,9 @@ render graphs without creating another installed App identity:
 }
 ```
 
-`cos app workbench --gui` selects the default GUI. Its exact existing
+`yu app workbench --gui` selects the default GUI. Its exact existing
 `desktop.exec` also remains a public selector, including panel selectors such
-as `open`. `cos app workbench --gui:applet [literal user args...]` selects the
+as `open`. `yu app workbench --gui:applet [literal user args...]` selects the
 named GUI, passing its declared `exec` as **one literal argument**, followed by
 unchanged user arguments. `exec` is not a shell command, command line or
 executable. No caller-supplied path can select a GUI. Unknown or invalid names
@@ -1154,15 +1154,15 @@ receipt recording never repeats an App call.
 Once the app does what you want:
 
 ```sh
-cos app lint ~/my-apps/hello         # static check
-cos provenance sign --kind app --id hello --version 1.0.0 \
+yu app lint ~/my-apps/hello         # static check
+yu provenance sign --kind app --id hello --version 1.0.0 \
     --path ~/my-apps/hello --key ~/.secrets/my-publisher.json \
     --entrypoint main.py             # bind the whole tree to your key
-cos app install ~/my-apps/hello --review  # inspect verified requests without installing
-cos app install ~/my-apps/hello      # review permissions, confirm, then publish
+yu app install ~/my-apps/hello --review  # inspect verified requests without installing
+yu app install ~/my-apps/hello      # review permissions, confirm, then publish
 # Installation does not grant capabilities. AI consent is a separate prompt.
 # --no-consent defers that AI prompt; --yes never grants AI consent.
-cos app hello say                    # now lives under /usr/lib/cos/apps/hello/
+yu app hello say                    # now lives under /usr/lib/cos/apps/hello/
 ```
 
 An App is authenticated before its manifest can influence capability grants or
@@ -1171,7 +1171,7 @@ and a signed package. This unsigned developer-install command is currently
 explicitly blocked:
 
 ```sh
-cos app install ~/my-apps/hello --dev-trust
+yu app install ~/my-apps/hello --dev-trust
 ```
 
 It does not publish an unsigned tree or record trust. Sign the development
@@ -1181,7 +1181,7 @@ not migrate or revoke them, and signatures never grant capabilities.
 
 For a clean distributable, sign the directory and package it as a
 tarball: any machine that trusts your publisher key can
-`cos app install <untarred-dir>` it. See
+`yu app install <untarred-dir>` it. See
 [`extension-provenance.md`](extension-provenance.md) for the envelope
 format, trust roots, revocation and rollback.
 

@@ -13,7 +13,7 @@
 //! already ships ([`crate::engine_pkg::download`] +
 //! [`crate::engine_pkg::install_local`]); wiring the install path
 //! here would duplicate that logic and is left for the matching
-//! `cos skill install` CLI surface (Phase 7). For now this module
+//! `yu skill install` CLI surface (Phase 7). For now this module
 //! gives the agent the metadata it needs to recommend / display
 //! installable skills, and a documented contract for the hub
 //! authors to publish against.

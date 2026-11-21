@@ -197,7 +197,7 @@ fn service_submit_params(args: &[String]) -> Result<Value, String> {
 
     let prompt = prompt
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--after-task ID] [--activity ID] [--workspace PATH] [--max-turns N] [--model ID]")?;
+        .ok_or("usage: yu agent service submit \"<prompt>\" [--session ID] [--after-task ID] [--activity ID] [--workspace PATH] [--max-turns N] [--model ID]")?;
     let mut params = json!({ "prompt": prompt });
     if let Some(session_id) = session_id {
         params["session_id"] = json!(session_id);
@@ -265,7 +265,7 @@ fn service_result(args: &[String]) -> Result<Value, String> {
     let id = args
         .first()
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service result <task_id> [--wait-secs N]")?
+        .ok_or("usage: yu agent service result <task_id> [--wait-secs N]")?
         .clone();
     let mut wait_secs: u64 = 0;
     let mut i = 1usize;
@@ -292,7 +292,7 @@ fn service_cancel(args: &[String]) -> Result<Value, String> {
     let id = args
         .first()
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service cancel <task_id>")?;
+        .ok_or("usage: yu agent service cancel <task_id>")?;
     send(Command::TaskCancel, json!({ "id": id }))
 }
 

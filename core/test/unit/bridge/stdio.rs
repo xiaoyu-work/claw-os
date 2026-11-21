@@ -232,7 +232,7 @@ fn inherited_runtime_overrides_cannot_expose_caller_code_or_private_directories(
         let _override = TestEnvVarGuard::set(name, bad);
         assert!(validate_runtime_overrides().unwrap_err().contains(name));
     }
-    let _cos = TestEnvVarGuard::set("COS_BIN", "/usr/local/bin/cos");
+    let _cos = TestEnvVarGuard::set("COS_BIN", "/usr/local/bin/yu");
     let _sdk = TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", "/usr/lib/cos/python");
     validate_runtime_overrides().unwrap();
 }
@@ -414,7 +414,7 @@ assert os.environ["COS_APP_ID"] == "{APP}"
 assert os.environ["COS_SESSION"].startswith("app-")
 assert os.environ["COS_COMMAND"] == "{OPERATION}"
 assert os.environ["COS_ARGS_JSON"] == "[]"
-assert os.environ["CLAW_COS_BIN"] == "/usr/local/bin/cos"
+assert os.environ["CLAW_COS_BIN"] == "/usr/local/bin/yu"
 assert os.environ["COS_WORKER_SANDBOX"] == "1"
 assert "NoNewPrivs:\t1" in pathlib.Path("/proc/self/status").read_text()
 data = pathlib.Path(os.environ["COS_DATA_DIR"])

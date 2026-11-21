@@ -1,7 +1,7 @@
 //! Image generation provider trait + registry.
 //!
 //! Concrete backends (FAL.ai, OpenAI DALL-E / gpt-image, xAI image
-//! gen, future local SD/Flux via cos model) implement
+//! gen, future local SD/Flux via yu model) implement
 //! [`ImageGenProvider`] and register with [`ImageGenRegistry`].
 //!
 //! This commit ships the trait, registry, request/response types,

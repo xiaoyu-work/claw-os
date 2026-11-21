@@ -1,7 +1,7 @@
 use crate::apps;
 use serde_json::{json, Value};
 
-/// `cos agent budget` — inspect per-app AI spend.
+/// `yu agent budget` — inspect per-app AI spend.
 ///
 /// Subcommands:
 ///   show <app>          Current period: used vs cap.
@@ -18,7 +18,7 @@ pub(super) fn budget_cmd(args: &[String]) -> Result<Value, String> {
         "show" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent budget show <app>".to_string())?;
+                .ok_or_else(|| "usage: yu agent budget show <app>".to_string())?;
             let store = budget::Store::open()?;
             let snap = store.current(app).map_err(|e| e.to_string())?;
             Ok(json!({
@@ -30,7 +30,7 @@ pub(super) fn budget_cmd(args: &[String]) -> Result<Value, String> {
         "reset" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent budget reset <app>".to_string())?;
+                .ok_or_else(|| "usage: yu agent budget reset <app>".to_string())?;
             let store = budget::Store::open()?;
             store.reset(app).map_err(|e| e.to_string())?;
             Ok(json!({"app": app, "reset": true}))
@@ -38,13 +38,13 @@ pub(super) fn budget_cmd(args: &[String]) -> Result<Value, String> {
         "history" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent budget history <app>".to_string())?;
+                .ok_or_else(|| "usage: yu agent budget history <app>".to_string())?;
             let store = budget::Store::open()?;
             let rows = store.history(app).map_err(|e| e.to_string())?;
             Ok(json!({"app": app, "history": rows}))
         }
         "user" => {
-            // `cos agent budget user <show|path>` — inspect the per-user
+            // `yu agent budget user <show|path>` — inspect the per-user
             // aggregate cap. Writes go through the Cosmic Settings UI,
             // not the CLI; this is read-only.
             let user_sub = args.get(1).map(String::as_str).unwrap_or("show");
@@ -79,17 +79,17 @@ pub(super) fn budget_cmd(args: &[String]) -> Result<Value, String> {
                     "path": user_budget::config_path().display().to_string(),
                 })),
                 other => Err(format!(
-                    "unknown subcommand: cos agent budget user {other}. try: show | path"
+                    "unknown subcommand: yu agent budget user {other}. try: show | path"
                 )),
             }
         }
-        _ => Err("usage: cos agent budget <show|reset|history> <app>  |  \
-             cos agent budget user <show|path>"
+        _ => Err("usage: yu agent budget <show|reset|history> <app>  |  \
+             yu agent budget user <show|path>"
             .to_string()),
     }
 }
 
-/// `cos agent override <show|path|effective> <app>` — read-only
+/// `yu agent override <show|path|effective> <app>` — read-only
 /// inspection of the per-user override file at
 /// `$HOME/.config/cos/apps/<app>.json`. There is no `set` / `write`
 /// subcommand by design: the Cosmic Settings UI is the sole writer.
@@ -101,7 +101,7 @@ pub(super) fn override_cmd(args: &[String]) -> Result<Value, String> {
         "show" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent override show <app>".to_string())?;
+                .ok_or_else(|| "usage: yu agent override show <app>".to_string())?;
             let ovr = overrides::load(app)?;
             Ok(json!({
                 "app": app,
@@ -113,7 +113,7 @@ pub(super) fn override_cmd(args: &[String]) -> Result<Value, String> {
         "path" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent override path <app>".to_string())?;
+                .ok_or_else(|| "usage: yu agent override path <app>".to_string())?;
             Ok(json!({
                 "app": app,
                 "path": overrides::override_path(app).display().to_string(),
@@ -122,7 +122,7 @@ pub(super) fn override_cmd(args: &[String]) -> Result<Value, String> {
         "effective" => {
             let app = args
                 .get(1)
-                .ok_or_else(|| "usage: cos agent override effective <app>".to_string())?;
+                .ok_or_else(|| "usage: yu agent override effective <app>".to_string())?;
             let apps_dir = std::env::var("COS_APPS_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::PathBuf::from("/usr/lib/cos/apps"));
@@ -145,7 +145,7 @@ pub(super) fn override_cmd(args: &[String]) -> Result<Value, String> {
                 "effective": effective,
             }))
         }
-        _ => Err("usage: cos agent override <show|path|effective> <app>".to_string()),
+        _ => Err("usage: yu agent override <show|path|effective> <app>".to_string()),
     }
 }
 

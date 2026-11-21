@@ -21,7 +21,7 @@ polkit.addRule(function(action, subject) {
 
     // App store: installing / removing flatpak apps from Claw Store is
     // the single most common reason the user sees an auth prompt.
-    // Going through `cos app pkg need` is gated by the system agent
+    // Going through `yu app pkg need` is gated by the system agent
     // approval flow anyway, so dropping the password prompt here is
     // safe.
     if (action.id == "org.freedesktop.Flatpak.app-install" ||
