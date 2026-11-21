@@ -1,8 +1,4 @@
-# Claw OS branding for Calamares.
-#
-# Images and slideshow are deliberately omitted in v1 — Calamares
-# falls back to text-only rendering when image paths point to missing
-# files, so this still works. Replace with branded artwork in M9+.
+# Claw OS branding for Calamares. The installer feature supplies the images.
 
 ---
 componentName:  claw-os

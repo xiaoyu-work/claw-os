@@ -2,7 +2,7 @@
 # rootfs/features/installer/install.sh — wire Calamares onto a Live ISO.
 #
 # What this script does:
-#  - Copies the installer overlay (settings.conf, modules/*.conf, branding/)
+#  - Copies the installer overlay and branding assets
 #    into the rootfs at /etc/calamares/.
 #  - Marks /etc/cos/installer-xstartup and /etc/profile.d/cos-installer.sh
 #    executable; the profile.d hook is what auto-starts X on tty1 login.
@@ -21,6 +21,9 @@ if [ -d "$FEATURE_DIR/overlay" ]; then
     echo "  :: applying installer overlay"
     cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
 fi
+branding="$ROOTFS/etc/calamares/branding/claw-os"
+install -m0644 "$PROJECT_DIR/assets/brand/clawos-icon-192.png" "$branding/logo.png"
+install -m0644 "$PROJECT_DIR/assets/brand/clawos-wordmark.png" "$branding/welcome.png"
 
 # 2. Mark the autostart hook + Xstartup script executable.
 chmod 755 "$ROOTFS/etc/profile.d/cos-installer.sh"
