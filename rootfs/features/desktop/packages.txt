@@ -518,8 +518,9 @@ v4l-utils
 # libcamera does. Pulled by Chromium / Firefox in modern versions
 # for webcam access in browser.
 libcamera-tools
-# Expose cameras supported by libcamera to PipeWire and desktop applications.
+# Expose cameras to PipeWire and include the IPA modules needed by raw sensors.
 libspa-0.2-libcamera
+libcamera-ipa
 # modemmanager: cellular modem daemon for laptops with built-in
 # WWAN (Lenovo X1 Carbon LTE, Dell XPS WWAN options). Empty no-op
 # when no modem is present. NetworkManager talks to it for
