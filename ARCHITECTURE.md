@@ -565,8 +565,11 @@ borrowing package transaction identity. Privileged package transactions, audit,
 rollback and installed state remain OS-owned. Native New Window/MCP activation
 uses a fixed OS target under `proc.spawn:cosmic-store`; human ref reads and data
 cleanup retain policy/snapshot checks and are unavailable in MCP.
-Interactive Flatpak/PackageKit providers and their human policies remain
-unchanged. UI/MCP catalog consolidation and installed-data migration are separate.
+Flatpak catalog and inventory reads are scoped to the authenticated desktop
+owner. Native Flatpak installs and updates from configured signed sources use
+the retained OS package controller, which checks the reviewed ref, resolved
+commits and dependencies before dispatch and verifies the resulting deployment.
+The Store does not mutate Flatpak or Debian installations directly.
 Diagnostics owns `hardware-center`, `crash-doctor` and `netdiag`. Hardware
 observation, sensitive crash inspection and exact-target network diagnostics
 retain separate permissions. Collectors, coredumps, journal access, debugger
