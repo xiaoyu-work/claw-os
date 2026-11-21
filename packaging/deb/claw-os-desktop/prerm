@@ -20,7 +20,14 @@ case "$1" in
                 --version "$2"
         fi
         ;;
-    remove|deconfigure|failed-upgrade)
+    remove|deconfigure)
+        # Do not boot into an offline transaction after its service is removed.
+        marker="$DPKG_ROOT/system-update"
+        if [ -L "$marker" ] && [ "$(readlink "$marker")" = /var/lib/claw-os-updates ]; then
+            rm -- "$marker"
+        fi
+        ;;
+    failed-upgrade)
         ;;
     *)
         echo "prerm called with unknown argument '$1'" >&2

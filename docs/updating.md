@@ -977,6 +977,7 @@ checked versions, and schedules installation at the next restart. Use
 **Restart and install** after saving your work, or **Cancel scheduled install**.
 The offline service runs before sign-in, verifies the result, and reboots
 normally. An interrupted package transaction is not replayed unattended.
+Removing the Desktop package cancels its pending offline install.
 
 **Automatic updates** and **Automatic restart** start off. The first checks
 daily and prepares the same signed updates. The second permits restart at an
