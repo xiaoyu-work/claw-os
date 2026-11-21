@@ -16,6 +16,11 @@ pub const PAM_RETIRE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const MENU_LAUNCH_DIGEST: &str = "CLAW_DESKTOP_EXPECTED_DIGEST";
 pub const MENU_LAUNCH_PUBLISHER: &str = "CLAW_DESKTOP_EXPECTED_PUBLISHER";
 
+pub fn valid_desktop_id(id: &str) -> bool {
+    id.len() <= 255 && id.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LaunchTarget {
@@ -340,6 +345,12 @@ pub enum AuthorityCommand {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         from_dock: bool,
     },
+    LaunchNative {
+        epoch: Epoch,
+        request: InstanceId,
+        expires_monotonic_ms: u64,
+        desktop_id: String,
+    },
     ShowAgent {
         epoch: Epoch,
         request: InstanceId,
@@ -372,6 +383,11 @@ impl Packet for AuthorityCommand {
         }
         if let Self::Launch { target, .. } = self {
             target.validate()?;
+        }
+        if let Self::LaunchNative { desktop_id, .. } = self {
+            if !valid_desktop_id(desktop_id) || desktop_id.starts_with("com.clawos.") {
+                return Err(Error::Protocol("invalid native desktop entry ID"));
+            }
         }
         Ok(())
     }

@@ -60,10 +60,13 @@ owner socket enumeration. The Desktop source path has no old compositor fallback
 
 Desktop-menu effects go from the broker to its authenticated Root display
 supervisor on the same epoch. The live system shell can submit owner
-clicks directly; the OS-started Claw Launcher can submit ordinary signed
-App selections only. Other callers require their normal authorization.
-The supervisor starts `cos app <id> --gui` as the logged-in user, inside the
-display workload, and pins the selected publisher and content digest. The
+clicks directly; the OS-started Claw Launcher can only submit App selections.
+Other callers require their normal authorization for signed App launches.
+The supervisor pins the publisher and content digest for `cos app <id> --gui`.
+For genuinely unmanaged Linux entries it starts the fixed `gtk4-launch`
+with a desktop-entry ID instead. In both cases it launches as the logged-in
+user inside the display workload. Native XDG activation uses the ordinary
+user bus and cannot inherit any managed App grant. The
 reserved Claw AI menu entry instead opens the protected `cos-agent-ui` with no
 arguments in that display as the same owner. It does not record audio or send
 an Agent request. Submission does not prove a window appeared.

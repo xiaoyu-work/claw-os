@@ -20,7 +20,7 @@ Depends: claw-os-base (>= __MIN_BASE__), claw-os-abi-__ABI__, claw-os-app-runtim
  libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1,
  libxkbcommon0 (>= 1.11), libxkbcommon-x11-0 (>= 1.11), libinput10, libdrm2, libgbm1, libegl1, libgles2, libgl1,
  mesa-utils, mesa-vulkan-drivers, libvulkan1, libseat1, seatd, xwayland,
- libfontconfig1, libfreetype6, libexpat1, libpixman-1-0, libgtk-4-1,
+ libfontconfig1, libfreetype6, libexpat1, libpixman-1-0, libgtk-4-1, libgtk-4-bin,
  libpulse0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good,
  gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav,
  flatpak, packagekit, fonts-inter, fonts-jetbrains-mono, fonts-noto-core, fonts-noto-cjk,

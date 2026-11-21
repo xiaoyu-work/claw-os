@@ -56,10 +56,15 @@ struct GuiCall {
 }
 
 struct LaunchCall {
-    target: Option<LaunchTarget>,
-    from_dock: bool,
+    target: MenuTarget,
     reply: SyncSender<Result<bool, Error>>,
     deadline: Instant,
+}
+
+enum MenuTarget {
+    Signed(LaunchTarget, bool),
+    Native(String),
+    Agent,
 }
 
 #[derive(Clone)]
@@ -155,22 +160,26 @@ impl GuiControl {
 
     pub(crate) fn launch(&self, target: LaunchTarget, deadline: Instant) -> Result<(), Error> {
         target.validate()?;
-        self.submit_launch(Some(target), false, deadline)
+        self.submit_launch(MenuTarget::Signed(target, false), deadline)
     }
 
     pub(crate) fn launch_from_dock(&self, target: LaunchTarget, deadline: Instant) -> Result<(), Error> {
         target.validate()?;
-        self.submit_launch(Some(target), true, deadline)
+        self.submit_launch(MenuTarget::Signed(target, true), deadline)
+    }
+
+    pub(crate) fn launch_native(&self, desktop_id: String, deadline: Instant) -> Result<(), Error> {
+        self.submit_launch(MenuTarget::Native(desktop_id), deadline)
     }
 
     pub(crate) fn show_agent(&self, deadline: Instant) -> Result<(), Error> {
-        self.submit_launch(None, false, deadline)
+        self.submit_launch(MenuTarget::Agent, deadline)
     }
 
-    fn submit_launch(&self, target: Option<LaunchTarget>, from_dock: bool, deadline: Instant) -> Result<(), Error> {
+    fn submit_launch(&self, target: MenuTarget, deadline: Instant) -> Result<(), Error> {
         let (reply, result) = mpsc::sync_channel(1);
         self.launcher
-            .try_send(LaunchCall { target, from_dock, reply, deadline })
+            .try_send(LaunchCall { target, reply, deadline })
             .map_err(|_| Error::Protocol("desktop launcher is unavailable or busy"))?;
         if !result
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -523,11 +532,14 @@ fn monitor(
                     let request = InstanceId::random()?;
                     let expires_monotonic_ms = monotonic_ms()?.saturating_add(remaining.as_millis().min(2000) as u64);
                     let command = match &call.target {
-                        Some(target) => AuthorityCommand::Launch {
+                        MenuTarget::Signed(target, from_dock) => AuthorityCommand::Launch {
                             epoch, request, expires_monotonic_ms, target: target.clone(),
-                            from_dock: call.from_dock,
+                            from_dock: *from_dock,
                         },
-                        None => AuthorityCommand::ShowAgent { epoch, request, expires_monotonic_ms },
+                        MenuTarget::Native(desktop_id) => AuthorityCommand::LaunchNative {
+                            epoch, request, expires_monotonic_ms, desktop_id: desktop_id.clone(),
+                        },
+                        MenuTarget::Agent => AuthorityCommand::ShowAgent { epoch, request, expires_monotonic_ms },
                     };
                     channel.send(&command, &[], call.deadline)?;
                     launch_pending = Some((request, call));

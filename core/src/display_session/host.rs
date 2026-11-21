@@ -147,7 +147,8 @@ impl Controllers {
                 AuthorityCommand::Gui { .. } if retired => {
                     // This workload is already dead. Queued requests cannot run or renew it.
                 }
-                AuthorityCommand::Launch { epoch, .. } | AuthorityCommand::ShowAgent { epoch, .. }
+                AuthorityCommand::Launch { epoch, .. } | AuthorityCommand::LaunchNative { epoch, .. }
+                    | AuthorityCommand::ShowAgent { epoch, .. }
                     if retired && epoch == self.epoch => {}
                 AuthorityCommand::Heartbeat {
                     epoch,
@@ -359,6 +360,11 @@ impl Supervisor {
                 {
                     self.launch(request, expires_monotonic_ms, DesktopProcess::App(target), from_dock)?;
                 }
+                AuthorityCommand::LaunchNative { epoch, request, expires_monotonic_ms, desktop_id }
+                    if epoch == self.controllers.epoch =>
+                {
+                    self.launch(request, expires_monotonic_ms, DesktopProcess::Native(desktop_id), false)?;
+                }
                 AuthorityCommand::ShowAgent { epoch, request, expires_monotonic_ms }
                     if epoch == self.controllers.epoch =>
                 {
@@ -382,6 +388,7 @@ impl Supervisor {
         };
         let submitted = if !self.display.is_empty()
             && !matches!(&process, DesktopProcess::App(target) if target.app_id == SHELL_APP)
+            && !(self.locker.is_some() && matches!(&process, DesktopProcess::Native(_)))
             && expires > now && expires <= now.saturating_add(2000)
         {
             if from_dock && app_id.is_some() && self.launchers.iter().any(|(id, _)| id == &app_id) {
@@ -795,6 +802,7 @@ fn io_timeout(error: Error, phase: &'static str) -> Error {
 enum DesktopProcess {
     Shell,
     App(LaunchTarget),
+    Native(String),
     Agent,
 }
 
@@ -806,7 +814,11 @@ fn spawn_desktop_process(
 ) -> Result<Child, Error> {
     const COS: &str = "/usr/local/bin/cos";
     const AGENT: &str = "/usr/local/bin/cos-agent-ui";
-    let executable = if matches!(&process, DesktopProcess::Agent) { AGENT } else { COS };
+    let executable = match &process {
+        DesktopProcess::Native(_) => "/usr/bin/gtk4-launch",
+        DesktopProcess::Agent => AGENT,
+        _ => COS,
+    };
     containment::protected_executable(executable)?;
     let uid = controllers.login.owner_uid;
     let (gid, name, home) = containment::account(uid)?;
@@ -827,7 +839,7 @@ fn spawn_desktop_process(
         .env("WAYLAND_DISPLAY", display)
         .env("XDG_SESSION_TYPE", "wayland")
         .env("XDG_CURRENT_DESKTOP", "Hyprland")
-        .current_dir(home)
+        .current_dir(&home)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
@@ -840,6 +852,17 @@ fn spawn_desktop_process(
         DesktopProcess::Shell => {
             command.args(["app", SHELL_APP, "--gui"])
                 .stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
+        }
+        DesktopProcess::Native(desktop_id) => {
+            command.args(["--", &desktop_id])
+                .env_remove("COS_APPS_DIR")
+                .env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={runtime}/bus"))
+                .env("XDG_DATA_DIRS", std::env::join_paths([
+                    home.join(".local/share/flatpak/exports/share"),
+                    "/usr/local/share".into(),
+                    "/usr/share".into(),
+                    "/var/lib/flatpak/exports/share".into(),
+                ]).map_err(|_| Error::Protocol("invalid desktop data path"))?);
         }
         DesktopProcess::Agent => {
             command.env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={runtime}/bus"));

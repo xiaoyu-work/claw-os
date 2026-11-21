@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use claw_display_control::{Epoch, ProcessIdentity, wire::LaunchTarget};
+use claw_display_control::{Epoch, ProcessIdentity, wire::{LaunchTarget, valid_desktop_id}};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -260,7 +260,27 @@ impl Window {
                         Ok(status("submitted"))
                     }
                     (Verb::DESKTOP_LAUNCH, desktop_id) => {
-                        let (target, _) = resolve_target(desktop_id)?;
+                        let resolved = find_signed_target(desktop_id)?;
+                        let Some((target, _)) = resolved else {
+                            if desktop_id.starts_with("com.clawos.") {
+                                return Err("no installed signed Claw App owns that desktop entry".into());
+                            }
+                            let view = self.owner_menu(process, &cap)?;
+                            let deadline = Instant::now() + view.expires_in.min(Duration::from_secs(2));
+                            let result = self.registration.control.launch_native(desktop_id.to_owned(), deadline);
+                            crate::provenance::audit("desktop.menu_launch", json!({
+                                "owner_uid": self.registration.owner(),
+                                "source_app": self.registration.launch.app_id(),
+                                "epoch": self.registration.control.epoch.label(),
+                                "desktop_id": desktop_id,
+                                "native": true,
+                                "submitted": result.is_ok(),
+                            }));
+                            result.map_err(|error| format!(
+                                "native desktop launch was not confirmed; do not retry automatically: {error}"
+                            ))?;
+                            return Ok(status("submitted"));
+                        };
                         if self.registration.desktop_launcher && target.app_id == "claw-launcher" {
                             return Err("the Launcher cannot open another copy of itself".into());
                         }
@@ -494,11 +514,6 @@ impl Window {
     }
 }
 
-fn valid_desktop_id(id: &str) -> bool {
-    id.len() <= 255 && id.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-}
-
 pub(super) fn exported_desktop_id(resource: &str) -> Option<&str> {
     resource.strip_prefix("resources/usr/share/applications/")?
         .strip_suffix(".desktop").filter(|id| valid_desktop_id(id))
@@ -517,6 +532,11 @@ fn selected_capability(verb: Verb, selection: &str) -> Result<Cap, String> {
 }
 
 fn resolve_target(desktop_id: &str) -> Result<(LaunchTarget, String), String> {
+    find_signed_target(desktop_id)?
+        .ok_or_else(|| "no installed signed Claw App owns that desktop entry".into())
+}
+
+fn find_signed_target(desktop_id: &str) -> Result<Option<(LaunchTarget, String)>, String> {
     let resource = format!("resources/usr/share/applications/{desktop_id}.desktop");
     let root = Path::new(INSTALLED_APPS);
     let trust = crate::provenance::trust_store();
@@ -529,13 +549,15 @@ fn resolve_target(desktop_id: &str) -> Result<(LaunchTarget, String), String> {
             return Err("the installed desktop catalogue exceeds its bound".into());
         }
         let entry = entry.map_err(|error| error.to_string())?;
-        if !entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_dir()
-            || !entry.path().join(&resource).is_file()
-        {
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if !kind.is_dir() && !kind.is_symlink() {
             continue;
+        }
+        match std::fs::symlink_metadata(entry.path().join(&resource)) {
+            Ok(metadata) if kind.is_dir() && metadata.is_file() => {}
+            Ok(_) => return Err("the installed desktop App resource is not a regular file".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
         }
         let id = entry
             .file_name()
@@ -551,7 +573,7 @@ fn resolve_target(desktop_id: &str) -> Result<(LaunchTarget, String), String> {
             return Err("the selected desktop entry is not publisher-signed".into());
         };
         if !package.resources().iter().any(|path| path == &resource) {
-            continue;
+            return Err("the installed desktop entry is not a signed App resource".into());
         }
         let Some(manifest) = package
             .manifest_text()
@@ -576,5 +598,5 @@ fn resolve_target(desktop_id: &str) -> Result<(LaunchTarget, String), String> {
         target.validate().map_err(|error| error.to_string())?;
         found = Some((target, name));
     }
-    found.ok_or_else(|| "no installed signed Claw App owns that desktop entry".into())
+    Ok(found)
 }
