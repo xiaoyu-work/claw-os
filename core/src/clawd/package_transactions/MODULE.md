@@ -91,7 +91,9 @@ enters the Debian dispatch path.
   provider compares that graph before libflatpak starts deployments and
   refuses unrelated apps, removals, rebases and new remotes. A refusal before
   dispatch allows a new reviewed intent. After dispatch, success requires a
-  tracked normal exit and matching installed commits. Recovery only verifies
+  tracked normal exit and matching installed commits as seen by the requesting
+  user. The system Flatpak helper uses the standard shared-installation umask
+  without changing the daemon's private-state umask. Recovery only verifies
   retained evidence; it does not replay or roll back a deployment.
 
 `system.package.status` and `system.package.recover` derive the owner from the

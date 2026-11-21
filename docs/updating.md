@@ -1009,9 +1009,11 @@ existing package queries and intents.
 Installs and updates require protected OS review; acceptance means queued,
 not installed. Claw App delivery retains its independent per-App reviews.
 Flatpak is limited to the exact app ref, configured installation/remotes and
-reviewed deployment commits. Local archives, Flatpak removals or repository
-changes remain outside the Store. Use **Check OS status** to inspect a retained
-operation and reconcile an uncertain outcome without retrying the mutation.
+reviewed deployment commits. The OS verifies the result as the requesting
+desktop user, including for system-wide installs and updates. Local archives,
+Flatpak removals or repository changes remain outside the Store. Use **Check
+OS status** to inspect a retained operation and reconcile an uncertain outcome
+without retrying the mutation.
 Removing a catalog listing does not uninstall it or discard historic releases.
 
 ## System Updates in Settings

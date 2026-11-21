@@ -144,7 +144,8 @@ mod linux {
             json!({"mode": "apply", "plan": plan}),
             Some(id.into()),
         )
-        .await
+        .await?;
+        verify(owner, home, target, plan).await
     }
 
     pub(crate) async fn verify(
@@ -231,7 +232,11 @@ mod linux {
         let mut bytes = serde_json::to_vec(&input).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
         let catalog = input["mode"] == "catalog";
-        let read_only = catalog || matches!(input["mode"].as_str(), Some("installed" | "updates"));
+        let read_only = catalog
+            || matches!(
+                input["mode"].as_str(),
+                Some("installed" | "updates" | "verify")
+            );
         let unprivileged = scope == Scope::User || read_only;
         let home = if unprivileged {
             home.to_path_buf()
@@ -265,6 +270,11 @@ mod linux {
                         || libc::getppid() != parent
                     {
                         return Err(std::io::Error::last_os_error());
+                    }
+                    if !unprivileged {
+                        // System deployments must be readable by desktop users,
+                        // unlike the daemon's private state.
+                        libc::umask(0o022);
                     }
                     if read_only {
                         let limit = libc::rlimit {
