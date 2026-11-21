@@ -29,8 +29,8 @@ export const useSystemStore = create<SystemState>((set) => ({
   notifications: [
     {
       id: 'welcome-1',
-      title: 'Welcome to Claw OS',
-      message: 'The Claw OS demo desktop is ready.',
+      title: 'Welcome to Yu OS',
+      message: 'The Yu OS demo desktop is ready.',
       type: 'info',
       read: false,
       timestamp: new Date(),

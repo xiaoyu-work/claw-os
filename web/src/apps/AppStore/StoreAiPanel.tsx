@@ -57,7 +57,7 @@ function recommendApps(prompt: string, apps: AppDefinition[]): ScriptedAssistant
     || normalized.includes('权限')
   ) {
     ids = ['settings', 'agent'];
-    text = 'Use Settings to manage system controls and Claw OS Agent to explain app permissions, activity, and audit history.';
+    text = 'Use Settings to manage system controls and Yu OS Agent to explain app permissions, activity, and audit history.';
   } else if (
     normalized.includes('media')
     || normalized.includes('music')
@@ -79,7 +79,7 @@ function recommendApps(prompt: string, apps: AppDefinition[]): ScriptedAssistant
     || normalized.includes('文件')
   ) {
     ids = ['texteditor', 'filemanager', 'agent'];
-    text = 'Text Editor and Files cover writing and organization. Add Claw OS Agent when you want summaries or a cross-app workflow.';
+    text = 'Text Editor and Files cover writing and organization. Add Yu OS Agent when you want summaries or a cross-app workflow.';
   } else if (
     normalized.includes('automat')
     || normalized.includes('workflow')
@@ -89,7 +89,7 @@ function recommendApps(prompt: string, apps: AppDefinition[]): ScriptedAssistant
     || normalized.includes('工作流')
   ) {
     ids = ['agent', 'filemanager'];
-    text = 'Start with Claw OS Agent for guided workflows, then use Files as the document and storage surface it can work with.';
+    text = 'Start with Yu OS Agent for guided workflows, then use Files as the document and storage surface it can work with.';
   } else {
     const exact = apps.find((app) => normalized.includes(app.name.toLowerCase()));
     ids = exact ? [exact.id] : ['agent', 'filemanager', 'settings'];
@@ -116,7 +116,7 @@ export default function StoreAiPanel({
       open={open}
       title="App Finder"
       subtitle="Describe what you want to do"
-      initialMessage="Tell me what kind of app you need. This preview matches your request to the installed Claw OS demo catalog using built-in rules."
+      initialMessage="Tell me what kind of app you need. This preview matches your request to the installed Yu OS demo catalog using built-in rules."
       actions={actions}
       placeholder="What kind of app do you need?"
       answer={(prompt) => recommendApps(prompt, apps)}

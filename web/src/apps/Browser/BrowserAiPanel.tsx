@@ -14,7 +14,7 @@ const actions: ScriptedAssistantAction[] = [
   {
     id: 'summarize',
     label: 'Summarize page',
-    detail: 'Key Claw OS ideas',
+    detail: 'Key Yu OS ideas',
     icon: BookOpen,
     prompt: 'Summarize this page',
   },
@@ -30,7 +30,7 @@ const actions: ScriptedAssistantAction[] = [
     label: 'Install options',
     detail: 'Jump to installation',
     icon: Rocket,
-    prompt: 'Show me how to install Claw OS',
+    prompt: 'Show me how to install Yu OS',
   },
   {
     id: 'faq',
@@ -62,13 +62,13 @@ export default function BrowserAiPanel({
     }
     if (normalized.includes('demo') || normalized.includes('try') || normalized.includes('体验')) {
       return {
-        text: 'The interactive Agent demo lives in the Claw OS Agent app on the desktop. Close this browser and open that app to try the guided system tasks.',
+        text: 'The interactive Agent demo lives in the Yu OS Agent app on the desktop. Close this browser and open that app to try the guided system tasks.',
       };
     }
     if (normalized.includes('safe') || normalized.includes('permission') || normalized.includes('安全')) {
       onNavigateSection('safety');
       return {
-        text: 'Claw OS gates privileged operations with explicit capabilities, approvals, structured tool evidence, audit history, and undo where supported.',
+        text: 'Yu OS gates privileged operations with explicit capabilities, approvals, structured tool evidence, audit history, and undo where supported.',
       };
     }
     if (normalized.includes('agent-native') || normalized.includes('agent native') || normalized.includes('智能体')) {
@@ -79,7 +79,7 @@ export default function BrowserAiPanel({
     }
     if (normalized.includes('summar') || normalized.includes('总结') || normalized.includes('page')) {
       return {
-        text: 'This page presents Claw OS as an agent-native Linux distribution: one built-in system Agent, one shared AI runtime for apps, typed app operations for workflows, and approval plus audit controls.',
+        text: 'This page presents Yu OS as an agent-native Linux distribution: one built-in system Agent, one shared AI runtime for apps, typed app operations for workflows, and approval plus audit controls.',
       };
     }
     return {
@@ -93,7 +93,7 @@ export default function BrowserAiPanel({
       open={open}
       title="Browser Assistant"
       subtitle="Understand and navigate this page"
-      initialMessage="Ask about the current Claw OS page or use a built-in prompt. Navigation and responses are local scripted demo actions."
+      initialMessage="Ask about the current Yu OS page or use a built-in prompt. Navigation and responses are local scripted demo actions."
       actions={actions}
       placeholder="Ask about this page…"
       answer={answer}

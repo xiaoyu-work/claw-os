@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Palette, Monitor, Wifi, Volume2, Info } from 'lucide-react';
-import ClawOsAiIcon from '@/components/ClawOsAiIcon';
+import YuOsAiIcon from '@/components/YuOsAiIcon';
 import AppearanceTab from './AppearanceTab';
 import DisplayTab from './DisplayTab';
 import NetworkTab from './NetworkTab';
@@ -33,7 +33,7 @@ export default function Settings() {
           aria-expanded={aiOpen}
           title="Ask Settings Assistant"
         >
-          <ClawOsAiIcon size={19} />
+          <YuOsAiIcon size={19} />
           <span className="hidden text-sm font-medium sm:inline">Ask AI</span>
         </button>
         <div className="mx-2 mb-2 h-px" style={{ background: 'rgba(0,0,0,0.06)' }} />

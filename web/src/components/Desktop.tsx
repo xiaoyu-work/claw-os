@@ -17,11 +17,11 @@ interface DesktopIcon {
 
 const defaultIcons: DesktopIcon[] = [
   { id: 'd-activities', label: 'Activities', appId: '__activities__', icon: LayoutGrid },
-  { id: 'd-agent', label: 'Claw OS Agent', appId: 'agent' },
-  { id: 'd-browser', label: 'Claw OS Website', appId: 'browser' },
+  { id: 'd-agent', label: 'Yu OS Agent', appId: 'agent' },
+  { id: 'd-browser', label: 'Yu OS Website', appId: 'browser' },
   { id: 'd-files', label: 'Files', appId: 'filemanager' },
   { id: 'd-editor', label: 'Text Editor', appId: 'texteditor' },
-  { id: 'd-store', label: 'App Store', appId: 'store' },
+  { id: 'd-store', label: 'Yu OS Store', appId: 'store' },
   { id: 'd-player', label: 'Media Player', appId: 'player' },
   { id: 'd-screenshot', label: 'Screenshot', appId: 'screenshot' },
   { id: 'd-settings', label: 'Settings', appId: 'settings' },
@@ -105,7 +105,7 @@ export default function Desktop({ onOpenAppMenu }: DesktopProps) {
                 } else if (icon.label === 'Activities') {
                   onOpenAppMenu?.();
                 } else if (icon.id === 'd-browser') {
-                  handleOpenApp(icon.appId, 'Claw OS — Web Browser');
+                  handleOpenApp(icon.appId, 'Yu OS — Web Browser');
                 } else {
                   handleOpenApp(icon.appId);
                 }

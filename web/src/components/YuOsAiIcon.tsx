@@ -1,11 +1,11 @@
 import { publicAsset } from '@/lib/publicAsset';
 
-interface ClawOsAiIconProps {
+interface YuOsAiIconProps {
   size?: number;
   className?: string;
 }
 
-export default function ClawOsAiIcon({ size = 18, className = '' }: ClawOsAiIconProps) {
+export default function YuOsAiIcon({ size = 18, className = '' }: YuOsAiIconProps) {
   return (
     <img
       src={publicAsset('app-icons/agent.svg')}

@@ -1,4 +1,4 @@
-// Claw OS website — minimal, framework-free interactions.
+// Yu OS website — minimal, framework-free interactions.
 
 (function () {
   "use strict";

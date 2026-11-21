@@ -28,7 +28,7 @@ const appIcon = (name: string) => publicAsset(`app-icons/${name}.svg`);
 const defaultApps: Record<string, AppDefinition> = {
   agent: {
     id: 'agent',
-    name: 'Claw OS Agent',
+    name: 'Yu OS Agent',
     description: 'Ask system questions, inspect apps, and coordinate workflows',
     category: 'System',
     icon: appIcon('agent'),
@@ -67,8 +67,8 @@ const defaultApps: Record<string, AppDefinition> = {
   },
   store: {
     id: 'store',
-    name: 'App Store',
-    description: 'Browse first-party Claw OS applications',
+    name: 'Yu OS Store',
+    description: 'Browse first-party Yu OS applications',
     category: 'System',
     icon: appIcon('store'),
     component: 'AppStore',
@@ -107,7 +107,7 @@ const defaultApps: Record<string, AppDefinition> = {
   settings: {
     id: 'settings',
     name: 'Settings',
-    description: 'Configure the Claw OS demo desktop',
+    description: 'Configure the Yu OS demo desktop',
     category: 'System',
     icon: appIcon('settings'),
     component: 'Settings',
@@ -119,8 +119,8 @@ const defaultApps: Record<string, AppDefinition> = {
   },
   browser: {
     id: 'browser',
-    name: 'Claw OS Website',
-    description: 'Explore the Claw OS agent-native vision',
+    name: 'Yu OS Website',
+    description: 'Explore the Yu OS agent-native vision',
     category: 'Internet',
     icon: 'Globe',
     component: 'Browser',

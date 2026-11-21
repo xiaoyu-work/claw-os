@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Check, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import AppIcon from '@/components/AppIcon';
-import ClawOsAiIcon from '@/components/ClawOsAiIcon';
+import YuOsAiIcon from '@/components/YuOsAiIcon';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
 import { useWindowStore } from '@/stores/useWindowStore';
 import StoreAiPanel from './StoreAiPanel';
@@ -44,7 +44,7 @@ export default function AppStore() {
     <div className="relative flex h-full min-h-0 flex-col text-sm" style={{ background: 'var(--bg-workspace)' }}>
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3" style={{ background: 'var(--bg-window)', borderColor: 'rgba(0,0,0,0.06)' }}>
         <div>
-          <h2 className="font-semibold text-[var(--text-primary)]">Claw OS App Store</h2>
+          <h2 className="font-semibold text-[var(--text-primary)]">Yu OS Store</h2>
           <p className="text-[11px] text-[var(--text-muted)]">First-party demo applications</p>
         </div>
         <button
@@ -56,7 +56,7 @@ export default function AppStore() {
           aria-label="Toggle App Finder"
           aria-expanded={aiOpen}
         >
-          <ClawOsAiIcon size={17} />
+          <YuOsAiIcon size={17} />
           Ask AI
         </button>
         <div className="relative ml-auto min-w-52 flex-1 sm:max-w-xs">
@@ -95,7 +95,7 @@ export default function AppStore() {
               <ShieldCheck size={21} />
             </div>
             <div>
-              <h3 className="font-medium text-[var(--text-primary)]">Built for the Claw OS permission model</h3>
+              <h3 className="font-medium text-[var(--text-primary)]">Built for the Yu OS permission model</h3>
               <p className="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">
                 Every app declares its capabilities, while AI features use the shared system model instead of bundling a separate provider.
               </p>

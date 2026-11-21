@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ArrowLeft, ArrowUp, RefreshCw, Plus, Trash2, Grid, List as ListIcon, Search } from 'lucide-react';
-import ClawOsAiIcon from '@/components/ClawOsAiIcon';
+import YuOsAiIcon from '@/components/YuOsAiIcon';
 import { useFileSystemStore, type FSNode } from '@/stores/useFileSystemStore';
 import { useWindowStore } from '@/stores/useWindowStore';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
@@ -219,7 +219,7 @@ export default function FileManager() {
           aria-expanded={aiOpen}
           title="Ask Files AI"
         >
-          <ClawOsAiIcon size={17} />
+          <YuOsAiIcon size={17} />
           <span className="hidden xl:inline">Ask AI</span>
         </button>
         <div className="flex items-center ml-1 rounded overflow-hidden" style={{ background: 'var(--bg-input)' }}>

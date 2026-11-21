@@ -7,7 +7,6 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT = REPO_ROOT / "assets" / "brand" / "og.png"
 SYMBOL = REPO_ROOT / "assets" / "brand" / "clawos-symbol.png"
-WORDMARK = REPO_ROOT / "assets" / "brand" / "clawos-wordmark.png"
 
 W, H = 1200, 630
 MARGIN = 80
@@ -158,10 +157,7 @@ def make() -> None:
     else:
         wm_x = MARGIN
 
-    if WORDMARK.exists():
-        wm = Image.open(WORDMARK).convert("RGBA")
-        wm.thumbnail((220, 38), Image.LANCZOS)
-        base.paste(wm, (wm_x, foot_y + 24), wm)
+    draw.text((wm_x, foot_y + 20), "Yu OS", font=_load_font(32, "bold"), fill=(11, 18, 32, 255))
 
     meta_font = _load_font(20, "mono")
     meta = "xiaoyu-work.github.io/claw-os"

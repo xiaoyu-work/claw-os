@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { Music2, Pause, Play, SkipBack, SkipForward, Volume2 } from 'lucide-react';
 
 const tracks = [
-  { title: 'Ambient Systems', artist: 'Claw OS Demo', duration: 214 },
-  { title: 'Local First', artist: 'Claw OS Demo', duration: 188 },
-  { title: 'Agent Workflow', artist: 'Claw OS Demo', duration: 242 },
+  { title: 'Ambient Systems', artist: 'Yu OS Demo', duration: 214 },
+  { title: 'Local First', artist: 'Yu OS Demo', duration: 188 },
+  { title: 'Agent Workflow', artist: 'Yu OS Demo', duration: 242 },
 ];
 
 function formatTime(seconds: number) {

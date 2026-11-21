@@ -1,4 +1,4 @@
-/* Claw OS — website styles
+/* Yu OS — website styles
  * Light, modern, agent-native look.
  * Soft white surfaces, ink-black type, blue→cyan→violet accent gradient.
  */
@@ -144,11 +144,11 @@ code, .mono, pre {
   color: var(--ink);
 }
 .brand-mark { display: block; flex: none; width: auto; }
-.brand-word { display: block; flex: none; width: auto; }
+.brand-word { flex: none; font-weight: 750; letter-spacing: -.04em; }
 .nav-inner .brand-mark { height: 28px; }
-.nav-inner .brand-word { height: 22px; }
+.nav-inner .brand-word { font-size: 22px; }
 .footer-brand .brand-mark { height: 24px; }
-.footer-brand .brand-word { height: 20px; }
+.footer-brand .brand-word { font-size: 20px; }
 .nav-links {
   display: flex;
   align-items: center;

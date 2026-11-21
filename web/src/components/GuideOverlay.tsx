@@ -15,8 +15,8 @@ const guideSteps: GuideStep[] = [
   {
     target: 'agent-desktop-icon',
     eyebrow: 'Step 1 of 5',
-    title: 'Open Claw OS Agent',
-    description: 'Open the same Agent workspace that ships with Claw OS.',
+    title: 'Open Yu OS Agent',
+    description: 'Open the same Agent workspace that ships with Yu OS.',
     action: 'Open Agent',
     event: 'dblclick',
   },

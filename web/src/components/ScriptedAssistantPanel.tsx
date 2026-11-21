@@ -6,7 +6,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import ClawOsAiIcon from '@/components/ClawOsAiIcon';
+import YuOsAiIcon from '@/components/YuOsAiIcon';
 
 export interface ScriptedAssistantAction {
   id: string;
@@ -113,7 +113,7 @@ export default function ScriptedAssistantPanel<Result>({
       }}
     >
       <header className="flex shrink-0 items-center gap-3 border-b px-3 py-3" style={{ borderColor: 'rgba(0,0,0,0.08)' }}>
-        <ClawOsAiIcon size={36} className="rounded-xl shadow-lg shadow-[#005CFE]/20" />
+        <YuOsAiIcon size={36} className="rounded-xl shadow-lg shadow-[#005CFE]/20" />
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold text-[var(--text-primary)]">{title}</h2>
           <p className="truncate text-[10px] text-[var(--text-muted)]">{subtitle}</p>

@@ -30,7 +30,7 @@ const actions: ScriptedAssistantAction[] = [
   {
     id: 'accent',
     label: 'Blue accent',
-    detail: 'Use Claw OS blue',
+    detail: 'Use Yu OS blue',
     icon: Palette,
     prompt: 'Use a blue accent color',
   },
@@ -65,7 +65,7 @@ export default function SettingsAiPanel({
 
     if (normalized.includes('blue') || normalized.includes('蓝')) {
       settings.setAccentColor('#005CFE');
-      changes.push('set the accent to Claw OS blue');
+      changes.push('set the accent to Yu OS blue');
     } else if (normalized.includes('purple') || normalized.includes('紫')) {
       settings.setAccentColor('#7C3AED');
       changes.push('set the accent to purple');

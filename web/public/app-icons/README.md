@@ -1,6 +1,6 @@
-# Claw OS application icons
+# Yu OS application icons
 
-These are the same first-party icons shipped by the native Claw OS desktop:
+These are the same first-party icons shipped by the native Yu OS desktop:
 
 | Web asset | Source |
 | --- | --- |

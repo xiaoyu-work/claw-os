@@ -7,16 +7,16 @@ export default function AboutTab() {
       <div className="text-center py-4">
         <img
           src={publicAsset('app-icons/agent.svg')}
-          alt="Claw OS"
+          alt="Yu OS"
           className="w-20 h-20 mx-auto mb-3"
         />
-        <h2 className="text-xl font-semibold">Claw OS Demo System</h2>
+        <h2 className="text-xl font-semibold">Yu OS Demo System</h2>
         <p className="text-sm text-[var(--text-muted)]">Interactive preview of the agent-native operating system</p>
       </div>
 
       <div className="space-y-2">
         {[
-          { icon: Monitor, label: 'Desktop', value: 'Claw OS Web Demo' },
+          { icon: Monitor, label: 'Desktop', value: 'Yu OS Web Demo' },
           { icon: Sparkles, label: 'System Agent', value: 'Built in' },
           { icon: ShieldCheck, label: 'App permissions', value: 'Capability scoped' },
           { icon: Cpu, label: 'AI runtime', value: 'Shared system model gateway' },
@@ -34,8 +34,8 @@ export default function AboutTab() {
       </div>
 
       <div className="text-center text-xs text-[var(--text-muted)] pt-4">
-        <p>This demo mirrors the first-party Claw OS desktop surfaces.</p>
-        <p className="mt-1">Claw OS · Apache-2.0</p>
+        <p>This demo mirrors the first-party Yu OS desktop surfaces.</p>
+        <p className="mt-1">Yu OS · Apache-2.0</p>
       </div>
     </div>
   );

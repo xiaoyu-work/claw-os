@@ -10,7 +10,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import ClawOsAiIcon from '@/components/ClawOsAiIcon';
+import YuOsAiIcon from '@/components/YuOsAiIcon';
 import { type FSNode, useFileSystemStore } from '@/stores/useFileSystemStore';
 
 interface FilesAiPanelProps {
@@ -119,7 +119,7 @@ function searchFiles(prompt: string, files: FSNode[]): AiResponse {
   const knownTopics: Array<[string[], string]> = [
     [['agent', '智能体'], 'agent'],
     [['ai', 'model', '模型'], 'ai'],
-    [['claw'], 'claw'],
+    [['yu os', 'yuos'], 'yu os'],
     [['launch', '发布'], 'launch'],
     [['todo', 'task', '任务'], 'todo'],
     [['network', '网络'], 'network'],
@@ -359,7 +359,7 @@ export default function FilesAiPanel({
       }}
     >
       <header className="flex shrink-0 items-center gap-3 border-b px-3 py-3" style={{ borderColor: 'rgba(0,0,0,0.08)' }}>
-        <ClawOsAiIcon size={36} className="rounded-xl shadow-lg shadow-[#005CFE]/20" />
+        <YuOsAiIcon size={36} className="rounded-xl shadow-lg shadow-[#005CFE]/20" />
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold text-[var(--text-primary)]">Files AI</h2>
           <p className="text-[10px] text-[var(--text-muted)]">UI demo · built-in prompts and responses</p>

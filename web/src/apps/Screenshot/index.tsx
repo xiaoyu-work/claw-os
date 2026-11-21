@@ -37,7 +37,7 @@ export default function Screenshot() {
       <div className="grid flex-1 gap-5 overflow-y-auto p-5 md:grid-cols-[minmax(0,1fr)_240px]">
         <section className="relative min-h-64 overflow-hidden rounded-2xl border" style={{ background: '#1f2025', borderColor: 'rgba(0,0,0,0.08)' }}>
           <div className="absolute inset-x-0 top-0 flex h-8 items-center justify-between bg-black/45 px-3 text-[10px] text-white/55">
-            <span>Claw OS Demo</span>
+            <span>Yu OS Demo</span>
             <span>Screenshot preview</span>
           </div>
           <div className="absolute inset-x-8 bottom-8 top-14 rounded-xl border border-white/10 bg-gradient-to-br from-slate-500/40 to-slate-900/70 p-4">

@@ -28,7 +28,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import ClawOsAiIcon from '@/components/ClawOsAiIcon';
+import YuOsAiIcon from '@/components/YuOsAiIcon';
 import { useDemoGuideStore } from '@/stores/useDemoGuideStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import {
@@ -189,7 +189,7 @@ export default function Agent() {
         message(
           assistantId,
           'assistant',
-          'This public demo uses recorded Claw OS tasks. Try a system-health, app-crash, cross-app workflow, model, memory, or app-access request.',
+          'This public demo uses recorded Yu OS tasks. Try a system-health, app-crash, cross-app workflow, model, memory, or app-access request.',
         ),
       ]);
       return;
@@ -247,10 +247,10 @@ export default function Agent() {
         <div className="space-y-2 border-b border-[var(--agent-border)] p-3">
           <div className="flex items-center justify-between px-1 py-0.5">
             <div className="flex items-center gap-2">
-              <ClawOsAiIcon size={26} />
+              <YuOsAiIcon size={26} />
               <div className="leading-tight">
-                <div className="text-sm font-semibold tracking-tight">Claw OS</div>
-                <div className="text-[10px] text-[var(--agent-muted)]">claw-os</div>
+                <div className="text-sm font-semibold tracking-tight">Yu OS</div>
+                <div className="text-[10px] text-[var(--agent-muted)]">yuos</div>
               </div>
             </div>
             <button
@@ -335,7 +335,7 @@ export default function Agent() {
               C
             </div>
             <div className="min-w-0 flex-1 leading-tight">
-              <div className="truncate text-xs font-medium">claw-os</div>
+              <div className="truncate text-xs font-medium">yuos</div>
               <div className="flex items-center gap-1 text-[9px] text-[var(--agent-muted)]">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 <span className="truncate">llama_local · qwen3-8b</span>
@@ -525,7 +525,7 @@ function ChatView({
           )}
         </form>
         <p className="mx-auto mt-2 max-w-3xl text-center text-[9px] text-[var(--agent-subtle)]">
-          Demo responses are recorded locally. Claw OS still applies capability checks before real actions.
+          Demo responses are recorded locally. Yu OS still applies capability checks before real actions.
         </p>
       </div>
     </div>
@@ -535,7 +535,7 @@ function ChatView({
 function EmptyState({ onChooseScenario }: { onChooseScenario: (scenario: Scenario) => void }) {
   return (
     <div className="mx-auto flex min-h-[410px] w-full max-w-2xl flex-col items-center justify-center py-6 text-center">
-      <ClawOsAiIcon size={42} className="mb-4" />
+      <YuOsAiIcon size={42} className="mb-4" />
       <h2 className="text-2xl font-semibold tracking-tight">What can I help with?</h2>
       <p className="mt-2 max-w-md text-sm leading-relaxed text-[var(--agent-muted)]">
         Ask the system Agent to inspect Linux, work across apps, use shared models, or recall approved history.
@@ -580,7 +580,7 @@ function ChatMessage({ item }: { item: MessageItem }) {
   }
   return (
     <div className="flex gap-3">
-      <ClawOsAiIcon size={20} className="mt-0.5" />
+      <YuOsAiIcon size={20} className="mt-0.5" />
       <p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed">{item.text}</p>
     </div>
   );

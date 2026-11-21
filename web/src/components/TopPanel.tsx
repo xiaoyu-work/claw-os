@@ -71,7 +71,7 @@ export default function TopPanel({ onOpenAppMenu }: TopPanelProps) {
       {/* Center */}
       <div className="absolute left-1/2 hidden -translate-x-1/2 sm:block">
         <span className="text-[13px] font-medium text-white truncate max-w-[400px] block">
-          {focusedWindow ? focusedWindow.title : 'Claw OS Demo'}
+          {focusedWindow ? focusedWindow.title : 'Yu OS Demo'}
         </span>
       </div>
 

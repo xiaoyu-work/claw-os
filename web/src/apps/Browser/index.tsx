@@ -10,7 +10,7 @@ import {
   Star,
   X,
 } from 'lucide-react';
-import ClawOsAiIcon from '@/components/ClawOsAiIcon';
+import YuOsAiIcon from '@/components/YuOsAiIcon';
 import { publicAsset } from '@/lib/publicAsset';
 import BrowserAiPanel from './BrowserAiPanel';
 
@@ -29,7 +29,7 @@ export default function Browser() {
 
   const normalizeAddress = (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed || trimmed === 'claw://home') return homeUrl;
+    if (!trimmed || trimmed === 'yu://home') return homeUrl;
     if (/^https?:\/\//i.test(trimmed)) return trimmed;
     if (trimmed.startsWith('/')) return new URL(trimmed, window.location.origin).href;
     return `https://${trimmed}`;
@@ -91,7 +91,7 @@ export default function Browser() {
           style={{ background: 'var(--bg-window)' }}
         >
           <Globe size={14} className="shrink-0 text-[var(--accent-silver)]" />
-          <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">Claw OS</span>
+          <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">Yu OS</span>
           <X size={13} className="shrink-0 text-[var(--text-muted)]" />
         </div>
         <button
@@ -172,7 +172,7 @@ export default function Browser() {
           onClick={() => setAiOpen((value) => !value)}
           className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#005CFE] hover:bg-[var(--bg-hover)]"
         >
-          <ClawOsAiIcon size={19} />
+          <YuOsAiIcon size={19} />
         </button>
 
         <button
@@ -193,7 +193,7 @@ export default function Browser() {
         <iframe
           key={`${currentUrl}-${frameKey}`}
           src={currentUrl}
-          title="Claw OS website"
+          title="Yu OS website"
           className="h-full min-w-0 flex-1 border-0 bg-white"
           allow="clipboard-write; fullscreen"
           onLoad={() => setLoading(false)}

@@ -220,7 +220,7 @@ export function SettingsView() {
         <section className="rounded-lg border border-[var(--agent-border)] p-4">
           <h3 className="text-sm font-medium">Text model</h3>
           <p className="mt-1 text-[10px] text-[var(--agent-muted)]">
-            Provider credentials remain in the Claw OS credential store.
+            Provider credentials remain in the Yu OS credential store.
           </p>
           <label className="mt-5 block text-[10px] font-medium">
             Provider
