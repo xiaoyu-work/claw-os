@@ -149,6 +149,10 @@ if [ "$1" = "configure" ]; then
         if command -v update-initramfs >/dev/null 2>&1; then
             dpkg-trigger --no-await update-initramfs
         fi
+        if [ -d /run/systemd/system ] && [ -s /boot/grub/grub.cfg ] \
+            && command -v update-grub >/dev/null 2>&1; then
+            update-grub || echo "Claw OS: run sudo update-grub to refresh the recovery menu" >&2
+        fi
     fi
 fi
 

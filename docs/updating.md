@@ -1046,6 +1046,31 @@ errors, not permission to use an unconfined fallback. See the
 [display lifecycle](../core/src/display_session/MODULE.md) and
 [transport requirements](../core/src/worker/gui_transport/MODULE.md).
 
+### Recovering without the desktop
+
+If sign-in or the desktop no longer starts, try **Ctrl+Alt+F3** for a
+normal text login. On a Claw OS GRUB install, the other route is **Advanced
+options for Claw OS**, then an entry labeled **recovery mode**. It boots to
+the normal login prompt without greetd or the automatic Claw OS update timer.
+It does not open a root shell. Sign in with a local administrator account.
+If you upgraded an older install and the menu has not refreshed, run
+`sudo update-grub` from a working console.
+
+Inspect the update state and package database first:
+
+```bash
+sudo /usr/libexec/claw-os-updates status
+sudo journalctl -u claw-os-update-offline.service -n 100 --no-pager
+sudo dpkg --audit
+```
+
+If `dpkg` reports packages left unconfigured, finish configuring the
+already unpacked packages with `sudo dpkg --configure -a`. If that still
+fails, use the same or newer verified packages from the signed Claw OS
+channel; see [recovering from a bad release](#recovering-from-a-bad-release).
+Check `sudo dpkg --audit` again before rebooting normally. This procedure
+does not reset the system, erase `/home`, or relax the release security floor.
+
 ### Native notification presentation
 
 The matching Agent/Desktop source uses the existing notification interface for

@@ -1,4 +1,5 @@
 /etc/apt/apt.conf.d/20auto-upgrades
+/etc/default/grub.d/60-claw-os-desktop-recovery.cfg
 /etc/polkit-1/rules.d/40-clawos.rules
 /etc/profile.d/claw-cursor.sh
 /etc/systemd/zram-generator.conf
